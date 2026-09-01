@@ -70,34 +70,34 @@ def get_active_groq_model(client):
     return "llama-3.3-70b-versatile"
 
 def build_strict_dataset_summary(df):
-    """Computes exact aggregated stats across historical logs to prevent LLM hallucinations."""
+    """Computes lightweight, aggregated stats across historical logs to prevent token limit errors."""
     if df.empty:
         return "No historical log data available."
     
     total_records = len(df)
     
-    # Exact mapping of Family -> Unique Slots
-    valid_combinations = []
-    if "Family" in df and "Slot" in df:
-        grouped = df.groupby(["Family", "Slot"]).agg(
+    if "Family" in df.columns and "Win multiplier" in df.columns:
+        fam_stats = df.groupby("Family").agg(
             hits=("Win multiplier", "count"),
             avg_spins=("Spin of feature hit", "mean"),
             avg_mult=("Win multiplier", "mean"),
             max_mult=("Win multiplier", "max")
         ).reset_index()
         
-        for _, row in grouped.iterrows():
-            valid_combinations.append(
-                f"- Family: '{row['Family']}' | Slot: '{row['Slot']}' | Hits: {row['hits']} | Avg Spins: {row['avg_spins']:.1f} | Avg Mult: {row['avg_mult']:.1f}x | Max Mult: {row['max_mult']:.1f}x"
+        summary_lines = []
+        for _, row in fam_stats.iterrows():
+            summary_lines.append(
+                f"- Family: '{row['Family']}' | Hits: {row['hits']} | Avg Spins to Feature: {row['avg_spins']:.1f} | Avg Multiplier: {row['avg_mult']:.1f}x | Max Multiplier: {row['max_mult']:.1f}x"
             )
-            
-    valid_combos_str = "\n".join(valid_combinations)
+        valid_combos_str = "\n".join(summary_lines)
+    else:
+        valid_combos_str = "No valid family data."
     
     return f"""
-    --- STRICT HISTORICAL DATASET GROUNDING ({total_records} Total Hits Logged) ---
-    YOU MUST ONLY RECOMMEND MACHINES FROM THIS EXACT LIST BELOW. DO NOT INVENT OR MIX SLOTS AND FAMILIES:
+    --- HISTORICAL DATA SUMMARY ({total_records} Hits Logged) ---
+    ONLY recommend Families present in this list:
     {valid_combos_str}
-    --------------------------------------------------------------------------------
+    --------------------------------------------------------------
     """
 
 tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
@@ -200,11 +200,11 @@ try:
             - Risk Profile: {risk_pref}
 
             CRITICAL MATHEMATICAL & ACCURACY RULES:
-            1. ONLY recommend Family and Slot combinations strictly present in the dataset above. NEVER invent slot names (e.g. Do not invent names like 'Golden Bull' if not in the dataset).
+            1. ONLY recommend Families strictly present in the dataset above.
             2. HARD MATHEMATICAL CONSTRAINT: Maximum Spins = Check-In Amount divided by Base Bet (e.g., $100 check-in at $2.50 bet = exactly 40 spins max). NEVER output spin counts exceeding this formula.
-            3. Recommend 2 specific valid machines from the dataset that best fit the goal.
-            4. State explicitly: Machine Name, Recommended Check-In ($), Starting Base Bet ($), and Mathematical Max Runway (Spins).
-            5. Keep response strictly under 100 words in 3 concise bullet points.
+            3. Recommend 2 specific valid families from the dataset that best fit the goal.
+            4. State explicitly: Family Name, Recommended Check-In ($), Starting Base Bet ($), and Mathematical Max Runway (Spins).
+            5. Keep response strictly under 100 words in concise bullet points.
             """
 
             if "pre_messages" not in st.session_state:
@@ -338,7 +338,6 @@ try:
             with f_col1:
                 selected_fam_filter = st.multiselect("Filter by Family", options=all_families, default=[], key="master_fam_filter")
             with f_col2:
-                # Dynamically filter slots based on selected families
                 if selected_fam_filter:
                     available_slots_filtered = safe_unique_options(df[df["Family"].isin(selected_fam_filter)].get("Slot"), [])
                 else:
