@@ -9,7 +9,7 @@ from groq import Groq
 
 load_dotenv()
 
-st.set_page_config(page_title="Slotpilot AI & Logger", layout="wide")
+st.set_page_config(page_title="Slotpilot AI & Logger", layout="wide", initial_sidebar_state="collapsed")
 
 groq_api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
 client = Groq(api_key=groq_api_key) if groq_api_key else None
@@ -43,12 +43,9 @@ def safe_unique_options(series, default_list):
     return default_list
 
 def get_active_groq_model(client):
-    """Fetch active chat models from Groq API and select the best text model."""
     try:
         models_resp = client.models.list()
         active_ids = [m.id for m in models_resp.data]
-        
-        # Priority list of Groq text production models
         preferred = [
             "llama-3.3-70b-versatile",
             "llama-3.3-70b-specdec",
@@ -57,12 +54,9 @@ def get_active_groq_model(client):
             "llama-3.1-8b-instant",
             "mixtral-8x7b-32768"
         ]
-        
         for p in preferred:
             if p in active_ids:
                 return p
-                
-        # Fallback to any active non-whisper/non-vision model
         for m_id in active_ids:
             if "whisper" not in m_id.lower() and "vision" not in m_id.lower() and "orpheus" not in m_id.lower():
                 return m_id
@@ -70,7 +64,7 @@ def get_active_groq_model(client):
         pass
     return "llama3-70b-8192"
 
-tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "🤖 AI Tactical Plan", "📊 Visual Analytics & Charts"])
+tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
 
 try:
     df = load_data()
@@ -86,13 +80,10 @@ try:
         families_opts = families + ["➕ Add New Family..."]
         slots_opts = slots + ["➕ Add New Slot..."]
 
-        # Outside form date picker to trigger instant rerun on change
-        col_date, col_day = st.columns(2)
-        with col_date:
-            log_date = st.date_input("Select Date", date.today(), key="main_date_picker")
-        with col_day:
-            auto_day = log_date.strftime("%A")
-            st.text_input("Day (Auto-detected)", value=auto_day, disabled=True, key="auto_day_disp")
+        # Date Picker outside form triggers instant update
+        log_date = st.date_input("Select Date", date.today(), key="main_date_picker")
+        auto_day = log_date.strftime("%A")
+        st.markdown(f"**Auto-detected Day:** `{auto_day}`")
 
         with st.form("mobile_logger_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
@@ -142,61 +133,85 @@ try:
                 except Exception as ex:
                     st.error(f"Failed to save record: {ex}")
 
-    # --- TAB 2: AI TACTICAL PLAN ---
+    # --- TAB 2: INTERACTIVE CHAT & MID-GAME CO-PILOT ---
     with tab2:
-        st.subheader("🤖 Slotpilot AI Recommendation Engine")
+        st.subheader("💬 Live Session AI Co-Pilot")
         
-        ca, cb, cc = st.columns(3)
         unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
-        with ca:
-            selected_family = st.selectbox("Target Slot Family", options=unique_families)
-        with cb:
-            bankroll = st.number_input("Session Bankroll ($)", value=500, step=50)
-        with cc:
-            current_bet = st.number_input("Base Bet ($)", value=2.50, step=0.50)
-            
-        if st.button("Generate Tactical Play Plan", use_container_width=True):
+        
+        # Session Setup Context Controls
+        with st.expander("⚙️ Set Current Machine & Bankroll Context", expanded=True):
+            ca, cb, cc = st.columns(3)
+            with ca:
+                selected_family = st.selectbox("Target Slot Family", options=unique_families, key="chat_family")
+            with cb:
+                bankroll = st.number_input("Starting Bankroll ($)", value=500, step=50, key="chat_bankroll")
+            with cc:
+                current_bet = st.number_input("Base Bet ($)", value=2.50, step=0.50, key="chat_bet")
+
+        family_df = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
+        fam_hits = len(family_df)
+        fam_avg_spins = round(family_df["Spin of feature hit"].mean(), 1) if "Spin of feature hit" in family_df else 0
+        fam_avg_mult = round(family_df["Win multiplier"].mean(), 1) if "Win multiplier" in family_df else 0
+        
+        system_instruction = f"""
+        You are Slotpilot, a real-time mathematical slot co-pilot.
+        Current Context:
+        - Family: {selected_family} (Avg Spins to Feature: {fam_avg_spins}, Avg Multiplier: {fam_avg_mult}x, Sample Size: {fam_hits} hits)
+        - Session Bankroll: ${bankroll}
+        - Base Bet: ${current_bet}
+
+        CRITICAL RESPONSE RULES:
+        1. Keep responses ultra-concise (maximum 3 bullet points, under 60 words total).
+        2. Be direct, actionable, and rapid for mid-game live play.
+        3. Never write generic filler or long intro paragraphs.
+        """
+
+        # Initialize Chat History
+        if "messages" not in st.session_state:
+            st.session_state.messages = [
+                {
+                    "role": "assistant",
+                    "content": f"🎯 **Ready for {selected_family} session.**\n- Target cycle: ~{fam_avg_spins} spins.\n- Max runway: {int(bankroll / current_bet if current_bet else 0)} spins.\n- Update me on spin count or balance anytime!"
+                }
+            ]
+
+        # Display Chat History
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Chat Input Bar for Mid-Game Updates
+        if user_input := st.chat_input("e.g. '50 spins in, no feature, down $125. Should I continue?'"):
+            st.session_state.messages.append({"role": "user", "content": user_input})
+            with st.chat_message("user"):
+                st.markdown(user_input)
+
             if not client:
                 st.error("Groq API Key missing.")
             else:
-                with st.spinner("Analyzing strategy..."):
-                    family_df = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
-                    fam_hits = len(family_df)
-                    fam_avg_spins = round(family_df["Spin of feature hit"].mean(), 1) if "Spin of feature hit" in family_df else 0
-                    fam_avg_mult = round(family_df["Win multiplier"].mean(), 1) if "Win multiplier" in family_df else 0
-                    fam_feature_counts = family_df["Feature type"].value_counts().to_dict() if "Feature type" in family_df else {}
-                    
+                with st.chat_message("assistant"):
                     active_model = get_active_groq_model(client)
-                    
-                    prompt = f"""
-                    You are Slotpilot, a mathematical slot strategy AI agent.
-                    
-                    Data-backed profile for Family: "{selected_family}"
-                    - Total Recorded Hits: {fam_hits}
-                    - Average Spins to Feature Hit: {fam_avg_spins}
-                    - Average Feature Multiplier: {fam_avg_mult}x
-                    - Feature Breakdown: {fam_feature_counts}
-                    
-                    Current Situation:
-                    - Bankroll: ${bankroll}
-                    - Base Bet: ${current_bet}
-                    
-                    Provide a short, tactical play plan:
-                    1. Target Spin Cycle
-                    2. Bankroll Survival / Bet Rating
-                    3. Hard Stop-Loss and Profit Exit Target
-                    """
+                    groq_messages = [{"role": "system", "content": system_instruction}] + [
+                        {"role": m["role"], "content": m["content"]} for m in st.session_state.messages
+                    ]
                     
                     try:
                         res = client.chat.completions.create(
                             model=active_model,
-                            messages=[{"role": "user", "content": prompt}],
+                            messages=groq_messages,
                             temperature=0.2,
+                            max_tokens=150
                         )
-                        st.caption(f"Engine Model: `{active_model}`")
-                        st.info(res.choices[0].message.content)
+                        reply = res.choices[0].message.content
+                        st.markdown(reply)
+                        st.session_state.messages.append({"role": "assistant", "content": reply})
                     except Exception as err:
                         st.error(f"Groq API Error: {err}")
+
+        if st.button("🔄 Reset Chat Session"):
+            st.session_state.messages = []
+            st.rerun()
 
     # --- TAB 3: VISUAL ANALYTICS & CHARTS ---
     with tab3:
