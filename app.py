@@ -50,7 +50,7 @@ def get_active_groq_model(client):
         models_resp = client.models.list()
         active_ids = [m.id for m in models_resp.data]
         
-        # Priority on reliable standard chat completion models without raw reasoning leaks
+        # Explicit priority list targeting stable standard text chat models
         preferred = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
@@ -70,35 +70,26 @@ def get_active_groq_model(client):
     return "llama-3.3-70b-versatile"
 
 def build_strict_dataset_summary(df):
-    """Computes lightweight aggregated stats across historical logs."""
-    if df.empty:
+    """Computes a compact aggregated summary of historical logs to fit Groq payload limits."""
+    if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
         return "No historical log data available."
     
-    total_records = len(df)
+    # Pre-aggregate metrics per Family to minimize token count
+    fam_stats = df.groupby("Family").agg(
+        hits=("Win multiplier", "count"),
+        avg_spins=("Spin of feature hit", "mean"),
+        avg_mult=("Win multiplier", "mean"),
+        max_mult=("Win multiplier", "max")
+    ).reset_index()
     
-    if "Family" in df.columns and "Win multiplier" in df.columns:
-        fam_stats = df.groupby("Family").agg(
-            hits=("Win multiplier", "count"),
-            avg_spins=("Spin of feature hit", "mean"),
-            avg_mult=("Win multiplier", "mean"),
-            max_mult=("Win multiplier", "max")
-        ).reset_index()
-        
-        summary_lines = []
-        for _, row in fam_stats.iterrows():
-            summary_lines.append(
-                f"- Family: '{row['Family']}' | Hits: {row['hits']} | Avg Spins: {row['avg_spins']:.1f} | Avg Mult: {row['avg_mult']:.1f}x | Max Mult: {row['max_mult']:.1f}x"
-            )
-        valid_combos_str = "\n".join(summary_lines)
-    else:
-        valid_combos_str = "No valid family data."
+    summary_lines = []
+    for _, row in fam_stats.iterrows():
+        summary_lines.append(
+            f"• {row['Family']}: Hits={row['hits']}, AvgSpins={row['avg_spins']:.1f}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
+        )
     
-    return f"""
-    --- HISTORICAL DATA SUMMARY ({total_records} Hits Logged) ---
-    ONLY recommend Families present in this list:
-    {valid_combos_str}
-    --------------------------------------------------------------
-    """
+    compact_summary = "\n".join(summary_lines)
+    return f"HISTORICAL DATA SUMMARY ({len(df)} total hits):\n{compact_summary}"
 
 tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
 
@@ -197,13 +188,13 @@ try:
             User Context: Bankroll: ${total_bankroll} | Target Exit: ${target_profit} | Profile: {risk_pref}
 
             RESPONSE FORMAT (STRICT):
-            - Recommend top 2 families from the dataset.
+            - Recommend top 2 families from dataset.
             - For each, provide ONLY:
               * Family Name
               * Check-In ($)
               * Bet Size ($)
               * Max Runway (Spins = Check-In / Bet Size)
-            - Total response must be under 60 words.
+            - Keep total response under 60 words.
             """
 
             if "pre_messages" not in st.session_state:
@@ -223,14 +214,14 @@ try:
                 if client:
                     with st.chat_message("assistant"):
                         active_model = get_active_groq_model(client)
-                        recent = st.session_state.pre_messages[-6:]
+                        recent = st.session_state.pre_messages[-4:]
                         msgs = [{"role": "system", "content": system_instruction_pre}] + [{"role": m["role"], "content": m["content"]} for m in recent]
                         try:
                             res = client.chat.completions.create(
                                 model=active_model,
                                 messages=msgs,
                                 temperature=0.1,
-                                max_tokens=300
+                                max_tokens=200
                             )
                             reply = res.choices[0].message.content.strip()
                             st.markdown(reply)
@@ -301,7 +292,7 @@ try:
                 if client:
                     with st.chat_message("assistant"):
                         active_model = get_active_groq_model(client)
-                        recent_messages = st.session_state.messages[-8:]
+                        recent_messages = st.session_state.messages[-4:]
                         groq_messages = [{"role": "system", "content": system_instruction_live}] + [
                             {"role": m["role"], "content": m["content"]} for m in recent_messages
                         ]
@@ -311,7 +302,7 @@ try:
                                 model=active_model,
                                 messages=groq_messages,
                                 temperature=0.1,
-                                max_tokens=200
+                                max_tokens=150
                             )
                             reply = res.choices[0].message.content.strip()
                             st.markdown(reply)
