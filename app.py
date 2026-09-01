@@ -1,8 +1,9 @@
 import os
 import re
+import numpy as np
+import pandas as pd
 import streamlit as st
 import gspread
-import pandas as pd
 import plotly.express as px
 from datetime import date
 from dotenv import load_dotenv
@@ -47,7 +48,7 @@ def safe_unique_options(series, default_list):
     return default_list
 
 def clean_thinking_tags(text: str) -> str:
-    """Strips out <think>...</think> blocks or unclosed <think> prompts from the output text."""
+    """Strips out internal thinking blocks from output text."""
     if not text:
         return ""
     cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
@@ -77,35 +78,52 @@ def get_active_groq_model(client):
         pass
     return "llama-3.3-70b-versatile"
 
+def calculate_rvi(mult_series):
+    """Calculates Feature-Yield RVI using logged win multipliers."""
+    if len(mult_series) < 2:
+        return 0.0, "Low Volatility (Low Sample)"
+    
+    std_dev = np.std(mult_series, ddof=1)
+    if std_dev > 45.0:
+        label = "High RVI (Aggressive Swings)"
+    elif std_dev > 20.0:
+        label = "Moderate RVI (Balanced)"
+    else:
+        label = "Low RVI (Flat Bleed Risk)"
+        
+    return round(float(std_dev), 2), label
+
+def calculate_dynamic_stop_loss(checkin_amount, softened_cycle_spins, base_bet):
+    """Computes Dynamic Stop-Loss Matrix Rules."""
+    hard_stop_loss = round(checkin_amount * 0.70, 2)
+    dead_spin_limit = max(12, int(softened_cycle_spins * 0.50))
+    profit_lock_threshold = round(checkin_amount * 1.40, 2)
+    
+    matrix_str = f"Stop Floor: ${hard_stop_loss:.0f} | Dead-Spin Cutoff: {dead_spin_limit} spins | Lock Profit @ ${profit_lock_threshold:.0f}"
+    return hard_stop_loss, dead_spin_limit, profit_lock_threshold, matrix_str
+
 def determine_ai_bet_strategy(spins_series, mult_series):
-    """
-    AI Logic Engine: Dynamically determines betting structure (Flat High, Flat Low, Variable)
-    based on distribution variance, modal clusters, and multiplier stability.
-    """
+    """Dynamically evaluates betting structure based on cluster density and Feature RVI."""
     if spins_series.empty:
         return "Flat Mid-Bet", "$5.00", "10c Denom / $5 Bet", 5.00
     
     median_spins = spins_series.median()
-    std_spins = spins_series.std() if len(spins_series) > 1 else 0
+    rvi_val, _ = calculate_rvi(mult_series)
     avg_mult = mult_series.mean() if not mult_series.empty else 0
     max_mult = mult_series.max() if not mult_series.empty else 0
     
-    # High Consistency + Early Hit Density = Flat High Play
-    if median_spins <= 30 and (std_spins <= 12 or len(spins_series) <= 2):
+    if median_spins <= 30 and (rvi_val >= 25.0 or len(spins_series) <= 2):
         if avg_mult >= 40 or max_mult >= 100:
             return "Flat High-Bet", "$10.00", "$1 Denom / $10 Bet", 10.00
         else:
             return "Flat High-Bet", "$10.00", "10c Denom / $10 Bet", 10.00
             
-    # High Multiplier Variance + Broader Spin Distribution = Variable Progression
-    elif std_spins > 15 and max_mult >= 80:
+    elif rvi_val > 40.0 and max_mult >= 80:
         return "Varying (Scale Up)", "$2.50 ➔ $7.50", "10c Denom ($2.50 to $7.50)", 7.50
         
-    # Deep Spin Cycles + Low Multiplier Cap = Flat Low Safety
     elif median_spins > 45 and avg_mult < 35:
         return "Flat Low-Bet", "$2.50", "1c or 2c Denom / $2.50 Bet", 2.50
         
-    # Standard Volatility Machine = Mid/High Balanced Bet
     else:
         if avg_mult >= 50:
             return "Flat Mid-High", "$7.50", "10c Denom / $7.50 Bet", 7.50
@@ -113,7 +131,6 @@ def determine_ai_bet_strategy(spins_series, mult_series):
             return "Flat Mid-Bet", "$5.00", "5c Denom / $5.00 Bet", 5.00
 
 def build_strict_dataset_summary(df, target_family=None, max_rows=15):
-    """Computes a compact aggregated summary including Median and Density Zones to prevent outlier distortion."""
     if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
         return "No historical log data available."
     
@@ -122,7 +139,6 @@ def build_strict_dataset_summary(df, target_family=None, max_rows=15):
         temp_df = temp_df[temp_df["Family"].astype(str) == str(target_family)]
         
     group_cols = ["Family", "Slot"] if "Slot" in temp_df.columns else ["Family"]
-    
     summary_lines = []
     
     for name, group in temp_df.groupby(group_cols):
@@ -130,10 +146,9 @@ def build_strict_dataset_summary(df, target_family=None, max_rows=15):
         fam_name = name[0] if isinstance(name, tuple) else name
         
         hits = len(group)
-        mean_spins = group["Spin of feature hit"].mean()
         median_spins = group["Spin of feature hit"].median()
         avg_mult = group["Win multiplier"].mean()
-        max_mult = group["Win multiplier"].max()
+        rvi_val, rvi_label = calculate_rvi(group["Win multiplier"])
         
         spins_list = group["Spin of feature hit"].dropna().tolist()
         density_str = "N/A"
@@ -144,31 +159,25 @@ def build_strict_dataset_summary(df, target_family=None, max_rows=15):
                 density_str = f"{top_bucket}-{top_bucket+10} spins"
         
         summary_lines.append(
-            f"• Fam: '{fam_name}' | Slot: '{slot_name}' | Hits={hits}, MeanSpins={int(round(mean_spins))}, MedianSpins={int(round(median_spins))}, PeakWinZone='{density_str}', AvgMult={avg_mult:.1f}x, MaxMult={max_mult:.1f}x"
+            f"• Fam: '{fam_name}' | Slot: '{slot_name}' | Hits={hits}, MedianSpins={int(round(median_spins))}, PeakWinZone='{density_str}', RVI={rvi_val} ({rvi_label}), AvgMult={avg_mult:.1f}x"
         )
         if len(summary_lines) >= max_rows:
             break
             
     compact_summary = "\n".join(summary_lines)
-    return f"HISTORICAL LOG SUMMARY (CLUSTER-AWARE): \n{compact_summary}"
+    return f"HISTORICAL LOG SUMMARY (FEATURE-RVI & CLUSTER ENHANCED): \n{compact_summary}"
 
 DOMAIN_KNOWLEDGE_PROMPT = """
 COLUMN MEANINGS & STRATEGY CONTEXT:
-1. Attempt Number & Hit Number Logic:
-   - Attempt Number = 1 & Hit Number = 1: Machine hit a feature on the initial check-in.
-   - Attempt Number = 1 & Hit Number = 0: Initial check-in failed to hit a feature.
-   - Attempt Number = 2, 3, 4+: Player continued playing after a feature win (Repeat Attempt).
+1. Feature-Yield Rolling Volatility Index (RVI):
+   - Calculated from standard deviation of logged feature win multipliers.
+   - High RVI (>40) indicates high-swing potential; AI dynamically applies high/varying bets.
+   - Low RVI (<20) indicates low-volatility flat bleed risk.
 
-2. Outlier vs. High-Density Winning Zone Principle (CRITICAL):
-   - Ignore simple arithmetic averages if 1-2 extreme cold games (e.g., 115-120 spins) skew the overall mean upward.
-   - Focus on the MODAL DENSITY RANGE (the specific spin bracket where the majority of feature hits occur).
-
-3. Autonomous AI Betting Strategy Selection:
-   - The AI agent dynamically selects the bet strategy (Flat High, Flat Low, Flat Mid, or Varying Sizing) per slot.
-   - Do NOT force a single bet rule across all slots. Evaluate volatility, cluster tightness, and yield profiles.
-
-4. Softened Runway Rule (10% to 15% Buffer on Cluster Target):
-   - Take the high-density cluster target (or median) and add a 10% to 15% softening buffer. Round to integers.
+2. Dynamic Stop-Loss Adjustment Rules:
+   - Base Stop-Loss Floor: Exit machine if capital drops below 70% of initial check-in.
+   - Dead-Spin Cutoff: Stop session early if zero payouts hit within 50% of targeted spin cycle.
+   - Trailing Profit Floor: Lock in gains when bankroll expands past +40%.
 """
 
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -262,14 +271,14 @@ try:
 
     # --- TAB 2: INTERACTIVE CHAT & CO-PILOT ---
     with tab2:
-        st.subheader("💬 Slotpilot AI Assistant")
+        st.subheader("💬 Slotpilot AI Assistant (Feature-RVI & Stop-Loss Enabled)")
         
         mode = st.radio("Select Assistance Mode:", ["🎮 Pre-Game Machine Finder", "⚡ Live Mid-Game Co-Pilot"], horizontal=True)
         st.divider()
 
         if mode == "🎮 Pre-Game Machine Finder":
             st.markdown("### 🎯 Autonomous Pre-Session Engine")
-            st.caption("Let the AI analyze historical variance to determine whether to play Flat High, Flat Low, or Varying bets.")
+            st.caption("AI evaluates Feature-Yield RVI and sets Dynamic Stop-Loss limits per machine.")
             
             c_p1, c_p2, c_p3 = st.columns(3)
             with c_p1:
@@ -295,23 +304,23 @@ try:
             - Include both Family Name AND exact Slot Name.
             - Provide ONLY:
               * Family & Specific Slot Name
-              * AI Bet Strategy (Flat High, Flat Low, Flat Mid, or Varying Bet)
-              * Recommended Denomination & Bet Config
-              * Recommended Check-In ($)
-              * Softened Density Target (Spins)
+              * AI Bet Strategy & Denom Config
+              * RVI Volatility Level
+              * Initial Check-In ($) & Dynamic Stop-Loss Floor
+              * Softened Density Target (Spins) & Dead-Spin Cutoff
             - Keep total response concise (under 90 words).
             """
 
             if "pre_messages" not in st.session_state:
                 st.session_state.pre_messages = [
-                    {"role": "assistant", "content": f"👋 **Ready.** Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me to evaluate machine bet strategies for today!"}
+                    {"role": "assistant", "content": f"👋 **Ready.** Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me to evaluate machine RVI profiles and stop-loss rules!"}
                 ]
 
             for msg in st.session_state.pre_messages:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-            if user_pre_input := st.chat_input("e.g. 'Which machine should I play first and should I use flat or varying bet sizing?'"):
+            if user_pre_input := st.chat_input("e.g. 'Which machine has the highest RVI rating today and what is the dynamic stop-loss?'"):
                 st.session_state.pre_messages.append({"role": "user", "content": user_pre_input})
                 with st.chat_message("user"):
                     st.markdown(user_pre_input)
@@ -396,12 +405,9 @@ try:
 
             m_median_spins_val = machine_df["Spin of feature hit"].median() if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
             m_median_spins = int(round(m_median_spins_val)) if pd.notnull(m_median_spins_val) else 0
-            
             m_softened_spins = int(round(m_median_spins * 1.12)) if m_median_spins > 0 else 0
-            m_avg_mult = round(machine_df["Win multiplier"].mean(), 1) if ("Win multiplier" in machine_df and not machine_df.empty) else 0
             
-            max_spins_runway = int(checkin_amount / current_bet) if current_bet > 0 else 0
-
+            h_stop, dead_limit, p_lock, stop_matrix_text = calculate_dynamic_stop_loss(checkin_amount, m_softened_spins, current_bet)
             live_dataset_summary = build_strict_dataset_summary(df, target_family=selected_family, max_rows=5)
 
             system_instruction_live = f"""
@@ -413,10 +419,9 @@ try:
 
             Live Context:
             - Family: "{selected_family}" | Slot: "{selected_slot}"
-            - Check-In: ${checkin_amount} | Bet: ${current_bet} | Max Runway: {max_spins_runway} spins
-            - Median Spin Baseline (ignoring outlier spikes): {m_median_spins} spins
-            - Softened Target Window (Cluster Baseline + 12% buffer): {m_softened_spins} spins
-            - Avg Multiplier: {m_avg_mult}x
+            - Check-In: ${checkin_amount} | Base Bet: ${current_bet}
+            - Softened Spin Target Window: ~{m_softened_spins} spins
+            - Dynamic Stop-Loss Thresholds: {stop_matrix_text}
 
             STRICT FORMAT: Max 2 bullet points, under 50 words total.
             """
@@ -425,7 +430,7 @@ try:
                 st.session_state.messages = [
                     {
                         "role": "assistant",
-                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- High-Density Softened Window: ~{m_softened_spins} spins (filtered for outliers + 12% safety buffer).\n- Max Runway: {max_spins_runway} spins at ${current_bet}."
+                        "content": f"🎯 **Live Tracking Active for {selected_family} ({selected_slot})**\n- Initial Check-In: ${checkin_amount} | Target Runway: ~{m_softened_spins} spins\n- **Dynamic Stop Rules:** Hard Floor: ${h_stop:.0f} | Dead-Spin Cutoff: {dead_limit} spins | Trailing Lock: ${p_lock:.0f}"
                     }
                 ]
 
@@ -433,7 +438,7 @@ try:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-            if user_input := st.chat_input("e.g. 'Attempt 1 failed at 28 spins. Should I start Attempt 2 repeat play?'"):
+            if user_input := st.chat_input("e.g. '15 dead spins with zero hits down to $520. Execute dead-spin exit?'"):
                 st.session_state.messages.append({"role": "user", "content": user_input})
                 with st.chat_message("user"):
                     st.markdown(user_input)
@@ -566,15 +571,15 @@ try:
             else:
                 st.info("No data available for Multiplier Distribution given current filters.")
 
-    # --- TAB 4: TODAY'S DAILY PRIORITY BOARD (AUTONOMOUS AI BET STRATEGY) ---
+    # --- TAB 4: TODAY'S DAILY PRIORITY BOARD (RVI & DYNAMIC STOP-LOSS MATRIX) ---
     with tab4:
-        st.subheader("🎯 Today's Pre-Calculated Priority Board (Autonomous AI Betting Sizing)")
+        st.subheader("🎯 Today's Priority Board (Feature-RVI & Dynamic Stop-Loss Matrix)")
         
         today_date = date.today()
         today_day_str = today_date.strftime("%A")
         today_formatted = f"{today_date.month}/{today_date.day}/{today_date.year}"
         
-        st.info(f"📅 **Date Detected:** `{today_formatted}` (`{today_day_str}`)\nEvaluating slot variance profiles for {today_day_str}s. AI dynamically decides whether each machine requires Flat High, Flat Low, or Varying Bet structures.")
+        st.info(f"📅 **Date Detected:** `{today_formatted}` (`{today_day_str}`)\nPre-calculating RVI payout volatility metrics and dynamic stop-loss levels for {today_day_str} play.")
         
         if df.empty:
             st.warning("No dataset loaded. Please check Google Sheets connection.")
@@ -599,7 +604,6 @@ try:
                 if spins.empty:
                     continue
                 
-                # Outlier-resistant metrics
                 median_spins = spins.median()
                 buckets = [int(s // 10 * 10) for s in spins]
                 top_bucket = max(set(buckets), key=buckets.count) if buckets else int(median_spins)
@@ -613,25 +617,30 @@ try:
                 avg_mult = mults.mean() if not mults.empty else 0
                 max_mult = mults.max() if not mults.empty else 0
                 
-                # Autonomous AI Engine evaluates volatility pattern
+                # Calculate Feature-Yield RVI
+                rvi_score, rvi_label = calculate_rvi(mults)
+                
+                # Determine AI Bet Strategy
                 bet_strategy, bet_display, denom_config, base_bet_num = determine_ai_bet_strategy(spins, mults)
                 
-                # Dynamic Check-In calculation based on assigned strategy bet level
+                # Dynamic Check-In & Stop-Loss Matrix Calculation
                 raw_checkin = softened_cycle_spins * base_bet_num * 1.8
                 suggested_checkin = max(300.0, float(((int(raw_checkin) + 49) // 50) * 50))
                 
-                # Composite Score based on overall machine efficiency
-                score = (avg_mult * 0.4) + (max_mult * 0.2) + (total_hits * 2.5) + (base_bet_num * 2.0) - (softened_cycle_spins * 0.15)
+                h_stop, dead_limit, p_lock, _ = calculate_dynamic_stop_loss(suggested_checkin, softened_cycle_spins, base_bet_num)
+                
+                score = (avg_mult * 0.35) + (rvi_score * 0.25) + (total_hits * 2.0) + (base_bet_num * 2.0) - (softened_cycle_spins * 0.15)
                 
                 priority_records.append({
                     "Family": fam,
                     "Slot Title": s_name,
                     "AI Strategy": bet_strategy,
                     "Recommended Bet": bet_display,
-                    "Setup Config": denom_config,
-                    "Target Cycle (Spins)": softened_cycle_spins,
-                    "Initial Check-In ($)": f"${suggested_checkin:.0f}",
-                    "Peak Yield Zone": f"{top_bucket}-{top_bucket+10} spins",
+                    "RVI Index": f"{rvi_score} ({rvi_label})",
+                    "Check-In ($)": f"${suggested_checkin:.0f}",
+                    "Dynamic Stop Floor": f"${h_stop:.0f}",
+                    "Dead-Spin Limit": f"{dead_limit} spins",
+                    "Target Cycle": f"{softened_cycle_spins} spins",
                     "Avg Mult": f"{avg_mult:.1f}x",
                     "Hits": total_hits,
                     "Composite_Score": score,
@@ -647,8 +656,8 @@ try:
                 
                 top_15_df = p_df.head(15).drop(columns=["Composite_Score", "raw_bet", "raw_checkin"])
                 
-                st.markdown("### 🏆 Top 15 Recommended Machines (AI Strategy Evaluated)")
-                st.caption("The AI agent evaluates historical density clusters and variance profiles to decide between Flat High, Flat Low, or Varying bets for each machine.")
+                st.markdown("### 🏆 Top 15 Priority Matrix (RVI & Dynamic Stop-Loss Rules)")
+                st.caption("Ranked dynamically by density clusters, Feature-Yield RVI, and dynamic stop-loss cutoffs.")
                 
                 st.dataframe(
                     top_15_df,
@@ -660,7 +669,7 @@ try:
                 st.markdown("#### 🚀 Quick Action: Load Top Priority Choice into Live Co-Pilot")
                 top_row = p_df.iloc[0]
                 
-                st.success(f"**Top Choice:** {top_row['Family']} - {top_row['Slot Title']} | Strategy: **{top_row['AI Strategy']}** ({top_row['Recommended Bet']}) on **{top_row['Setup Config']}** for **{top_row['Target Cycle (Spins)']} spins**.")
+                st.success(f"**Top Choice:** {top_row['Family']} - {top_row['Slot Title']} | Strategy: **{top_row['AI Strategy']}** | RVI: **{top_row['RVI Index']}** | Hard Stop Floor: **{top_row['Dynamic Stop Floor']}**.")
                 
                 if st.button("⚡ Activate Top Priority Machine in Live Co-Pilot", use_container_width=True):
                     st.session_state["live_family"] = top_row['Family']
