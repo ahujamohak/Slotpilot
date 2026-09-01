@@ -130,6 +130,26 @@ def determine_ai_bet_strategy(spins_series, mult_series):
         else:
             return "Flat Mid-Bet", "$5.00", "5c Denom / $5.00 Bet", 5.00
 
+def get_macro_session_stage(start_bankroll, current_bankroll, target_exit):
+    """Evaluates macro session stage based on profit/loss incline or decline."""
+    if start_bankroll <= 0:
+        return "BALANCED_BUILD", "Start bankroll not set."
+    
+    pnl = current_bankroll - start_bankroll
+    drawdown_pct = (start_bankroll - current_bankroll) / start_bankroll
+    gain_needed = target_exit - current_bankroll
+    
+    if current_bankroll >= target_exit:
+        return "TARGET_REACHED", f"TARGET PASSED! PnL: +${pnl:.0f}. Lock profits immediately."
+    elif current_bankroll <= (start_bankroll * 0.65):
+        return "CRITICAL_RECOVERY", f"CRITICAL DRAWDOWN (-{drawdown_pct*100:.1f}%). Need +${gain_needed:.0f} to reach target. Low bets will NOT reach target—must hit high-RVI breakout or stop."
+    elif current_bankroll < start_bankroll:
+        return "DEFENSIVE_HOLD", f"DOWN -${abs(pnl):.0f}. Need +${gain_needed:.0f} to reach target. Require calculated mid/high RVI plays to recover."
+    elif current_bankroll >= (start_bankroll * 1.25):
+        return "AGGRESSIVE_CLOSER", f"UP +${pnl:.0f}! Only +${gain_needed:.0f} away from target. Take calculated high-bet shots to close out target."
+    else:
+        return "BALANCED_BUILD", f"NEUTRAL (PnL: ${pnl:+.0f}). Gap to target: ${gain_needed:.0f}. Maintain baseline strategy."
+
 def build_strict_dataset_summary(df, target_family=None, max_rows=15):
     if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
         return "No historical log data available."
@@ -272,7 +292,7 @@ try:
 
     # --- TAB 2: INTERACTIVE CHAT & CO-PILOT ---
     with tab2:
-        st.subheader("💬 Slotpilot AI Assistant (Feature-RVI & Stop-Loss Enabled)")
+        st.subheader("💬 Slotpilot AI Assistant (State-Aware Engine)")
         
         mode = st.radio("Select Assistance Mode:", ["🎮 Pre-Game Machine Finder", "⚡ Live Mid-Game Co-Pilot"], horizontal=True)
         st.divider()
@@ -283,9 +303,9 @@ try:
             
             c_p1, c_p2, c_p3 = st.columns(3)
             with c_p1:
-                total_bankroll = st.number_input("Total Day Bankroll ($)", value=2500.0, step=250.0, key="pre_bankroll")
+                total_bankroll = st.number_input("Total Day Bankroll ($)", value=1000.0, step=100.0, key="pre_bankroll")
             with c_p2:
-                target_profit = st.number_input("Target Exit Goal ($)", value=4000.0, step=250.0, key="pre_target")
+                target_profit = st.number_input("Target Exit Goal ($)", value=1500.0, step=100.0, key="pre_target")
             with c_p3:
                 risk_pref = st.selectbox("Risk Preference", ["AI Dynamic Decision", "Aggressive High-Roller", "Conservative Capital Safety"], key="pre_risk")
 
@@ -314,7 +334,7 @@ try:
 
             if "pre_messages" not in st.session_state:
                 st.session_state.pre_messages = [
-                    {"role": "assistant", "content": f"👋 **Ready.** Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me to evaluate machine RVI profiles and stop-loss rules!"}
+                    {"role": "assistant", "content": f"👋 **Ready.** Starting Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me to evaluate machine RVI profiles and stop-loss rules!"}
                 ]
 
             for msg in st.session_state.pre_messages:
@@ -357,29 +377,58 @@ try:
             with sc2:
                 sel_slot_to_pass = st.selectbox("Chosen Slot", slot_options_all, key="pass_slot")
             with sc3:
-                sel_checkin_to_pass = st.number_input("Check-In ($)", value=750.0, step=50.0, key="pass_checkin")
+                sel_checkin_to_pass = st.number_input("Check-In ($)", value=300.0, step=50.0, key="pass_checkin")
             with sc4:
-                sel_bet_to_pass = st.number_input("Bet Size ($)", value=10.00, step=2.50, key="pass_bet")
+                sel_bet_to_pass = st.number_input("Bet Size ($)", value=7.50, step=2.50, key="pass_bet")
                 
             if st.button("🚀 Launch Live Session with Selection", use_container_width=True):
                 st.session_state["live_family"] = sel_fam_to_pass
                 st.session_state["live_slot"] = sel_slot_to_pass
                 st.session_state["live_checkin"] = sel_checkin_to_pass
                 st.session_state["live_bet"] = sel_bet_to_pass
+                st.session_state["start_bankroll"] = total_bankroll
+                st.session_state["current_bankroll"] = total_bankroll
+                st.session_state["target_exit"] = target_profit
                 st.session_state["master_fam_filter"] = [sel_fam_to_pass]
                 st.session_state["master_slot_filter"] = [sel_slot_to_pass] if sel_slot_to_pass != "All Slots" else []
                 st.session_state.messages = []
-                st.success(f"Configured Live Co-Pilot & Visual Analytics for **{sel_fam_to_pass} - {sel_slot_to_pass}**!")
+                st.success(f"Configured Live Co-Pilot for **{sel_fam_to_pass} - {sel_slot_to_pass}** with ${total_bankroll} Start / ${target_profit} Target!")
 
         else:
-            # Live Mid-Game Co-Pilot
+            # Live Mid-Game Co-Pilot (State-Aware Engine)
             unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
             
             default_fam = st.session_state.get("live_family", unique_families[0] if unique_families else "Dragon Link")
-            default_checkin = st.session_state.get("live_checkin", 750.0)
-            default_bet = st.session_state.get("live_bet", 10.00)
+            default_checkin = st.session_state.get("live_checkin", 300.0)
+            default_bet = st.session_state.get("live_bet", 7.50)
             
-            with st.expander("⚙️ Set Live Machine & Check-In Context", expanded=True):
+            st.markdown("### 📊 Macro Session State Tracker")
+            st.caption("Keep these numbers updated live. The AI evaluates every single query against your overall trajectory.")
+            
+            sb_col1, sb_col2, sb_col3 = st.columns(3)
+            with sb_col1:
+                macro_start = st.number_input("Session Start Bankroll ($)", value=st.session_state.get("start_bankroll", 1000.0), step=50.0, key="macro_start_input")
+                st.session_state["start_bankroll"] = macro_start
+            with sb_col2:
+                macro_current = st.number_input("Current Real-Time Bankroll ($)", value=st.session_state.get("current_bankroll", 1000.0), step=25.0, key="macro_curr_input")
+                st.session_state["current_bankroll"] = macro_current
+            with sb_col3:
+                macro_target = st.number_input("Session Exit Target ($)", value=st.session_state.get("target_exit", 1500.0), step=50.0, key="macro_target_input")
+                st.session_state["target_exit"] = macro_target
+
+            # Evaluate Stage dynamically
+            session_stage, stage_desc = get_macro_session_stage(macro_start, macro_current, macro_target)
+            net_pnl = macro_current - macro_start
+            gap_to_target = macro_target - macro_current
+            
+            if session_stage in ["CRITICAL_RECOVERY", "DEFENSIVE_HOLD"]:
+                st.error(f"⚠️ **Session Status: {session_stage}** | PnL: **${net_pnl:+.0f}** | Need **+${gap_to_target:.0f}** for Target.\n_{stage_desc}_")
+            elif session_stage in ["TARGET_REACHED", "AGGRESSIVE_CLOSER"]:
+                st.success(f"🔥 **Session Status: {session_stage}** | PnL: **${net_pnl:+.0f}** | Need **+${gap_to_target:.0f}** for Target.\n_{stage_desc}_")
+            else:
+                st.info(f"🔵 **Session Status: {session_stage}** | PnL: **${net_pnl:+.0f}** | Need **+${gap_to_target:.0f}** for Target.\n_{stage_desc}_")
+
+            with st.expander("⚙️ Target Machine & Check-In Parameters", expanded=False):
                 ca, cb, cc, cd = st.columns(4)
                 with ca:
                     fam_index = unique_families.index(default_fam) if default_fam in unique_families else 0
@@ -395,9 +444,9 @@ try:
                 with cb:
                     selected_slot = st.selectbox("Target Slot Machine", options=slot_options, index=slot_index, key="chat_slot")
                 with cc:
-                    checkin_amount = st.number_input("Machine Check-In Amount ($)", value=default_checkin, step=50.0, key="chat_checkin")
+                    checkin_amount = st.number_input("Machine Load Amount ($)", value=default_checkin, step=50.0, key="chat_checkin")
                 with cd:
-                    current_bet = st.number_input("Base Bet ($)", value=default_bet, step=2.50, key="chat_bet")
+                    current_bet = st.number_input("Current Bet ($)", value=default_bet, step=2.50, key="chat_bet")
 
             if selected_slot != "All Slots" and "Slot" in df:
                 machine_df = df[(df["Family"].astype(str) == str(selected_family)) & (df["Slot"].astype(str) == str(selected_slot))]
@@ -412,26 +461,36 @@ try:
             live_dataset_summary = build_strict_dataset_summary(df, target_family=selected_family, max_rows=5)
 
             system_instruction_live = f"""
-            You are Slotpilot, a live tactical slot assistant. Give direct, tactical advice. NO fluff.
+            You are Slotpilot, a live tactical slot co-pilot. You MUST evaluate every suggestion through the lens of the overall session state.
 
             {DOMAIN_KNOWLEDGE_PROMPT}
 
+            CRITICAL SESSION STATE (ALWAYS EVALUATE AGAINST THIS):
+            - Macro Starting Capital: ${macro_start:.0f}
+            - Current Real-Time Capital: ${macro_current:.0f} (Net PnL: ${net_pnl:+.0f})
+            - Macro Exit Target: ${macro_target:.0f} (Gap to Target: ${gap_to_target:.0f})
+            - SESSION STAGE: [{session_stage}] -> {stage_desc}
+
+            STAGE STRATEGY MANDATES:
+            - If CRITICAL_RECOVERY / DEFENSIVE_HOLD: Reject any weak, low-yield play that caps recovery below the target. Advise aggressive breakout high-RVI plays OR an absolute exit. Do NOT recommend small moves that leave the user trapped in a loss.
+            - If AGGRESSIVE_CLOSER: Recommend aggressive, calculated high-bet shots to hit target quickly.
+            - If TARGET_REACHED: Strictly command profit lock and session abort.
+
+            Target Machine Context:
+            - Machine: "{selected_family} - {selected_slot}"
+            - Current Machine Load: ${checkin_amount} | Current Bet: ${current_bet}
+            - Dynamic Machine Thresholds: {stop_matrix_text}
+
             {live_dataset_summary}
 
-            Live Context:
-            - Family: "{selected_family}" | Slot: "{selected_slot}"
-            - Check-In: ${checkin_amount} | Base Bet: ${current_bet}
-            - Softened Spin Target Window: ~{m_softened_spins} spins
-            - Dynamic Stop-Loss Thresholds: {stop_matrix_text}
-
-            STRICT FORMAT: Max 2 bullet points, under 50 words total.
+            STRICT FORMAT: Max 2 bullet points, under 60 words total. Always explicitly reference session status (e.g., "Down $400 from $1,000 start...").
             """
 
             if "messages" not in st.session_state or not st.session_state.messages:
                 st.session_state.messages = [
                     {
                         "role": "assistant",
-                        "content": f"🎯 **Live Tracking Active for {selected_family} ({selected_slot})**\n- Initial Check-In: ${checkin_amount} | Target Runway: ~{m_softened_spins} spins\n- **Dynamic Stop Rules:** Hard Floor: ${h_stop:.0f} | Dead-Spin Cutoff: {dead_limit} spins | Trailing Lock: ${p_lock:.0f}"
+                        "content": f"🎯 **Live State Engine Active for {selected_family} ({selected_slot})**\n- **Session State:** ${macro_current:.0f} Current / ${macro_target:.0f} Target (PnL: ${net_pnl:+.0f})\n- **Stage:** `[{session_stage}]`\n- **Machine Limits:** Stop Floor: ${h_stop:.0f} | Dead-Spin Cutoff: {dead_limit} spins"
                     }
                 ]
 
@@ -439,7 +498,7 @@ try:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-            if user_input := st.chat_input("e.g. '15 dead spins with zero hits down to $520. Execute dead-spin exit?'"):
+            if user_input := st.chat_input("e.g. 'Down to $600 from my $1k start. Should I switch to a $2.50 low bet on Panda Magic?'"):
                 st.session_state.messages.append({"role": "user", "content": user_input})
                 with st.chat_message("user"):
                     st.markdown(user_input)
@@ -457,7 +516,7 @@ try:
                                 model=active_model,
                                 messages=groq_messages,
                                 temperature=0.1,
-                                max_tokens=150
+                                max_tokens=180
                             )
                             raw_reply = res.choices[0].message.content or ""
                             reply = clean_thinking_tags(raw_reply)
@@ -751,6 +810,12 @@ Dynamically maps game statistics to bet sizing and denomination selection:
 * Flat Mid-High ($7.50): Default choice if Average Multiplier >= 50x.
 * Flat Mid-Bet ($5.00): System baseline default for moderate volatility metrics.
 
+### E. Live Macro Session State Engine
+Enforces session-level context across all AI interactions:
+
+* Dynamic State Classifier: Evaluates real-time capital against start funds and target goals (`CRITICAL_RECOVERY`, `DEFENSIVE_HOLD`, `BALANCED_BUILD`, `AGGRESSIVE_CLOSER`, `TARGET_REACHED`).
+* Strategy Directives: When in recovery (`CRITICAL_RECOVERY`), the AI rejects low-yield plays that leave net sessions at a loss. It demands aggressive high-RVI breakout attempts or immediate session termination.
+
 ---
 
 ## 4. TAB FUNCTIONALITY & OPERATIONAL FLOW
@@ -763,7 +828,7 @@ Dynamically maps game statistics to bet sizing and denomination selection:
 
 ### Tab 2: Interactive AI Co-Pilot
 * Pre-Game Machine Finder: Evaluates macro bankroll and exit targets to recommend top 2 game choices with full stop-loss parameters.
-* Live Mid-Game Co-Pilot: Monitors live sessions. Takes machine parameters, check-in funds, and current bet size to issue real-time tactical commands (e.g., execute dead-spin exit, hold position).
+* Live Mid-Game Co-Pilot: Monitors live sessions. Tracks macro start/current bankroll and target exit goals to enforce macro session strategy.
 
 ### Tab 3: Visual Analytics
 * Volatility Radar: Scatter plot mapping Spin Depth vs Win Multipliers.
