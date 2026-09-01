@@ -78,7 +78,7 @@ def get_active_groq_model(client):
     return "llama-3.3-70b-versatile"
 
 def build_strict_dataset_summary(df, target_family=None, max_rows=15):
-    """Computes a compact aggregated summary capped at a specific row count to prevent token limits."""
+    """Computes a compact aggregated summary including Median and Density Zones to prevent outlier distortion."""
     if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
         return "No historical log data available."
     
@@ -88,26 +88,59 @@ def build_strict_dataset_summary(df, target_family=None, max_rows=15):
         
     group_cols = ["Family", "Slot"] if "Slot" in temp_df.columns else ["Family"]
     
-    fam_stats = temp_df.groupby(group_cols).agg(
-        hits=("Win multiplier", "count"),
-        avg_spins=("Spin of feature hit", "mean"),
-        avg_mult=("Win multiplier", "mean"),
-        max_mult=("Win multiplier", "max")
-    ).reset_index()
-    
-    if len(fam_stats) > max_rows:
-        fam_stats = fam_stats.sort_values(by="hits", ascending=False).head(max_rows)
-    
     summary_lines = []
-    for _, row in fam_stats.iterrows():
-        slot_name = row['Slot'] if 'Slot' in row else 'General'
-        avg_spins_int = int(round(row['avg_spins']))
-        summary_lines.append(
-            f"• Fam: '{row['Family']}' | Slot: '{slot_name}' | Hits={row['hits']}, AvgSpins={avg_spins_int}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
-        )
     
+    for name, group in temp_df.groupby(group_cols):
+        slot_name = name[1] if isinstance(name, tuple) else 'General'
+        fam_name = name[0] if isinstance(name, tuple) else name
+        
+        hits = len(group)
+        mean_spins = group["Spin of feature hit"].mean()
+        median_spins = group["Spin of feature hit"].median()
+        avg_mult = group["Win multiplier"].mean()
+        max_mult = group["Win multiplier"].max()
+        
+        # Calculate cluster density (10-spin window mode)
+        spins_list = group["Spin of feature hit"].dropna().tolist()
+        density_str = "N/A"
+        if spins_list:
+            # Group into 10-spin buckets to find high frequency density zone
+            buckets = [int(s // 10 * 10) for s in spins_list]
+            if buckets:
+                top_bucket = max(set(buckets), key=buckets.count)
+                density_str = f"{top_bucket}-{top_bucket+10} spins"
+        
+        summary_lines.append(
+            f"• Fam: '{fam_name}' | Slot: '{slot_name}' | Hits={hits}, MeanSpins={int(round(mean_spins))}, MedianSpins={int(round(median_spins))}, PeakWinZone='{density_str}', AvgMult={avg_mult:.1f}x, MaxMult={max_mult:.1f}x"
+        )
+        if len(summary_lines) >= max_rows:
+            break
+            
     compact_summary = "\n".join(summary_lines)
-    return f"HISTORICAL STATS (Capped Top {len(fam_stats)}): \n{compact_summary}"
+    return f"HISTORICAL LOG SUMMARY (CLUSTER-AWARE): \n{compact_summary}"
+
+# Domain Logic Instruction to be injected into system prompts
+DOMAIN_KNOWLEDGE_PROMPT = """
+COLUMN MEANINGS & STRATEGY CONTEXT:
+1. Attempt Number & Hit Number Logic:
+   - Attempt Number = 1 & Hit Number = 1: Machine hit a feature on the initial check-in.
+   - Attempt Number = 1 & Hit Number = 0: Initial check-in failed to hit a feature.
+   - Attempt Number = 2, 3, 4+: Player continued playing after a feature win (Repeat Attempt).
+   - Hit Number increments on successive feature hits during repeat attempts, or becomes 0 if a repeat attempt fails.
+
+2. Outlier vs. High-Density Winning Zone Principle (CRITICAL):
+   - Ignore simple arithmetic averages if 1-2 extreme cold games (e.g., 115-120 spins) skew the overall mean upward.
+   - Focus on the MODAL DENSITY RANGE (the specific spin bracket where the majority of feature hits occur, e.g., 20-30 spins).
+   - Base tactical recommendations on the high-frequency cluster zone, NOT on skewed outlier-inflated averages.
+
+3. 50/50 Knowledge Weighting:
+   - 50% Weight: User's session logs provided in prompt (focused on high-density hit clusters).
+   - 50% Weight: General slot mathematics, machine volatility knowledge, Australian venue game behavior (e.g., Aristocrat games like Dragon Link / Lightning Link), and statistical variance.
+
+4. Softened Runway Rule (10% to 15% Buffer on Cluster Target):
+   - Take the high-density cluster target (or median) and add a 10% to 15% softening buffer (e.g., if density target is 25 spins, recommend playing up to 28-30 spins).
+   - All spin recommendations must be rounded to whole integers.
+"""
 
 tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
 
@@ -149,8 +182,8 @@ try:
                 log_spin = st.number_input("Spin of Feature Hit", min_value=1, value=50, step=1)
                 log_win = st.number_input("Win Amount ($)", min_value=0.0, value=125.0, step=5.0)
                 log_mult = st.number_input("Win Multiplier (x)", min_value=0.0, value=50.0, step=1.0)
-                log_hit_num = st.number_input("Hit Number", min_value=1, value=1, step=1)
-                log_attempt = st.number_input("Attempt Number", min_value=1, value=1, step=1)
+                log_hit_num = st.number_input("Hit Number (0 = Failed attempt, 1+ = Hit #)", min_value=0, value=1, step=1)
+                log_attempt = st.number_input("Attempt Number (1 = Initial Check-In, 2+ = Repeat Attempt)", min_value=1, value=1, step=1)
 
             submitted = st.form_submit_button("🔥 Log Hit to Google Sheet", use_container_width=True)
 
@@ -176,7 +209,6 @@ try:
                             log_hit_num,
                             log_attempt
                         ]
-                        # Retain sheet formatting, validation drop-downs, and formulas by setting USER_ENTERED
                         ws.append_row(new_row, value_input_option="USER_ENTERED")
                         st.success(f"✅ Recorded: {final_family} ({final_slot}) hit on {auto_day} ({formatted_date_str})!")
                         st.cache_data.clear()
@@ -204,7 +236,7 @@ try:
 
         if mode == "🎮 Pre-Game Machine Finder":
             st.markdown("### 🎯 Pre-Session Selection Engine")
-            st.caption("Ask Slotpilot which specific machine to play first based on your daily bankroll, profit target, and logged historical performance.")
+            st.caption("Ask Slotpilot which specific machine to play first based on density cluster targets, bankroll, and profit target.")
             
             c_p1, c_p2, c_p3 = st.columns(3)
             with c_p1:
@@ -217,23 +249,23 @@ try:
             pre_summary = build_strict_dataset_summary(df, max_rows=10)
 
             system_instruction_pre = f"""
-            You are Slotpilot. Provide direct, short, bulleted answers. NO intro fluff, NO explanations, NO internal thinking text.
+            You are Slotpilot, an expert slot strategy co-pilot. Provide direct, bulleted answers. NO intro fluff, NO internal thinking text.
+
+            {DOMAIN_KNOWLEDGE_PROMPT}
+
             {pre_summary}
 
             User Context: Bankroll: ${total_bankroll} | Target Exit: ${target_profit} | Profile: {risk_pref}
 
-            STRICT NUMBER FORMAT RULE:
-            - NEVER output spin counts or spin recommendations in decimals. ALWAYS round spins to nearest WHOLE INTEGER.
-
             RESPONSE FORMAT (STRICT):
-            - Recommend top 2 specific slot recommendations from dataset.
-            - MUST INCLUDE BOTH standard Family Name AND exact Slot Name (e.g., "Dragon Link - Panda Magic").
+            - Recommend top 2 specific slot recommendations.
+            - Include both Family Name AND exact Slot Name (e.g., "Dragon Link - Panda Magic").
             - For each, provide ONLY:
               * Family & Specific Slot Name
               * Recommended Check-In ($)
               * Recommended Bet Size ($)
-              * Max Runway (Spins = Check-In / Bet Size, strictly whole integer)
-            - Keep total response under 70 words.
+              * Softened Density Target (Cluster Range/Median + 10-15% buffer, strictly rounded integer)
+            - Keep total response concise (under 80 words).
             """
 
             if "pre_messages" not in st.session_state:
@@ -260,7 +292,7 @@ try:
                                 model=active_model,
                                 messages=msgs,
                                 temperature=0.1,
-                                max_tokens=200
+                                max_tokens=220
                             )
                             raw_reply = res.choices[0].message.content or ""
                             reply = clean_thinking_tags(raw_reply)
@@ -328,8 +360,11 @@ try:
             else:
                 machine_df = filtered_df_fam
 
-            m_avg_spins_val = machine_df["Spin of feature hit"].mean() if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
-            m_avg_spins = int(round(m_avg_spins_val)) if pd.notnull(m_avg_spins_val) else 0
+            m_median_spins_val = machine_df["Spin of feature hit"].median() if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
+            m_median_spins = int(round(m_median_spins_val)) if pd.notnull(m_median_spins_val) else 0
+            
+            # Apply 10% to 15% softening buffer to calculated median baseline
+            m_softened_spins = int(round(m_median_spins * 1.12)) if m_median_spins > 0 else 0
             m_avg_mult = round(machine_df["Win multiplier"].mean(), 1) if ("Win multiplier" in machine_df and not machine_df.empty) else 0
             
             max_spins_runway = int(checkin_amount / current_bet) if current_bet > 0 else 0
@@ -337,25 +372,27 @@ try:
             live_dataset_summary = build_strict_dataset_summary(df, target_family=selected_family, max_rows=5)
 
             system_instruction_live = f"""
-            You are Slotpilot. Give direct, short, tactical play advice. NO fluff.
+            You are Slotpilot, a live tactical slot assistant. Give direct, tactical advice. NO fluff.
+
+            {DOMAIN_KNOWLEDGE_PROMPT}
+
             {live_dataset_summary}
 
             Live Context:
             - Family: "{selected_family}" | Slot: "{selected_slot}"
             - Check-In: ${checkin_amount} | Bet: ${current_bet} | Max Runway: {max_spins_runway} spins
-            - Stats: Avg Spins: {m_avg_spins}, Avg Mult: {m_avg_mult}x
+            - Median Spin Baseline (ignoring outlier spikes): {m_median_spins} spins
+            - Softened Target Window (Cluster Baseline + 12% buffer): {m_softened_spins} spins
+            - Avg Multiplier: {m_avg_mult}x
 
-            STRICT NUMBER FORMAT RULE:
-            - NEVER output spin counts or spin recommendations in decimals. Always round them to nearest WHOLE INTEGER.
-
-            STRICT FORMAT: Max 2 bullet points, under 40 words total.
+            STRICT FORMAT: Max 2 bullet points, under 50 words total.
             """
 
             if "messages" not in st.session_state or not st.session_state.messages:
                 st.session_state.messages = [
                     {
                         "role": "assistant",
-                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {max_spins_runway} spins at ${current_bet}."
+                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- High-Density Softened Window: ~{m_softened_spins} spins (filtered for outliers + 12% safety buffer).\n- Max Runway: {max_spins_runway} spins at ${current_bet}."
                     }
                 ]
 
@@ -363,7 +400,7 @@ try:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-            if user_input := st.chat_input("e.g. '35 spins in, balance down to 378, bet set at $3.75. What next?'"):
+            if user_input := st.chat_input("e.g. 'Attempt 1 failed at 28 spins. Should I start Attempt 2 repeat play?'"):
                 st.session_state.messages.append({"role": "user", "content": user_input})
                 with st.chat_message("user"):
                     st.markdown(user_input)
@@ -381,7 +418,7 @@ try:
                                 model=active_model,
                                 messages=groq_messages,
                                 temperature=0.1,
-                                max_tokens=120
+                                max_tokens=150
                             )
                             raw_reply = res.choices[0].message.content or ""
                             reply = clean_thinking_tags(raw_reply)
