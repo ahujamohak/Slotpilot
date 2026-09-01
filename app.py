@@ -94,8 +94,9 @@ def build_strict_dataset_summary(df):
     summary_lines = []
     for _, row in fam_stats.iterrows():
         slot_name = row['Slot'] if 'Slot' in row else 'General'
+        avg_spins_int = int(round(row['avg_spins']))
         summary_lines.append(
-            f"• Family: '{row['Family']}' | Slot: '{slot_name}' | Hits={row['hits']}, AvgSpins={row['avg_spins']:.1f}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
+            f"• Family: '{row['Family']}' | Slot: '{slot_name}' | Hits={row['hits']}, AvgSpins={avg_spins_int}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
         )
     
     compact_summary = "\n".join(summary_lines)
@@ -197,6 +198,9 @@ try:
 
             User Context: Bankroll: ${total_bankroll} | Target Exit: ${target_profit} | Profile: {risk_pref}
 
+            STRICT NUMBER FORMAT RULE:
+            - NEVER output spin counts or spin recommendations in decimals (e.g. NEVER write 12.7 spins). ALWAYS round spins to nearest WHOLE INTEGER (e.g., 13 spins).
+
             RESPONSE FORMAT (STRICT):
             - Recommend top 2 specific slot recommendations from dataset.
             - MUST INCLUDE BOTH standard Family Name AND exact Slot Name (e.g., "Dragon Link - Panda Magic").
@@ -204,7 +208,7 @@ try:
               * Family & Specific Slot Name
               * Recommended Check-In ($)
               * Recommended Bet Size ($)
-              * Max Runway (Spins = Check-In / Bet Size)
+              * Max Runway (Spins = Check-In / Bet Size, strictly whole integer)
             - Keep total response under 70 words.
             """
 
@@ -242,7 +246,7 @@ try:
                             st.error(f"Groq API Error: {err}")
 
             st.divider()
-            st.markdown("#### ⚡ Pass Selection to Live Co-Pilot")
+            st.markdown("#### ⚡ Pass Selection to Live Co-Pilot & Analytics")
             
             fam_options = safe_unique_options(df.get("Family"), ["Dragon Link"])
             slot_options_all = safe_unique_options(df.get("Slot"), ["Panda Magic"])
@@ -262,14 +266,15 @@ try:
                 st.session_state["live_slot"] = sel_slot_to_pass
                 st.session_state["live_checkin"] = sel_checkin_to_pass
                 st.session_state["live_bet"] = sel_bet_to_pass
-                st.session_state.messages = []  # Reset live messages for new machine
-                st.success(f"Configured Live Co-Pilot for **{sel_fam_to_pass} - {sel_slot_to_pass}**! Switch mode to '⚡ Live Mid-Game Co-Pilot'.")
+                st.session_state["master_fam_filter"] = [sel_fam_to_pass]
+                st.session_state["master_slot_filter"] = [sel_slot_to_pass] if sel_slot_to_pass != "All Slots" else []
+                st.session_state.messages = []  # Reset live chat messages for new machine
+                st.success(f"Configured Live Co-Pilot & Visual Analytics for **{sel_fam_to_pass} - {sel_slot_to_pass}**!")
 
         else:
             # Live Mid-Game Co-Pilot
             unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
             
-            # Default values synced from selection engine if available
             default_fam = st.session_state.get("live_family", unique_families[0] if unique_families else "Dragon Link")
             default_checkin = st.session_state.get("live_checkin", 500.0)
             default_bet = st.session_state.get("live_bet", 2.50)
@@ -300,7 +305,8 @@ try:
                 machine_df = filtered_df_fam
 
             m_hits = len(machine_df)
-            m_avg_spins = round(machine_df["Spin of feature hit"].mean(), 1) if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
+            m_avg_spins_val = machine_df["Spin of feature hit"].mean() if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
+            m_avg_spins = int(round(m_avg_spins_val)) if pd.notnull(m_avg_spins_val) else 0
             m_avg_mult = round(machine_df["Win multiplier"].mean(), 1) if ("Win multiplier" in machine_df and not machine_df.empty) else 0
             
             max_spins_runway = int(checkin_amount / current_bet) if current_bet > 0 else 0
@@ -313,6 +319,9 @@ try:
             - Family: "{selected_family}" | Slot: "{selected_slot}"
             - Check-In: ${checkin_amount} | Bet: ${current_bet} | Max Runway: {max_spins_runway} spins
             - Stats: Avg Spins: {m_avg_spins}, Avg Mult: {m_avg_mult}x
+
+            STRICT NUMBER FORMAT RULE:
+            - NEVER output spin counts or spin recommendations in decimals. Always round them to nearest WHOLE INTEGER.
 
             STRICT FORMAT: Max 2 bullet points, under 40 words total.
             """
@@ -372,13 +381,13 @@ try:
             all_slots = safe_unique_options(df.get("Slot"), [])
             
             with f_col1:
-                selected_fam_filter = st.multiselect("Filter by Family", options=all_families, default=[], key="master_fam_filter")
+                selected_fam_filter = st.multiselect("Filter by Family", options=all_families, key="master_fam_filter")
             with f_col2:
                 if selected_fam_filter:
                     available_slots_filtered = safe_unique_options(df[df["Family"].isin(selected_fam_filter)].get("Slot"), [])
                 else:
                     available_slots_filtered = all_slots
-                selected_slot_filter = st.multiselect("Filter by Slot Title", options=available_slots_filtered, default=[], key="master_slot_filter")
+                selected_slot_filter = st.multiselect("Filter by Slot Title", options=available_slots_filtered, key="master_slot_filter")
             with f_col3:
                 min_spins, max_spins = 1, int(df["Spin of feature hit"].max()) if ("Spin of feature hit" in df and not df.empty) else 200
                 spin_range = st.slider("Filter by Feature Spin Window", min_value=1, max_value=max_spins, value=(1, max_spins), key="master_spin_slider")
