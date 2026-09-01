@@ -43,23 +43,33 @@ def safe_unique_options(series, default_list):
     return default_list
 
 def get_active_groq_model(client):
+    """Fetch active chat models from Groq API and select the best text model."""
     try:
         models_resp = client.models.list()
-        active_models = [m.id for m in models_resp.data]
+        active_ids = [m.id for m in models_resp.data]
+        
+        # Priority list of Groq text production models
         preferred = [
             "llama-3.3-70b-versatile",
-            "llama-3.1-70b-versatile",
+            "llama-3.3-70b-specdec",
+            "llama3-70b-8192",
+            "llama3-8b-8192",
             "llama-3.1-8b-instant",
             "mixtral-8x7b-32768"
         ]
-        for m in preferred:
-            if m in active_models:
-                return m
+        
+        for p in preferred:
+            if p in active_ids:
+                return p
+                
+        # Fallback to any active non-whisper/non-vision model
+        for m_id in active_ids:
+            if "whisper" not in m_id.lower() and "vision" not in m_id.lower() and "orpheus" not in m_id.lower():
+                return m_id
     except Exception:
         pass
-    return "llama-3.3-70b-versatile"
+    return "llama3-70b-8192"
 
-# Setup tabs with Visual Analytics on Tab 3
 tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "🤖 AI Tactical Plan", "📊 Visual Analytics & Charts"])
 
 try:
@@ -76,17 +86,18 @@ try:
         families_opts = families + ["➕ Add New Family..."]
         slots_opts = slots + ["➕ Add New Slot..."]
 
-        if "selected_date" not in st.session_state:
-            st.session_state["selected_date"] = date.today()
+        # Outside form date picker to trigger instant rerun on change
+        col_date, col_day = st.columns(2)
+        with col_date:
+            log_date = st.date_input("Select Date", date.today(), key="main_date_picker")
+        with col_day:
+            auto_day = log_date.strftime("%A")
+            st.text_input("Day (Auto-detected)", value=auto_day, disabled=True, key="auto_day_disp")
 
         with st.form("mobile_logger_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             
             with col1:
-                log_date = st.date_input("Date", value=st.session_state["selected_date"], key="log_date_picker")
-                auto_day = log_date.strftime("%A")
-                st.text_input("Day (Auto-detected)", value=auto_day, disabled=True)
-                
                 sel_family = st.selectbox("Family", families_opts)
                 custom_family = st.text_input("Enter New Family Name", value="") if sel_family == "➕ Add New Family..." else ""
                 
@@ -146,7 +157,7 @@ try:
             
         if st.button("Generate Tactical Play Plan", use_container_width=True):
             if not client:
-                st.error("Groq API Key missing. Please check your environment variable or Streamlit Secrets.")
+                st.error("Groq API Key missing.")
             else:
                 with st.spinner("Analyzing strategy..."):
                     family_df = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
@@ -182,11 +193,12 @@ try:
                             messages=[{"role": "user", "content": prompt}],
                             temperature=0.2,
                         )
+                        st.caption(f"Engine Model: `{active_model}`")
                         st.info(res.choices[0].message.content)
                     except Exception as err:
                         st.error(f"Groq API Error: {err}")
 
-    # --- TAB 3: VISUAL ANALYTICS & CHARTS (LAST TAB) ---
+    # --- TAB 3: VISUAL ANALYTICS & CHARTS ---
     with tab3:
         st.subheader("📊 Session Performance Visualizers")
         
