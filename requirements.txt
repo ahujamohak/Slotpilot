@@ -1,0 +1,6 @@
+streamlit
+gspread
+pandas
+plotly
+groq
+python-dotenv
