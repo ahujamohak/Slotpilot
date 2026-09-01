@@ -50,18 +50,18 @@ def get_active_groq_model(client):
         models_resp = client.models.list()
         active_ids = [m.id for m in models_resp.data]
         
+        # Priority on reliable standard chat completion models without raw reasoning leaks
         preferred = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
-            "llama3-70b-8192",
-            "llama3-8b-8192",
-            "mixtral-8x7b-32768"
+            "mixtral-8x7b-32768",
+            "llama3-70b-8192"
         ]
         for p in preferred:
             if p in active_ids:
                 return p
         
-        excluded_keywords = ["whisper", "vision", "orpheus", "guard", "classify", "classifier", "moderation", "rerank", "embed"]
+        excluded_keywords = ["whisper", "vision", "orpheus", "guard", "classify", "classifier", "moderation", "rerank", "embed", "oss", "reasoning"]
         for m_id in active_ids:
             if not any(k in m_id.lower() for k in excluded_keywords):
                 return m_id
@@ -70,7 +70,7 @@ def get_active_groq_model(client):
     return "llama-3.3-70b-versatile"
 
 def build_strict_dataset_summary(df):
-    """Computes lightweight, aggregated stats across historical logs to prevent token limit errors."""
+    """Computes lightweight aggregated stats across historical logs."""
     if df.empty:
         return "No historical log data available."
     
@@ -87,7 +87,7 @@ def build_strict_dataset_summary(df):
         summary_lines = []
         for _, row in fam_stats.iterrows():
             summary_lines.append(
-                f"- Family: '{row['Family']}' | Hits: {row['hits']} | Avg Spins to Feature: {row['avg_spins']:.1f} | Avg Multiplier: {row['avg_mult']:.1f}x | Max Multiplier: {row['max_mult']:.1f}x"
+                f"- Family: '{row['Family']}' | Hits: {row['hits']} | Avg Spins: {row['avg_spins']:.1f} | Avg Mult: {row['avg_mult']:.1f}x | Max Mult: {row['max_mult']:.1f}x"
             )
         valid_combos_str = "\n".join(summary_lines)
     else:
@@ -191,25 +191,24 @@ try:
                 risk_pref = st.selectbox("Risk Preference", ["Balanced", "High Volatility (Big Multipliers)", "Conservative (Short Spin Cycles)"], key="pre_risk")
 
             system_instruction_pre = f"""
-            You are Slotpilot, a mathematical slot advisor.
+            You are Slotpilot. Provide direct, short, bulleted answers. NO intro fluff, NO explanations, NO internal thinking text.
             {global_data_summary}
 
-            User Context:
-            - Daily Bankroll: ${total_bankroll}
-            - Target Exit Balance: ${target_profit} (Target Profit: ${target_profit - total_bankroll})
-            - Risk Profile: {risk_pref}
+            User Context: Bankroll: ${total_bankroll} | Target Exit: ${target_profit} | Profile: {risk_pref}
 
-            CRITICAL ACCURACY & OUTPUT RULES:
-            1. ONLY recommend Families strictly present in the dataset above.
-            2. HARD MATHEMATICAL CONSTRAINT: Maximum Spins = Check-In Amount divided by Base Bet (e.g., $100 check-in at $2.50 bet = exactly 40 spins max). NEVER output spin counts exceeding this formula.
-            3. Recommend 2 specific valid families from the dataset that best fit the goal.
-            4. State explicitly: Family Name, Recommended Check-In ($), Starting Base Bet ($), and Mathematical Max Runway (Spins).
-            5. ALWAYS write full, complete sentences. Never cut off mid-thought or mid-sentence.
+            RESPONSE FORMAT (STRICT):
+            - Recommend top 2 families from the dataset.
+            - For each, provide ONLY:
+              * Family Name
+              * Check-In ($)
+              * Bet Size ($)
+              * Max Runway (Spins = Check-In / Bet Size)
+            - Total response must be under 60 words.
             """
 
             if "pre_messages" not in st.session_state:
                 st.session_state.pre_messages = [
-                    {"role": "assistant", "content": f"👋 **Ready.** Starting Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me which machine to play first based on your exact historical dataset!"}
+                    {"role": "assistant", "content": f"👋 **Ready.** Starting Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me which machine to play first!"}
                 ]
 
             for msg in st.session_state.pre_messages:
@@ -227,15 +226,14 @@ try:
                         recent = st.session_state.pre_messages[-6:]
                         msgs = [{"role": "system", "content": system_instruction_pre}] + [{"role": m["role"], "content": m["content"]} for m in recent]
                         try:
-                            # Stream response dynamically with higher max_tokens to eliminate truncation
-                            stream = client.chat.completions.create(
+                            res = client.chat.completions.create(
                                 model=active_model,
                                 messages=msgs,
-                                temperature=0.2,
-                                max_tokens=800,
-                                stream=True
+                                temperature=0.1,
+                                max_tokens=300
                             )
-                            reply = st.write_stream(stream)
+                            reply = res.choices[0].message.content.strip()
+                            st.markdown(reply)
                             st.session_state.pre_messages.append({"role": "assistant", "content": reply})
                         except Exception as err:
                             st.error(f"Groq API Error: {err}")
@@ -272,26 +270,22 @@ try:
             max_spins_runway = int(checkin_amount / current_bet) if current_bet > 0 else 0
 
             system_instruction_live = f"""
-            You are Slotpilot, a real-time mathematical slot co-pilot.
+            You are Slotpilot. Give direct, short, tactical play advice. NO fluff. NO meta commentary.
             {global_data_summary}
 
-            Current Live Context:
-            - Machine: Family "{selected_family}" | Slot "{selected_slot}"
-            - Machine Check-In: ${checkin_amount} | Current Bet: ${current_bet}
-            - Calculated Max Spin Runway: {max_spins_runway} spins
-            - Historical Stats for Machine: Avg Spins: {m_avg_spins}, Avg Multiplier: {m_avg_mult}x (Sample: {m_hits} hits)
+            Live Context:
+            - Family: "{selected_family}" | Slot: "{selected_slot}"
+            - Check-In: ${checkin_amount} | Bet: ${current_bet} | Max Runway: {max_spins_runway} spins
+            - Stats: Avg Spins: {m_avg_spins}, Avg Mult: {m_avg_mult}x
 
-            CRITICAL RULES:
-            1. Never recommend spin counts exceeding the calculated Max Spin Runway ({max_spins_runway} spins).
-            2. Always complete thoughts and write full sentences without truncation.
-            3. Provide direct, tactical live play advice.
+            STRICT FORMAT: Max 2 bullet points, under 40 words total.
             """
 
             if "messages" not in st.session_state:
                 st.session_state.messages = [
                     {
                         "role": "assistant",
-                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {max_spins_runway} spins at ${current_bet}.\n- Update me on spin count or balance anytime!"
+                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {max_spins_runway} spins at ${current_bet}."
                     }
                 ]
 
@@ -313,14 +307,14 @@ try:
                         ]
                         
                         try:
-                            stream = client.chat.completions.create(
+                            res = client.chat.completions.create(
                                 model=active_model,
                                 messages=groq_messages,
-                                temperature=0.2,
-                                max_tokens=800,
-                                stream=True
+                                temperature=0.1,
+                                max_tokens=200
                             )
-                            reply = st.write_stream(stream)
+                            reply = res.choices[0].message.content.strip()
+                            st.markdown(reply)
                             st.session_state.messages.append({"role": "assistant", "content": reply})
                         except Exception as err:
                             st.error(f"Groq API Error: {err}")
@@ -330,12 +324,11 @@ try:
             st.session_state.pre_messages = []
             st.rerun()
 
-    # --- TAB 3: VISUAL ANALYTICS (UNIFIED MASTER FILTERS) ---
+    # --- TAB 3: VISUAL ANALYTICS ---
     with tab3:
         st.subheader("📊 Deep Session Visualizers")
         
-        # --- MASTER FILTER CONTROL BAR ---
-        with st.expander("🎛️ Unified Master Filters (Applies to All Charts Below)", expanded=True):
+        with st.expander("🎛️ Unified Master Filters", expanded=True):
             f_col1, f_col2, f_col3 = st.columns(3)
             
             all_families = safe_unique_options(df.get("Family"), [])
@@ -353,7 +346,6 @@ try:
                 min_spins, max_spins = 1, int(df["Spin of feature hit"].max()) if ("Spin of feature hit" in df and not df.empty) else 200
                 spin_range = st.slider("Filter by Feature Spin Window", min_value=1, max_value=max_spins, value=(1, max_spins), key="master_spin_slider")
 
-        # Apply Filters across entire dataframe for all 4 charts simultaneously
         filtered_df = df.copy()
         
         if selected_fam_filter:
@@ -371,7 +363,6 @@ try:
         st.caption(f"Showing **{len(filtered_df)}** of **{len(df)}** total logged feature hits.")
         st.divider()
 
-        # --- UNIFIED GRID OF CHARTS ---
         v_col1, v_col2 = st.columns(2)
         
         with v_col1:
