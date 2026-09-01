@@ -77,36 +77,43 @@ def get_active_groq_model(client):
         pass
     return "llama-3.3-70b-versatile"
 
-def build_strict_dataset_summary(df):
-    """Computes a compact aggregated summary of historical logs for both Family and Slot Titles."""
+def build_strict_dataset_summary(df, target_family=None, max_rows=15):
+    """Computes a compact aggregated summary capped at a specific row count to prevent token limits."""
     if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
         return "No historical log data available."
     
-    group_cols = ["Family", "Slot"] if "Slot" in df.columns else ["Family"]
+    temp_df = df.copy()
+    if target_family and target_family != "All Families":
+        temp_df = temp_df[temp_df["Family"].astype(str) == str(target_family)]
+        
+    group_cols = ["Family", "Slot"] if "Slot" in temp_df.columns else ["Family"]
     
-    fam_stats = df.groupby(group_cols).agg(
+    fam_stats = temp_df.groupby(group_cols).agg(
         hits=("Win multiplier", "count"),
         avg_spins=("Spin of feature hit", "mean"),
         avg_mult=("Win multiplier", "mean"),
         max_mult=("Win multiplier", "max")
     ).reset_index()
     
+    # Cap total lines to prevent context bloat
+    if len(fam_stats) > max_rows:
+        fam_stats = fam_stats.sort_values(by="hits", ascending=False).head(max_rows)
+    
     summary_lines = []
     for _, row in fam_stats.iterrows():
         slot_name = row['Slot'] if 'Slot' in row else 'General'
         avg_spins_int = int(round(row['avg_spins']))
         summary_lines.append(
-            f"• Family: '{row['Family']}' | Slot: '{slot_name}' | Hits={row['hits']}, AvgSpins={avg_spins_int}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
+            f"• Fam: '{row['Family']}' | Slot: '{slot_name}' | Hits={row['hits']}, AvgSpins={avg_spins_int}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
         )
     
     compact_summary = "\n".join(summary_lines)
-    return f"HISTORICAL DATA SUMMARY ({len(df)} total hits):\n{compact_summary}"
+    return f"HISTORICAL STATS (Capped Top {len(fam_stats)}): \n{compact_summary}"
 
 tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
 
 try:
     df = load_data()
-    global_data_summary = build_strict_dataset_summary(df)
 
     # --- TAB 1: MOBILE FEATURE LOGGER ---
     with tab1:
@@ -192,9 +199,12 @@ try:
             with c_p3:
                 risk_pref = st.selectbox("Risk Preference", ["Balanced", "High Volatility (Big Multipliers)", "Conservative (Short Spin Cycles)"], key="pre_risk")
 
+            # Lightweight pre-game summary
+            pre_summary = build_strict_dataset_summary(df, max_rows=10)
+
             system_instruction_pre = f"""
             You are Slotpilot. Provide direct, short, bulleted answers. NO intro fluff, NO explanations, NO internal thinking text.
-            {global_data_summary}
+            {pre_summary}
 
             User Context: Bankroll: ${total_bankroll} | Target Exit: ${target_profit} | Profile: {risk_pref}
 
@@ -229,14 +239,15 @@ try:
                 if client:
                     with st.chat_message("assistant"):
                         active_model = get_active_groq_model(client)
-                        recent = st.session_state.pre_messages[-4:]
+                        # Keep only the last 2 turns to save tokens
+                        recent = st.session_state.pre_messages[-2:]
                         msgs = [{"role": "system", "content": system_instruction_pre}] + [{"role": m["role"], "content": m["content"]} for m in recent]
                         try:
                             res = client.chat.completions.create(
                                 model=active_model,
                                 messages=msgs,
                                 temperature=0.1,
-                                max_tokens=250
+                                max_tokens=200
                             )
                             raw_reply = res.choices[0].message.content or ""
                             reply = clean_thinking_tags(raw_reply)
@@ -268,7 +279,7 @@ try:
                 st.session_state["live_bet"] = sel_bet_to_pass
                 st.session_state["master_fam_filter"] = [sel_fam_to_pass]
                 st.session_state["master_slot_filter"] = [sel_slot_to_pass] if sel_slot_to_pass != "All Slots" else []
-                st.session_state.messages = []  # Reset live chat messages for new machine
+                st.session_state.messages = []  # Clear previous chat
                 st.success(f"Configured Live Co-Pilot & Visual Analytics for **{sel_fam_to_pass} - {sel_slot_to_pass}**!")
 
         else:
@@ -304,16 +315,18 @@ try:
             else:
                 machine_df = filtered_df_fam
 
-            m_hits = len(machine_df)
             m_avg_spins_val = machine_df["Spin of feature hit"].mean() if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
             m_avg_spins = int(round(m_avg_spins_val)) if pd.notnull(m_avg_spins_val) else 0
             m_avg_mult = round(machine_df["Win multiplier"].mean(), 1) if ("Win multiplier" in machine_df and not machine_df.empty) else 0
             
             max_spins_runway = int(checkin_amount / current_bet) if current_bet > 0 else 0
 
+            # Tailored summary ONLY for the selected family
+            live_dataset_summary = build_strict_dataset_summary(df, target_family=selected_family, max_rows=5)
+
             system_instruction_live = f"""
-            You are Slotpilot. Give direct, short, tactical play advice. NO fluff. NO meta commentary.
-            {global_data_summary}
+            You are Slotpilot. Give direct, short, tactical play advice. NO fluff.
+            {live_dataset_summary}
 
             Live Context:
             - Family: "{selected_family}" | Slot: "{selected_slot}"
@@ -346,7 +359,8 @@ try:
                 if client:
                     with st.chat_message("assistant"):
                         active_model = get_active_groq_model(client)
-                        recent_messages = st.session_state.messages[-4:]
+                        # STRICT CONTEXT CAPPING: Pass only the system prompt + the last 2 messages
+                        recent_messages = st.session_state.messages[-2:]
                         groq_messages = [{"role": "system", "content": system_instruction_live}] + [
                             {"role": m["role"], "content": m["content"]} for m in recent_messages
                         ]
@@ -356,7 +370,7 @@ try:
                                 model=active_model,
                                 messages=groq_messages,
                                 temperature=0.1,
-                                max_tokens=150
+                                max_tokens=120
                             )
                             raw_reply = res.choices[0].message.content or ""
                             reply = clean_thinking_tags(raw_reply)
