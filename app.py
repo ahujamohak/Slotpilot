@@ -199,12 +199,12 @@ try:
             - Target Exit Balance: ${target_profit} (Target Profit: ${target_profit - total_bankroll})
             - Risk Profile: {risk_pref}
 
-            CRITICAL MATHEMATICAL & ACCURACY RULES:
+            CRITICAL ACCURACY & OUTPUT RULES:
             1. ONLY recommend Families strictly present in the dataset above.
             2. HARD MATHEMATICAL CONSTRAINT: Maximum Spins = Check-In Amount divided by Base Bet (e.g., $100 check-in at $2.50 bet = exactly 40 spins max). NEVER output spin counts exceeding this formula.
             3. Recommend 2 specific valid families from the dataset that best fit the goal.
             4. State explicitly: Family Name, Recommended Check-In ($), Starting Base Bet ($), and Mathematical Max Runway (Spins).
-            5. Keep response strictly under 100 words in concise bullet points.
+            5. ALWAYS write full, complete sentences. Never cut off mid-thought or mid-sentence.
             """
 
             if "pre_messages" not in st.session_state:
@@ -227,9 +227,15 @@ try:
                         recent = st.session_state.pre_messages[-6:]
                         msgs = [{"role": "system", "content": system_instruction_pre}] + [{"role": m["role"], "content": m["content"]} for m in recent]
                         try:
-                            res = client.chat.completions.create(model=active_model, messages=msgs, temperature=0.2, max_tokens=300)
-                            reply = res.choices[0].message.content.strip()
-                            st.markdown(reply)
+                            # Stream response dynamically with higher max_tokens to eliminate truncation
+                            stream = client.chat.completions.create(
+                                model=active_model,
+                                messages=msgs,
+                                temperature=0.2,
+                                max_tokens=800,
+                                stream=True
+                            )
+                            reply = st.write_stream(stream)
                             st.session_state.pre_messages.append({"role": "assistant", "content": reply})
                         except Exception as err:
                             st.error(f"Groq API Error: {err}")
@@ -276,9 +282,9 @@ try:
             - Historical Stats for Machine: Avg Spins: {m_avg_spins}, Avg Multiplier: {m_avg_mult}x (Sample: {m_hits} hits)
 
             CRITICAL RULES:
-            1. Keep answers concise (max 3 bullets, under 80 words total).
-            2. Never recommend spin counts exceeding the calculated Max Spin Runway ({max_spins_runway} spins).
-            3. Direct, tactical live play advice only.
+            1. Never recommend spin counts exceeding the calculated Max Spin Runway ({max_spins_runway} spins).
+            2. Always complete thoughts and write full sentences without truncation.
+            3. Provide direct, tactical live play advice.
             """
 
             if "messages" not in st.session_state:
@@ -307,14 +313,14 @@ try:
                         ]
                         
                         try:
-                            res = client.chat.completions.create(
+                            stream = client.chat.completions.create(
                                 model=active_model,
                                 messages=groq_messages,
                                 temperature=0.2,
-                                max_tokens=300
+                                max_tokens=800,
+                                stream=True
                             )
-                            reply = res.choices[0].message.content.strip()
-                            st.markdown(reply)
+                            reply = st.write_stream(stream)
                             st.session_state.messages.append({"role": "assistant", "content": reply})
                         except Exception as err:
                             st.error(f"Groq API Error: {err}")
