@@ -46,23 +46,27 @@ def get_active_groq_model(client):
     try:
         models_resp = client.models.list()
         active_ids = [m.id for m in models_resp.data]
+        
+        # Primary chat completion targets
         preferred = [
             "llama-3.3-70b-versatile",
-            "llama-3.3-70b-specdec",
+            "llama-3.1-8b-instant",
             "llama3-70b-8192",
             "llama3-8b-8192",
-            "llama-3.1-8b-instant",
             "mixtral-8x7b-32768"
         ]
         for p in preferred:
             if p in active_ids:
                 return p
+        
+        # Guard against non-chat models (classification, whisper, vision, guard, moderation, etc.)
+        excluded_keywords = ["whisper", "vision", "orpheus", "guard", "classify", "classifier", "moderation", "rerank", "embed"]
         for m_id in active_ids:
-            if "whisper" not in m_id.lower() and "vision" not in m_id.lower() and "orpheus" not in m_id.lower():
+            if not any(k in m_id.lower() for k in excluded_keywords):
                 return m_id
     except Exception:
         pass
-    return "llama3-70b-8192"
+    return "llama-3.3-70b-versatile"
 
 tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
 
@@ -80,10 +84,13 @@ try:
         families_opts = families + ["➕ Add New Family..."]
         slots_opts = slots + ["➕ Add New Slot..."]
 
-        # Date Picker outside form triggers instant update
         log_date = st.date_input("Select Date", date.today(), key="main_date_picker")
         auto_day = log_date.strftime("%A")
-        st.markdown(f"**Auto-detected Day:** `{auto_day}`")
+        
+        # Format as m/d/Y (e.g. 7/6/2026)
+        formatted_date_str = f"{log_date.month}/{log_date.day}/{log_date.year}"
+        
+        st.markdown(f"**Auto-detected Day:** `{auto_day}` | **Formatted Date:** `{formatted_date_str}`")
 
         with st.form("mobile_logger_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
@@ -116,7 +123,7 @@ try:
                     else:
                         ws = get_worksheet()
                         new_row = [
-                            log_date.strftime("%Y-%m-%d"),
+                            formatted_date_str,
                             auto_day,
                             final_family,
                             final_slot,
@@ -128,7 +135,7 @@ try:
                             log_attempt
                         ]
                         ws.append_row(new_row)
-                        st.success(f"✅ Recorded: {final_family} ({final_slot}) hit on {auto_day}!")
+                        st.success(f"✅ Recorded: {final_family} ({final_slot}) hit on {auto_day} ({formatted_date_str})!")
                         st.cache_data.clear()
                 except Exception as ex:
                     st.error(f"Failed to save record: {ex}")
@@ -139,7 +146,6 @@ try:
         
         unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
         
-        # Session Setup Context Controls
         with st.expander("⚙️ Set Current Machine & Bankroll Context", expanded=True):
             ca, cb, cc = st.columns(3)
             with ca:
@@ -167,7 +173,6 @@ try:
         3. Never write generic filler or long intro paragraphs.
         """
 
-        # Initialize Chat History
         if "messages" not in st.session_state:
             st.session_state.messages = [
                 {
@@ -176,12 +181,10 @@ try:
                 }
             ]
 
-        # Display Chat History
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # Chat Input Bar for Mid-Game Updates
         if user_input := st.chat_input("e.g. '50 spins in, no feature, down $125. Should I continue?'"):
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
