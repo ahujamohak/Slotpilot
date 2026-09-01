@@ -77,6 +77,41 @@ def get_active_groq_model(client):
         pass
     return "llama-3.3-70b-versatile"
 
+def determine_ai_bet_strategy(spins_series, mult_series):
+    """
+    AI Logic Engine: Dynamically determines betting structure (Flat High, Flat Low, Variable)
+    based on distribution variance, modal clusters, and multiplier stability.
+    """
+    if spins_series.empty:
+        return "Flat Mid-Bet", "$5.00", "10c Denom / $5 Bet", 5.00
+    
+    median_spins = spins_series.median()
+    std_spins = spins_series.std() if len(spins_series) > 1 else 0
+    avg_mult = mult_series.mean() if not mult_series.empty else 0
+    max_mult = mult_series.max() if not mult_series.empty else 0
+    
+    # High Consistency + Early Hit Density = Flat High Play
+    if median_spins <= 30 and (std_spins <= 12 or len(spins_series) <= 2):
+        if avg_mult >= 40 or max_mult >= 100:
+            return "Flat High-Bet", "$10.00", "$1 Denom / $10 Bet", 10.00
+        else:
+            return "Flat High-Bet", "$10.00", "10c Denom / $10 Bet", 10.00
+            
+    # High Multiplier Variance + Broader Spin Distribution = Variable Progression
+    elif std_spins > 15 and max_mult >= 80:
+        return "Varying (Scale Up)", "$2.50 ➔ $7.50", "10c Denom ($2.50 to $7.50)", 7.50
+        
+    # Deep Spin Cycles + Low Multiplier Cap = Flat Low Safety
+    elif median_spins > 45 and avg_mult < 35:
+        return "Flat Low-Bet", "$2.50", "1c or 2c Denom / $2.50 Bet", 2.50
+        
+    # Standard Volatility Machine = Mid/High Balanced Bet
+    else:
+        if avg_mult >= 50:
+            return "Flat Mid-High", "$7.50", "10c Denom / $7.50 Bet", 7.50
+        else:
+            return "Flat Mid-Bet", "$5.00", "5c Denom / $5.00 Bet", 5.00
+
 def build_strict_dataset_summary(df, target_family=None, max_rows=15):
     """Computes a compact aggregated summary including Median and Density Zones to prevent outlier distortion."""
     if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
@@ -117,27 +152,23 @@ def build_strict_dataset_summary(df, target_family=None, max_rows=15):
     compact_summary = "\n".join(summary_lines)
     return f"HISTORICAL LOG SUMMARY (CLUSTER-AWARE): \n{compact_summary}"
 
-# Domain Logic Instruction to be injected into system prompts
 DOMAIN_KNOWLEDGE_PROMPT = """
 COLUMN MEANINGS & STRATEGY CONTEXT:
 1. Attempt Number & Hit Number Logic:
    - Attempt Number = 1 & Hit Number = 1: Machine hit a feature on the initial check-in.
    - Attempt Number = 1 & Hit Number = 0: Initial check-in failed to hit a feature.
    - Attempt Number = 2, 3, 4+: Player continued playing after a feature win (Repeat Attempt).
-   - Hit Number increments on successive feature hits during repeat attempts, or becomes 0 if a repeat attempt fails.
 
 2. Outlier vs. High-Density Winning Zone Principle (CRITICAL):
    - Ignore simple arithmetic averages if 1-2 extreme cold games (e.g., 115-120 spins) skew the overall mean upward.
-   - Focus on the MODAL DENSITY RANGE (the specific spin bracket where the majority of feature hits occur, e.g., 20-30 spins).
-   - Base tactical recommendations on the high-frequency cluster zone, NOT on skewed outlier-inflated averages.
+   - Focus on the MODAL DENSITY RANGE (the specific spin bracket where the majority of feature hits occur).
 
-3. 50/50 Knowledge Weighting:
-   - 50% Weight: User's session logs provided in prompt (focused on high-density hit clusters).
-   - 50% Weight: General slot mathematics, machine volatility knowledge, Australian venue game behavior (e.g., Aristocrat games like Dragon Link / Lightning Link), and statistical variance.
+3. Autonomous AI Betting Strategy Selection:
+   - The AI agent dynamically selects the bet strategy (Flat High, Flat Low, Flat Mid, or Varying Sizing) per slot.
+   - Do NOT force a single bet rule across all slots. Evaluate volatility, cluster tightness, and yield profiles.
 
 4. Softened Runway Rule (10% to 15% Buffer on Cluster Target):
-   - Take the high-density cluster target (or median) and add a 10% to 15% softening buffer (e.g., if density target is 25 spins, recommend playing up to 28-30 spins).
-   - All spin recommendations must be rounded to whole integers.
+   - Take the high-density cluster target (or median) and add a 10% to 15% softening buffer. Round to integers.
 """
 
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -237,16 +268,16 @@ try:
         st.divider()
 
         if mode == "🎮 Pre-Game Machine Finder":
-            st.markdown("### 🎯 Pre-Session Selection Engine")
-            st.caption("Ask Slotpilot which specific machine to play first based on density cluster targets, bankroll, and profit target.")
+            st.markdown("### 🎯 Autonomous Pre-Session Engine")
+            st.caption("Let the AI analyze historical variance to determine whether to play Flat High, Flat Low, or Varying bets.")
             
             c_p1, c_p2, c_p3 = st.columns(3)
             with c_p1:
-                total_bankroll = st.number_input("Total Day Bankroll ($)", value=1000.0, step=100.0, key="pre_bankroll")
+                total_bankroll = st.number_input("Total Day Bankroll ($)", value=2500.0, step=250.0, key="pre_bankroll")
             with c_p2:
-                target_profit = st.number_input("Target Exit Goal ($)", value=1750.0, step=50.0, key="pre_target")
+                target_profit = st.number_input("Target Exit Goal ($)", value=4000.0, step=250.0, key="pre_target")
             with c_p3:
-                risk_pref = st.selectbox("Risk Preference", ["Balanced", "High Volatility (Big Multipliers)", "Conservative (Short Spin Cycles)"], key="pre_risk")
+                risk_pref = st.selectbox("Risk Preference", ["AI Dynamic Decision", "Aggressive High-Roller", "Conservative Capital Safety"], key="pre_risk")
 
             pre_summary = build_strict_dataset_summary(df, max_rows=10)
 
@@ -261,25 +292,26 @@ try:
 
             RESPONSE FORMAT (STRICT):
             - Recommend top 2 specific slot recommendations.
-            - Include both Family Name AND exact Slot Name (e.g., "Dragon Link - Panda Magic").
-            - For each, provide ONLY:
+            - Include both Family Name AND exact Slot Name.
+            - Provide ONLY:
               * Family & Specific Slot Name
+              * AI Bet Strategy (Flat High, Flat Low, Flat Mid, or Varying Bet)
+              * Recommended Denomination & Bet Config
               * Recommended Check-In ($)
-              * Recommended Bet Size ($)
-              * Softened Density Target (Cluster Range/Median + 10-15% buffer, strictly rounded integer)
-            - Keep total response concise (under 80 words).
+              * Softened Density Target (Spins)
+            - Keep total response concise (under 90 words).
             """
 
             if "pre_messages" not in st.session_state:
                 st.session_state.pre_messages = [
-                    {"role": "assistant", "content": f"👋 **Ready.** Starting Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me which machine to play first!"}
+                    {"role": "assistant", "content": f"👋 **Ready.** Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me to evaluate machine bet strategies for today!"}
                 ]
 
             for msg in st.session_state.pre_messages:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-            if user_pre_input := st.chat_input("e.g. 'Recommend ideal slot choice, starting bet, and check-in amount for tonight.'"):
+            if user_pre_input := st.chat_input("e.g. 'Which machine should I play first and should I use flat or varying bet sizing?'"):
                 st.session_state.pre_messages.append({"role": "user", "content": user_pre_input})
                 with st.chat_message("user"):
                     st.markdown(user_pre_input)
@@ -294,7 +326,7 @@ try:
                                 model=active_model,
                                 messages=msgs,
                                 temperature=0.1,
-                                max_tokens=220
+                                max_tokens=250
                             )
                             raw_reply = res.choices[0].message.content or ""
                             reply = clean_thinking_tags(raw_reply)
@@ -315,9 +347,9 @@ try:
             with sc2:
                 sel_slot_to_pass = st.selectbox("Chosen Slot", slot_options_all, key="pass_slot")
             with sc3:
-                sel_checkin_to_pass = st.number_input("Check-In ($)", value=500.0, step=50.0, key="pass_checkin")
+                sel_checkin_to_pass = st.number_input("Check-In ($)", value=750.0, step=50.0, key="pass_checkin")
             with sc4:
-                sel_bet_to_pass = st.number_input("Bet Size ($)", value=2.50, step=0.50, key="pass_bet")
+                sel_bet_to_pass = st.number_input("Bet Size ($)", value=10.00, step=2.50, key="pass_bet")
                 
             if st.button("🚀 Launch Live Session with Selection", use_container_width=True):
                 st.session_state["live_family"] = sel_fam_to_pass
@@ -334,8 +366,8 @@ try:
             unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
             
             default_fam = st.session_state.get("live_family", unique_families[0] if unique_families else "Dragon Link")
-            default_checkin = st.session_state.get("live_checkin", 500.0)
-            default_bet = st.session_state.get("live_bet", 2.50)
+            default_checkin = st.session_state.get("live_checkin", 750.0)
+            default_bet = st.session_state.get("live_bet", 10.00)
             
             with st.expander("⚙️ Set Live Machine & Check-In Context", expanded=True):
                 ca, cb, cc, cd = st.columns(4)
@@ -355,7 +387,7 @@ try:
                 with cc:
                     checkin_amount = st.number_input("Machine Check-In Amount ($)", value=default_checkin, step=50.0, key="chat_checkin")
                 with cd:
-                    current_bet = st.number_input("Base Bet ($)", value=default_bet, step=0.50, key="chat_bet")
+                    current_bet = st.number_input("Base Bet ($)", value=default_bet, step=2.50, key="chat_bet")
 
             if selected_slot != "All Slots" and "Slot" in df:
                 machine_df = df[(df["Family"].astype(str) == str(selected_family)) & (df["Slot"].astype(str) == str(selected_slot))]
@@ -534,23 +566,19 @@ try:
             else:
                 st.info("No data available for Multiplier Distribution given current filters.")
 
-    # --- TAB 4: TODAY'S DAILY PRIORITY BOARD ---
+    # --- TAB 4: TODAY'S DAILY PRIORITY BOARD (AUTONOMOUS AI BET STRATEGY) ---
     with tab4:
-        st.subheader("🎯 Today's Pre-Calculated Priority Board")
+        st.subheader("🎯 Today's Pre-Calculated Priority Board (Autonomous AI Betting Sizing)")
         
         today_date = date.today()
         today_day_str = today_date.strftime("%A")
         today_formatted = f"{today_date.month}/{today_date.day}/{today_date.year}"
         
-        st.info(f"📅 **Date Detected:** `{today_formatted}` (`{today_day_str}`)\nPre-calculating optimal target cycles, bet sizes, and check-ins based on historical performance for {today_day_str}s.")
+        st.info(f"📅 **Date Detected:** `{today_formatted}` (`{today_day_str}`)\nEvaluating slot variance profiles for {today_day_str}s. AI dynamically decides whether each machine requires Flat High, Flat Low, or Varying Bet structures.")
         
         if df.empty:
             st.warning("No dataset loaded. Please check Google Sheets connection.")
         else:
-            # Baseline parameters
-            base_bet_size = 2.50
-            
-            # Filter dataset for current Day of Week if matching records exist; fallback to entire dataset if insufficient
             day_filtered_df = df[df["Day"].astype(str).str.strip().str.lower() == today_day_str.lower()] if "Day" in df else pd.DataFrame()
             analysis_df = day_filtered_df if len(day_filtered_df) >= 5 else df
             
@@ -566,59 +594,61 @@ try:
                     continue
                     
                 spins = group["Spin of feature hit"].dropna()
+                mults = group["Win multiplier"].dropna() if "Win multiplier" in group else pd.Series()
+                
                 if spins.empty:
                     continue
                 
-                # Outlier-resistant metrics: Median & Density Mode
+                # Outlier-resistant metrics
                 median_spins = spins.median()
-                
-                # 10-spin modal bucket
                 buckets = [int(s // 10 * 10) for s in spins]
                 top_bucket = max(set(buckets), key=buckets.count) if buckets else int(median_spins)
                 modal_mid = top_bucket + 5
                 
-                # Weighted target spin cycle: blend modal target and median target
                 raw_target_spins = (modal_mid * 0.6) + (median_spins * 0.4)
-                
-                # Apply 12% softening buffer and round to nearest integer
                 softened_cycle_spins = int(round(raw_target_spins * 1.12))
                 if softened_cycle_spins < 15:
                     softened_cycle_spins = 15
                 
-                avg_mult = group["Win multiplier"].mean() if "Win multiplier" in group else 0
-                max_mult = group["Win multiplier"].max() if "Win multiplier" in group else 0
+                avg_mult = mults.mean() if not mults.empty else 0
+                max_mult = mults.max() if not mults.empty else 0
                 
-                # Dynamic Check-In calculation: round up to nearest $50 increment based on softened cycle length
-                raw_checkin = softened_cycle_spins * base_bet_size * 2.0  # 2x cycle runway buffer
-                suggested_checkin = max(250.0, float(((int(raw_checkin) + 49) // 50) * 50))
+                # Autonomous AI Engine evaluates volatility pattern
+                bet_strategy, bet_display, denom_config, base_bet_num = determine_ai_bet_strategy(spins, mults)
                 
-                # Custom composite score: Multiplier Yield x Hit Frequency / Density Cycle
-                score = (avg_mult * 0.5) + (max_mult * 0.2) + (total_hits * 2.0) - (softened_cycle_spins * 0.1)
+                # Dynamic Check-In calculation based on assigned strategy bet level
+                raw_checkin = softened_cycle_spins * base_bet_num * 1.8
+                suggested_checkin = max(300.0, float(((int(raw_checkin) + 49) // 50) * 50))
+                
+                # Composite Score based on overall machine efficiency
+                score = (avg_mult * 0.4) + (max_mult * 0.2) + (total_hits * 2.5) + (base_bet_num * 2.0) - (softened_cycle_spins * 0.15)
                 
                 priority_records.append({
                     "Family": fam,
                     "Slot Title": s_name,
-                    "Starting Bet ($)": f"${base_bet_size:.2f}",
-                    "Target 1st Cycle (Spins)": softened_cycle_spins,
+                    "AI Strategy": bet_strategy,
+                    "Recommended Bet": bet_display,
+                    "Setup Config": denom_config,
+                    "Target Cycle (Spins)": softened_cycle_spins,
                     "Initial Check-In ($)": f"${suggested_checkin:.0f}",
                     "Peak Yield Zone": f"{top_bucket}-{top_bucket+10} spins",
-                    "Avg Multiplier": f"{avg_mult:.1f}x",
-                    "Max Multiplier": f"{max_mult:.1f}x",
-                    "Historical Hits": total_hits,
-                    "Composite_Score": score
+                    "Avg Mult": f"{avg_mult:.1f}x",
+                    "Hits": total_hits,
+                    "Composite_Score": score,
+                    "raw_bet": base_bet_num,
+                    "raw_checkin": suggested_checkin
                 })
             
             p_df = pd.DataFrame(priority_records)
             
             if not p_df.empty:
-                # Sort best to worst scenario and truncate to Top 15
                 p_df = p_df.sort_values(by="Composite_Score", ascending=False).reset_index(drop=True)
-                p_df.index = p_df.index + 1  # 1-indexed priority rank
+                p_df.index = p_df.index + 1
                 
-                top_15_df = p_df.head(15).drop(columns=["Composite_Score"])
+                top_15_df = p_df.head(15).drop(columns=["Composite_Score", "raw_bet", "raw_checkin"])
                 
-                st.markdown("### 🏆 Top 15 Recommended Machines for Today")
-                st.caption("Ranked dynamically by density cluster alignment, outlier-filtered spin cycles, and historical yield.")
+                st.markdown("### 🏆 Top 15 Recommended Machines (AI Strategy Evaluated)")
+                st.caption("The AI agent evaluates historical density clusters and variance profiles to decide between Flat High, Flat Low, or Varying bets for each machine.")
                 
                 st.dataframe(
                     top_15_df,
@@ -627,19 +657,16 @@ try:
                 )
                 
                 st.divider()
-                st.markdown("#### 🚀 Quick Action: Load #1 Ranked Choice into Live Co-Pilot")
-                top_row = top_15_df.iloc[0]
+                st.markdown("#### 🚀 Quick Action: Load Top Priority Choice into Live Co-Pilot")
+                top_row = p_df.iloc[0]
                 
-                st.success(f"**Top Choice:** {top_row['Family']} - {top_row['Slot Title']} | Play **{top_row['Target 1st Cycle (Spins)']} spins** at **{top_row['Starting Bet ($)']}** with **{top_row['Initial Check-In ($)']}** check-in.")
+                st.success(f"**Top Choice:** {top_row['Family']} - {top_row['Slot Title']} | Strategy: **{top_row['AI Strategy']}** ({top_row['Recommended Bet']}) on **{top_row['Setup Config']}** for **{top_row['Target Cycle (Spins)']} spins**.")
                 
                 if st.button("⚡ Activate Top Priority Machine in Live Co-Pilot", use_container_width=True):
-                    checkin_val = float(str(top_row['Initial Check-In ($)']).replace("$", ""))
-                    bet_val = float(str(top_row['Starting Bet ($)']).replace("$", ""))
-                    
                     st.session_state["live_family"] = top_row['Family']
                     st.session_state["live_slot"] = top_row['Slot Title']
-                    st.session_state["live_checkin"] = checkin_val
-                    st.session_state["live_bet"] = bet_val
+                    st.session_state["live_checkin"] = float(top_row['raw_checkin'])
+                    st.session_state["live_bet"] = float(top_row['raw_bet'])
                     st.session_state["master_fam_filter"] = [top_row['Family']]
                     st.session_state["master_slot_filter"] = [top_row['Slot Title']]
                     st.session_state.messages = []
