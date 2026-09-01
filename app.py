@@ -100,11 +100,9 @@ def build_strict_dataset_summary(df, target_family=None, max_rows=15):
         avg_mult = group["Win multiplier"].mean()
         max_mult = group["Win multiplier"].max()
         
-        # Calculate cluster density (10-spin window mode)
         spins_list = group["Spin of feature hit"].dropna().tolist()
         density_str = "N/A"
         if spins_list:
-            # Group into 10-spin buckets to find high frequency density zone
             buckets = [int(s // 10 * 10) for s in spins_list]
             if buckets:
                 top_bucket = max(set(buckets), key=buckets.count)
@@ -142,7 +140,12 @@ COLUMN MEANINGS & STRATEGY CONTEXT:
    - All spin recommendations must be rounded to whole integers.
 """
 
-tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📲 Live Feature Logger", 
+    "💬 Interactive AI Co-Pilot", 
+    "📊 Visual Analytics", 
+    "🎯 Today's Priority Board"
+])
 
 try:
     df = load_data()
@@ -215,7 +218,6 @@ try:
                 except Exception as ex:
                     st.error(f"Failed to save record: {ex}")
 
-        # Quick CSV Download Backup
         if not df.empty:
             st.divider()
             csv_data = df.to_csv(index=False).encode('utf-8')
@@ -363,7 +365,6 @@ try:
             m_median_spins_val = machine_df["Spin of feature hit"].median() if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
             m_median_spins = int(round(m_median_spins_val)) if pd.notnull(m_median_spins_val) else 0
             
-            # Apply 10% to 15% softening buffer to calculated median baseline
             m_softened_spins = int(round(m_median_spins * 1.12)) if m_median_spins > 0 else 0
             m_avg_mult = round(machine_df["Win multiplier"].mean(), 1) if ("Win multiplier" in machine_df and not machine_df.empty) else 0
             
@@ -532,6 +533,119 @@ try:
                 st.plotly_chart(fig_box, use_container_width=True)
             else:
                 st.info("No data available for Multiplier Distribution given current filters.")
+
+    # --- TAB 4: TODAY'S DAILY PRIORITY BOARD ---
+    with tab4:
+        st.subheader("🎯 Today's Pre-Calculated Priority Board")
+        
+        today_date = date.today()
+        today_day_str = today_date.strftime("%A")
+        today_formatted = f"{today_date.month}/{today_date.day}/{today_date.year}"
+        
+        st.info(f"📅 **Date Detected:** `{today_formatted}` (`{today_day_str}`)\nPre-calculating optimal target cycles, bet sizes, and check-ins based on historical performance for {today_day_str}s.")
+        
+        if df.empty:
+            st.warning("No dataset loaded. Please check Google Sheets connection.")
+        else:
+            # Baseline parameters
+            base_bet_size = 2.50
+            
+            # Filter dataset for current Day of Week if matching records exist; fallback to entire dataset if insufficient
+            day_filtered_df = df[df["Day"].astype(str).str.strip().str.lower() == today_day_str.lower()] if "Day" in df else pd.DataFrame()
+            analysis_df = day_filtered_df if len(day_filtered_df) >= 5 else df
+            
+            group_cols = ["Family", "Slot"] if "Slot" in analysis_df.columns else ["Family"]
+            priority_records = []
+            
+            for name, group in analysis_df.groupby(group_cols):
+                fam = name[0] if isinstance(name, tuple) else name
+                s_name = name[1] if isinstance(name, tuple) else "General"
+                
+                total_hits = len(group)
+                if total_hits == 0:
+                    continue
+                    
+                spins = group["Spin of feature hit"].dropna()
+                if spins.empty:
+                    continue
+                
+                # Outlier-resistant metrics: Median & Density Mode
+                median_spins = spins.median()
+                
+                # 10-spin modal bucket
+                buckets = [int(s // 10 * 10) for s in spins]
+                top_bucket = max(set(buckets), key=buckets.count) if buckets else int(median_spins)
+                modal_mid = top_bucket + 5
+                
+                # Weighted target spin cycle: blend modal target and median target
+                raw_target_spins = (modal_mid * 0.6) + (median_spins * 0.4)
+                
+                # Apply 12% softening buffer and round to nearest integer
+                softened_cycle_spins = int(round(raw_target_spins * 1.12))
+                if softened_cycle_spins < 15:
+                    softened_cycle_spins = 15
+                
+                avg_mult = group["Win multiplier"].mean() if "Win multiplier" in group else 0
+                max_mult = group["Win multiplier"].max() if "Win multiplier" in group else 0
+                
+                # Dynamic Check-In calculation: round up to nearest $50 increment based on softened cycle length
+                raw_checkin = softened_cycle_spins * base_bet_size * 2.0  # 2x cycle runway buffer
+                suggested_checkin = max(250.0, float(((int(raw_checkin) + 49) // 50) * 50))
+                
+                # Custom composite score: Multiplier Yield x Hit Frequency / Density Cycle
+                score = (avg_mult * 0.5) + (max_mult * 0.2) + (total_hits * 2.0) - (softened_cycle_spins * 0.1)
+                
+                priority_records.append({
+                    "Family": fam,
+                    "Slot Title": s_name,
+                    "Starting Bet ($)": f"${base_bet_size:.2f}",
+                    "Target 1st Cycle (Spins)": softened_cycle_spins,
+                    "Initial Check-In ($)": f"${suggested_checkin:.0f}",
+                    "Peak Yield Zone": f"{top_bucket}-{top_bucket+10} spins",
+                    "Avg Multiplier": f"{avg_mult:.1f}x",
+                    "Max Multiplier": f"{max_mult:.1f}x",
+                    "Historical Hits": total_hits,
+                    "Composite_Score": score
+                })
+            
+            p_df = pd.DataFrame(priority_records)
+            
+            if not p_df.empty:
+                # Sort best to worst scenario and truncate to Top 15
+                p_df = p_df.sort_values(by="Composite_Score", ascending=False).reset_index(drop=True)
+                p_df.index = p_df.index + 1  # 1-indexed priority rank
+                
+                top_15_df = p_df.head(15).drop(columns=["Composite_Score"])
+                
+                st.markdown("### 🏆 Top 15 Recommended Machines for Today")
+                st.caption("Ranked dynamically by density cluster alignment, outlier-filtered spin cycles, and historical yield.")
+                
+                st.dataframe(
+                    top_15_df,
+                    use_container_width=True,
+                    height=560
+                )
+                
+                st.divider()
+                st.markdown("#### 🚀 Quick Action: Load #1 Ranked Choice into Live Co-Pilot")
+                top_row = top_15_df.iloc[0]
+                
+                st.success(f"**Top Choice:** {top_row['Family']} - {top_row['Slot Title']} | Play **{top_row['Target 1st Cycle (Spins)']} spins** at **{top_row['Starting Bet ($)']}** with **{top_row['Initial Check-In ($)']}** check-in.")
+                
+                if st.button("⚡ Activate Top Priority Machine in Live Co-Pilot", use_container_width=True):
+                    checkin_val = float(str(top_row['Initial Check-In ($)']).replace("$", ""))
+                    bet_val = float(str(top_row['Starting Bet ($)']).replace("$", ""))
+                    
+                    st.session_state["live_family"] = top_row['Family']
+                    st.session_state["live_slot"] = top_row['Slot Title']
+                    st.session_state["live_checkin"] = checkin_val
+                    st.session_state["live_bet"] = bet_val
+                    st.session_state["master_fam_filter"] = [top_row['Family']]
+                    st.session_state["master_slot_filter"] = [top_row['Slot Title']]
+                    st.session_state.messages = []
+                    st.success("Configured! Switch to Tab 2 to begin mid-game tracking.")
+            else:
+                st.warning("Insufficient data available to pre-calculate priority ranks.")
 
 except Exception as e:
     st.error(f"Error loading app: {e}")
