@@ -1,4 +1,5 @@
 import os
+import re
 import streamlit as st
 import gspread
 import pandas as pd
@@ -45,12 +46,22 @@ def safe_unique_options(series, default_list):
             return sorted(vals)
     return default_list
 
+def clean_thinking_tags(text: str) -> str:
+    """Strips out <think>...</think> blocks or unclosed <think> prompts from the output text."""
+    if not text:
+        return ""
+    # Strip full <think>...</think> tags along with any leading/trailing whitespace
+    cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    # Handle cases where <think> tag was not closed properly
+    cleaned = re.sub(r'<think>.*', '', cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
 def get_active_groq_model(client):
     try:
         models_resp = client.models.list()
         active_ids = [m.id for m in models_resp.data]
         
-        # Explicit priority list targeting stable standard text chat models
+        # Priority list targeting non-reasoning chat completion models
         preferred = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
@@ -61,7 +72,7 @@ def get_active_groq_model(client):
             if p in active_ids:
                 return p
         
-        excluded_keywords = ["whisper", "vision", "orpheus", "guard", "classify", "classifier", "moderation", "rerank", "embed", "oss", "reasoning"]
+        excluded_keywords = ["whisper", "vision", "orpheus", "guard", "classify", "classifier", "moderation", "rerank", "embed", "oss", "reasoning", "r1", "qwq"]
         for m_id in active_ids:
             if not any(k in m_id.lower() for k in excluded_keywords):
                 return m_id
@@ -74,7 +85,6 @@ def build_strict_dataset_summary(df):
     if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
         return "No historical log data available."
     
-    # Pre-aggregate metrics per Family to minimize token count
     fam_stats = df.groupby("Family").agg(
         hits=("Win multiplier", "count"),
         avg_spins=("Spin of feature hit", "mean"),
@@ -223,7 +233,8 @@ try:
                                 temperature=0.1,
                                 max_tokens=200
                             )
-                            reply = res.choices[0].message.content.strip()
+                            raw_reply = res.choices[0].message.content or ""
+                            reply = clean_thinking_tags(raw_reply)
                             st.markdown(reply)
                             st.session_state.pre_messages.append({"role": "assistant", "content": reply})
                         except Exception as err:
@@ -304,7 +315,8 @@ try:
                                 temperature=0.1,
                                 max_tokens=150
                             )
-                            reply = res.choices[0].message.content.strip()
+                            raw_reply = res.choices[0].message.content or ""
+                            reply = clean_thinking_tags(raw_reply)
                             st.markdown(reply)
                             st.session_state.messages.append({"role": "assistant", "content": reply})
                         except Exception as err:
