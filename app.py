@@ -59,7 +59,8 @@ def get_active_groq_model(client):
         pass
     return "llama-3.3-70b-versatile"
 
-tab1, tab2 = st.tabs(["📲 Live Feature Logger", "🤖 AI & Visual Analytics"])
+# Setup tabs with Visual Analytics on Tab 3
+tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "🤖 AI Tactical Plan", "📊 Visual Analytics & Charts"])
 
 try:
     df = load_data()
@@ -75,11 +76,14 @@ try:
         families_opts = families + ["➕ Add New Family..."]
         slots_opts = slots + ["➕ Add New Slot..."]
 
+        if "selected_date" not in st.session_state:
+            st.session_state["selected_date"] = date.today()
+
         with st.form("mobile_logger_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             
             with col1:
-                log_date = st.date_input("Date", date.today())
+                log_date = st.date_input("Date", value=st.session_state["selected_date"], key="log_date_picker")
                 auto_day = log_date.strftime("%A")
                 st.text_input("Day (Auto-detected)", value=auto_day, disabled=True)
                 
@@ -127,33 +131,8 @@ try:
                 except Exception as ex:
                     st.error(f"Failed to save record: {ex}")
 
-    # --- TAB 2: AI & VISUAL ANALYTICS ---
+    # --- TAB 2: AI TACTICAL PLAN ---
     with tab2:
-        st.subheader("📊 Session Performance Visualizers")
-        
-        c1, c2 = st.columns(2)
-        with c1:
-            fig_hist = px.histogram(
-                df, 
-                x="Spin of feature hit", 
-                nbins=20, 
-                title="Feature Hit Frequency (Spins Between Features)",
-                color_discrete_sequence=["#6366F1"]
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-            
-        with c2:
-            fig_box = px.box(
-                df, 
-                x="Family", 
-                y="Win multiplier", 
-                title="Win Multiplier Distribution by Slot Family",
-                color="Family"
-            )
-            st.plotly_chart(fig_box, use_container_width=True)
-            
-        st.markdown("---")
-        
         st.subheader("🤖 Slotpilot AI Recommendation Engine")
         
         ca, cb, cc = st.columns(3)
@@ -167,7 +146,7 @@ try:
             
         if st.button("Generate Tactical Play Plan", use_container_width=True):
             if not client:
-                st.error("Groq API Key missing.")
+                st.error("Groq API Key missing. Please check your environment variable or Streamlit Secrets.")
             else:
                 with st.spinner("Analyzing strategy..."):
                     family_df = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
@@ -197,13 +176,40 @@ try:
                     3. Hard Stop-Loss and Profit Exit Target
                     """
                     
-                    res = client.chat.completions.create(
-                        model=active_model,
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2,
-                    )
-                    
-                    st.info(res.choices[0].message.content)
+                    try:
+                        res = client.chat.completions.create(
+                            model=active_model,
+                            messages=[{"role": "user", "content": prompt}],
+                            temperature=0.2,
+                        )
+                        st.info(res.choices[0].message.content)
+                    except Exception as err:
+                        st.error(f"Groq API Error: {err}")
+
+    # --- TAB 3: VISUAL ANALYTICS & CHARTS (LAST TAB) ---
+    with tab3:
+        st.subheader("📊 Session Performance Visualizers")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_hist = px.histogram(
+                df, 
+                x="Spin of feature hit", 
+                nbins=20, 
+                title="Feature Hit Frequency (Spins Between Features)",
+                color_discrete_sequence=["#6366F1"]
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+            
+        with c2:
+            fig_box = px.box(
+                df, 
+                x="Family", 
+                y="Win multiplier", 
+                title="Win Multiplier Distribution by Slot Family",
+                color="Family"
+            )
+            st.plotly_chart(fig_box, use_container_width=True)
 
 except Exception as e:
     st.error(f"Error loading app: {e}")
