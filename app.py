@@ -85,6 +85,7 @@ try:
         log_date = st.date_input("Select Date", date.today(), key="main_date_picker")
         auto_day = log_date.strftime("%A")
         
+        # Format strictly as m/d/Y without leading zeroes
         formatted_date_str = f"{log_date.month}/{log_date.day}/{log_date.year}"
         
         st.markdown(f"**Auto-detected Day:** `{auto_day}` | **Formatted Date:** `{formatted_date_str}`")
@@ -205,8 +206,11 @@ try:
             else:
                 with st.chat_message("assistant"):
                     active_model = get_active_groq_model(client)
+                    
+                    # Sliding context window: send system prompt + last 8 messages to prevent token overflow
+                    recent_messages = st.session_state.messages[-8:]
                     groq_messages = [{"role": "system", "content": system_instruction}] + [
-                        {"role": m["role"], "content": m["content"]} for m in st.session_state.messages
+                        {"role": m["role"], "content": m["content"]} for m in recent_messages
                     ]
                     
                     try:
