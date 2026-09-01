@@ -50,9 +50,7 @@ def clean_thinking_tags(text: str) -> str:
     """Strips out <think>...</think> blocks or unclosed <think> prompts from the output text."""
     if not text:
         return ""
-    # Strip full <think>...</think> tags along with any leading/trailing whitespace
     cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
-    # Handle cases where <think> tag was not closed properly
     cleaned = re.sub(r'<think>.*', '', cleaned, flags=re.DOTALL)
     return cleaned.strip()
 
@@ -61,7 +59,6 @@ def get_active_groq_model(client):
         models_resp = client.models.list()
         active_ids = [m.id for m in models_resp.data]
         
-        # Priority list targeting non-reasoning chat completion models
         preferred = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
@@ -81,11 +78,13 @@ def get_active_groq_model(client):
     return "llama-3.3-70b-versatile"
 
 def build_strict_dataset_summary(df):
-    """Computes a compact aggregated summary of historical logs to fit Groq payload limits."""
+    """Computes a compact aggregated summary of historical logs for both Family and Slot Titles."""
     if df.empty or "Family" not in df.columns or "Win multiplier" not in df.columns:
         return "No historical log data available."
     
-    fam_stats = df.groupby("Family").agg(
+    group_cols = ["Family", "Slot"] if "Slot" in df.columns else ["Family"]
+    
+    fam_stats = df.groupby(group_cols).agg(
         hits=("Win multiplier", "count"),
         avg_spins=("Spin of feature hit", "mean"),
         avg_mult=("Win multiplier", "mean"),
@@ -94,8 +93,9 @@ def build_strict_dataset_summary(df):
     
     summary_lines = []
     for _, row in fam_stats.iterrows():
+        slot_name = row['Slot'] if 'Slot' in row else 'General'
         summary_lines.append(
-            f"• {row['Family']}: Hits={row['hits']}, AvgSpins={row['avg_spins']:.1f}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
+            f"• Family: '{row['Family']}' | Slot: '{slot_name}' | Hits={row['hits']}, AvgSpins={row['avg_spins']:.1f}, AvgMult={row['avg_mult']:.1f}x, MaxMult={row['max_mult']:.1f}x"
         )
     
     compact_summary = "\n".join(summary_lines)
@@ -181,7 +181,7 @@ try:
 
         if mode == "🎮 Pre-Game Machine Finder":
             st.markdown("### 🎯 Pre-Session Selection Engine")
-            st.caption("Ask Slotpilot which machine to play first based on your daily bankroll, profit target, and logged historical performance.")
+            st.caption("Ask Slotpilot which specific machine to play first based on your daily bankroll, profit target, and logged historical performance.")
             
             c_p1, c_p2, c_p3 = st.columns(3)
             with c_p1:
@@ -198,13 +198,14 @@ try:
             User Context: Bankroll: ${total_bankroll} | Target Exit: ${target_profit} | Profile: {risk_pref}
 
             RESPONSE FORMAT (STRICT):
-            - Recommend top 2 families from dataset.
+            - Recommend top 2 specific slot recommendations from dataset.
+            - MUST INCLUDE BOTH standard Family Name AND exact Slot Name (e.g., "Dragon Link - Panda Magic").
             - For each, provide ONLY:
-              * Family Name
-              * Check-In ($)
-              * Bet Size ($)
+              * Family & Specific Slot Name
+              * Recommended Check-In ($)
+              * Recommended Bet Size ($)
               * Max Runway (Spins = Check-In / Bet Size)
-            - Keep total response under 60 words.
+            - Keep total response under 70 words.
             """
 
             if "pre_messages" not in st.session_state:
@@ -231,7 +232,7 @@ try:
                                 model=active_model,
                                 messages=msgs,
                                 temperature=0.1,
-                                max_tokens=200
+                                max_tokens=250
                             )
                             raw_reply = res.choices[0].message.content or ""
                             reply = clean_thinking_tags(raw_reply)
@@ -240,25 +241,58 @@ try:
                         except Exception as err:
                             st.error(f"Groq API Error: {err}")
 
+            st.divider()
+            st.markdown("#### ⚡ Pass Selection to Live Co-Pilot")
+            
+            fam_options = safe_unique_options(df.get("Family"), ["Dragon Link"])
+            slot_options_all = safe_unique_options(df.get("Slot"), ["Panda Magic"])
+            
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            with sc1:
+                sel_fam_to_pass = st.selectbox("Chosen Family", fam_options, key="pass_fam")
+            with sc2:
+                sel_slot_to_pass = st.selectbox("Chosen Slot", slot_options_all, key="pass_slot")
+            with sc3:
+                sel_checkin_to_pass = st.number_input("Check-In ($)", value=500.0, step=50.0, key="pass_checkin")
+            with sc4:
+                sel_bet_to_pass = st.number_input("Bet Size ($)", value=2.50, step=0.50, key="pass_bet")
+                
+            if st.button("🚀 Launch Live Session with Selection", use_container_width=True):
+                st.session_state["live_family"] = sel_fam_to_pass
+                st.session_state["live_slot"] = sel_slot_to_pass
+                st.session_state["live_checkin"] = sel_checkin_to_pass
+                st.session_state["live_bet"] = sel_bet_to_pass
+                st.session_state.messages = []  # Reset live messages for new machine
+                st.success(f"Configured Live Co-Pilot for **{sel_fam_to_pass} - {sel_slot_to_pass}**! Switch mode to '⚡ Live Mid-Game Co-Pilot'.")
+
         else:
             # Live Mid-Game Co-Pilot
             unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
             
+            # Default values synced from selection engine if available
+            default_fam = st.session_state.get("live_family", unique_families[0] if unique_families else "Dragon Link")
+            default_checkin = st.session_state.get("live_checkin", 500.0)
+            default_bet = st.session_state.get("live_bet", 2.50)
+            
             with st.expander("⚙️ Set Live Machine & Check-In Context", expanded=True):
                 ca, cb, cc, cd = st.columns(4)
                 with ca:
-                    selected_family = st.selectbox("Target Slot Family", options=unique_families, key="chat_family")
+                    fam_index = unique_families.index(default_fam) if default_fam in unique_families else 0
+                    selected_family = st.selectbox("Target Slot Family", options=unique_families, index=fam_index, key="chat_family")
                 
                 filtered_df_fam = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
                 available_slots = safe_unique_options(filtered_df_fam.get("Slot"), ["Panda Magic", "All Slots"])
                 slot_options = ["All Slots"] + [s for s in available_slots if s != "All Slots"]
                 
+                default_slot = st.session_state.get("live_slot", "All Slots")
+                slot_index = slot_options.index(default_slot) if default_slot in slot_options else 0
+                
                 with cb:
-                    selected_slot = st.selectbox("Target Slot Machine", options=slot_options, key="chat_slot")
+                    selected_slot = st.selectbox("Target Slot Machine", options=slot_options, index=slot_index, key="chat_slot")
                 with cc:
-                    checkin_amount = st.number_input("Machine Check-In Amount ($)", value=500.0, step=50.0, key="chat_checkin")
+                    checkin_amount = st.number_input("Machine Check-In Amount ($)", value=default_checkin, step=50.0, key="chat_checkin")
                 with cd:
-                    current_bet = st.number_input("Base Bet ($)", value=2.50, step=0.50, key="chat_bet")
+                    current_bet = st.number_input("Base Bet ($)", value=default_bet, step=0.50, key="chat_bet")
 
             if selected_slot != "All Slots" and "Slot" in df:
                 machine_df = df[(df["Family"].astype(str) == str(selected_family)) & (df["Slot"].astype(str) == str(selected_slot))]
@@ -283,7 +317,7 @@ try:
             STRICT FORMAT: Max 2 bullet points, under 40 words total.
             """
 
-            if "messages" not in st.session_state:
+            if "messages" not in st.session_state or not st.session_state.messages:
                 st.session_state.messages = [
                     {
                         "role": "assistant",
