@@ -143,12 +143,11 @@ try:
         
         unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
         
-        with st.expander("⚙️ Set Current Machine & Bankroll Context", expanded=True):
+        with st.expander("⚙️ Set Current Machine & Check-In Context", expanded=True):
             ca, cb, cc, cd = st.columns(4)
             with ca:
                 selected_family = st.selectbox("Target Slot Family", options=unique_families, key="chat_family")
             
-            # Filter slot titles by selected family
             filtered_df_fam = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
             available_slots = safe_unique_options(filtered_df_fam.get("Slot"), ["Panda Magic", "All Slots"])
             slot_options = ["All Slots"] + [s for s in available_slots if s != "All Slots"]
@@ -156,11 +155,10 @@ try:
             with cb:
                 selected_slot = st.selectbox("Target Slot Machine", options=slot_options, key="chat_slot")
             with cc:
-                bankroll = st.number_input("Starting Bankroll ($)", value=500, step=50, key="chat_bankroll")
+                checkin_amount = st.number_input("Machine Check-In Amount ($)", value=500.0, step=50.0, key="chat_checkin")
             with cd:
                 current_bet = st.number_input("Base Bet ($)", value=2.50, step=0.50, key="chat_bet")
 
-        # Select data for stats computation
         if selected_slot != "All Slots" and "Slot" in df:
             machine_df = df[(df["Family"].astype(str) == str(selected_family)) & (df["Slot"].astype(str) == str(selected_slot))]
         else:
@@ -172,23 +170,24 @@ try:
         
         system_instruction = f"""
         You are Slotpilot, a real-time mathematical slot co-pilot.
-        Current Context:
-        - Target: Family "{selected_family}" | Machine "{selected_slot}"
-        - Stats: Avg Spins to Feature: {m_avg_spins}, Avg Multiplier: {m_avg_mult}x (Sample: {m_hits} hits)
-        - Session Bankroll: ${bankroll}
+        Current Session Context:
+        - Target Machine: Family "{selected_family}" | Machine "{selected_slot}"
+        - Historical Stats: Avg Spins to Feature: {m_avg_spins}, Avg Multiplier: {m_avg_mult}x (Sample: {m_hits} hits)
+        - Machine Check-In Balance: ${checkin_amount}
         - Base Bet: ${current_bet}
 
         CRITICAL RESPONSE RULES:
-        1. Keep responses ultra-concise (maximum 3 bullet points, under 60 words total).
-        2. Be direct, actionable, and rapid for mid-game live play.
-        3. Never write generic filler or long intro paragraphs.
+        1. Keep responses concise (maximum 3 clear bullet points, strictly under 80 words total).
+        2. Never generate cut-off sentences or partial Markdown. Finish all sentences cleanly.
+        3. Acknowledge user's actual available bet increments on real machines.
+        4. Be direct, tactical, and actionable for live play.
         """
 
         if "messages" not in st.session_state:
             st.session_state.messages = [
                 {
                     "role": "assistant",
-                    "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {int(bankroll / current_bet if current_bet else 0)} spins.\n- Update me on spin count or balance anytime!"
+                    "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Machine Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {int(checkin_amount / current_bet if current_bet else 0)} spins at ${current_bet}.\n- Update me on spin count or balance anytime!"
                 }
             ]
 
@@ -196,7 +195,7 @@ try:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        if user_input := st.chat_input("e.g. '50 spins in, no feature, down $125. Should I continue?'"):
+        if user_input := st.chat_input("e.g. '35 spins in, balance down to 378, bet set at $3.75. What next?'"):
             st.session_state.messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.markdown(user_input)
@@ -214,10 +213,10 @@ try:
                         res = client.chat.completions.create(
                             model=active_model,
                             messages=groq_messages,
-                            temperature=0.2,
-                            max_tokens=150
+                            temperature=0.3,
+                            max_tokens=300
                         )
-                        reply = res.choices[0].message.content
+                        reply = res.choices[0].message.content.strip()
                         st.markdown(reply)
                         st.session_state.messages.append({"role": "assistant", "content": reply})
                     except Exception as err:
