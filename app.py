@@ -43,18 +43,21 @@ def safe_unique_options(series, default_list):
     return default_list
 
 def get_active_groq_model(client):
-    models_resp = client.models.list()
-    active_models = [m.id for m in models_resp.data]
-    preferred = [
-        "llama-3.3-70b-versatile",
-        "llama-3.1-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768"
-    ]
-    for m in preferred:
-        if m in active_models:
-            return m
-    return active_models[0] if active_models else "llama-3.3-70b-versatile"
+    try:
+        models_resp = client.models.list()
+        active_models = [m.id for m in models_resp.data]
+        preferred = [
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768"
+        ]
+        for m in preferred:
+            if m in active_models:
+                return m
+    except Exception:
+        pass
+    return "llama-3.3-70b-versatile"
 
 tab1, tab2 = st.tabs(["📲 Live Feature Logger", "🤖 AI & Visual Analytics"])
 
@@ -77,7 +80,6 @@ try:
             
             with col1:
                 log_date = st.date_input("Date", date.today())
-                # Auto-calculate day of week from selected date
                 auto_day = log_date.strftime("%A")
                 st.text_input("Day (Auto-detected)", value=auto_day, disabled=True)
                 
