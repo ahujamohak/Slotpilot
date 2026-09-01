@@ -47,7 +47,6 @@ def get_active_groq_model(client):
         models_resp = client.models.list()
         active_ids = [m.id for m in models_resp.data]
         
-        # Primary chat completion targets
         preferred = [
             "llama-3.3-70b-versatile",
             "llama-3.1-8b-instant",
@@ -59,7 +58,6 @@ def get_active_groq_model(client):
             if p in active_ids:
                 return p
         
-        # Guard against non-chat models (classification, whisper, vision, guard, moderation, etc.)
         excluded_keywords = ["whisper", "vision", "orpheus", "guard", "classify", "classifier", "moderation", "rerank", "embed"]
         for m_id in active_ids:
             if not any(k in m_id.lower() for k in excluded_keywords):
@@ -87,7 +85,6 @@ try:
         log_date = st.date_input("Select Date", date.today(), key="main_date_picker")
         auto_day = log_date.strftime("%A")
         
-        # Format as m/d/Y (e.g. 7/6/2026)
         formatted_date_str = f"{log_date.month}/{log_date.day}/{log_date.year}"
         
         st.markdown(f"**Auto-detected Day:** `{auto_day}` | **Formatted Date:** `{formatted_date_str}`")
@@ -147,23 +144,37 @@ try:
         unique_families = safe_unique_options(df.get("Family"), ["Dragon Link"])
         
         with st.expander("⚙️ Set Current Machine & Bankroll Context", expanded=True):
-            ca, cb, cc = st.columns(3)
+            ca, cb, cc, cd = st.columns(4)
             with ca:
                 selected_family = st.selectbox("Target Slot Family", options=unique_families, key="chat_family")
+            
+            # Filter slot titles by selected family
+            filtered_df_fam = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
+            available_slots = safe_unique_options(filtered_df_fam.get("Slot"), ["Panda Magic", "All Slots"])
+            slot_options = ["All Slots"] + [s for s in available_slots if s != "All Slots"]
+            
             with cb:
-                bankroll = st.number_input("Starting Bankroll ($)", value=500, step=50, key="chat_bankroll")
+                selected_slot = st.selectbox("Target Slot Machine", options=slot_options, key="chat_slot")
             with cc:
+                bankroll = st.number_input("Starting Bankroll ($)", value=500, step=50, key="chat_bankroll")
+            with cd:
                 current_bet = st.number_input("Base Bet ($)", value=2.50, step=0.50, key="chat_bet")
 
-        family_df = df[df["Family"].astype(str) == str(selected_family)] if "Family" in df else df
-        fam_hits = len(family_df)
-        fam_avg_spins = round(family_df["Spin of feature hit"].mean(), 1) if "Spin of feature hit" in family_df else 0
-        fam_avg_mult = round(family_df["Win multiplier"].mean(), 1) if "Win multiplier" in family_df else 0
+        # Select data for stats computation
+        if selected_slot != "All Slots" and "Slot" in df:
+            machine_df = df[(df["Family"].astype(str) == str(selected_family)) & (df["Slot"].astype(str) == str(selected_slot))]
+        else:
+            machine_df = filtered_df_fam
+
+        m_hits = len(machine_df)
+        m_avg_spins = round(machine_df["Spin of feature hit"].mean(), 1) if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
+        m_avg_mult = round(machine_df["Win multiplier"].mean(), 1) if ("Win multiplier" in machine_df and not machine_df.empty) else 0
         
         system_instruction = f"""
         You are Slotpilot, a real-time mathematical slot co-pilot.
         Current Context:
-        - Family: {selected_family} (Avg Spins to Feature: {fam_avg_spins}, Avg Multiplier: {fam_avg_mult}x, Sample Size: {fam_hits} hits)
+        - Target: Family "{selected_family}" | Machine "{selected_slot}"
+        - Stats: Avg Spins to Feature: {m_avg_spins}, Avg Multiplier: {m_avg_mult}x (Sample: {m_hits} hits)
         - Session Bankroll: ${bankroll}
         - Base Bet: ${current_bet}
 
@@ -177,7 +188,7 @@ try:
             st.session_state.messages = [
                 {
                     "role": "assistant",
-                    "content": f"🎯 **Ready for {selected_family} session.**\n- Target cycle: ~{fam_avg_spins} spins.\n- Max runway: {int(bankroll / current_bet if current_bet else 0)} spins.\n- Update me on spin count or balance anytime!"
+                    "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {int(bankroll / current_bet if current_bet else 0)} spins.\n- Update me on spin count or balance anytime!"
                 }
             ]
 
