@@ -220,7 +220,7 @@ try:
             You are Slotpilot. Provide direct, short, bulleted answers. NO intro fluff, NO explanations, NO internal thinking text.
             {pre_summary}
 
-            User Context: Bankroll: ${total_bankroll} \vert{} Target Exit:${target_profit} | Profile: {risk_pref}
+            User Context: Bankroll: ${total_bankroll} | Target Exit: ${target_profit} | Profile: {risk_pref}
 
             STRICT NUMBER FORMAT RULE:
             - NEVER output spin counts or spin recommendations in decimals. ALWAYS round spins to nearest WHOLE INTEGER.
@@ -238,7 +238,7 @@ try:
 
             if "pre_messages" not in st.session_state:
                 st.session_state.pre_messages = [
-                    {"role": "assistant", "content": f"👋 **Ready.** Starting Bankroll: **${total_bankroll}** \vert{} Exit Target: **${target_profit}**.\nAsk me which machine to play first!"}
+                    {"role": "assistant", "content": f"👋 **Ready.** Starting Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me which machine to play first!"}
                 ]
 
             for msg in st.session_state.pre_messages:
@@ -342,7 +342,7 @@ try:
 
             Live Context:
             - Family: "{selected_family}" | Slot: "{selected_slot}"
-            - Check-In: ${checkin_amount} \vert{} Bet:${current_bet} | Max Runway: {max_spins_runway} spins
+            - Check-In: ${checkin_amount} | Bet: ${current_bet} | Max Runway: {max_spins_runway} spins
             - Stats: Avg Spins: {m_avg_spins}, Avg Mult: {m_avg_mult}x
 
             STRICT NUMBER FORMAT RULE:
@@ -355,5 +355,146 @@ try:
                 st.session_state.messages = [
                     {
                         "role": "assistant",
-                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {max_spins_runway} spins at${current_bet}."
+                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {max_spins_runway} spins at ${current_bet}."
                     }
+                ]
+
+            for msg in st.session_state.messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+            if user_input := st.chat_input("e.g. '35 spins in, balance down to 378, bet set at $3.75. What next?'"):
+                st.session_state.messages.append({"role": "user", "content": user_input})
+                with st.chat_message("user"):
+                    st.markdown(user_input)
+
+                if client:
+                    with st.chat_message("assistant"):
+                        active_model = get_active_groq_model(client)
+                        recent_messages = st.session_state.messages[-2:]
+                        groq_messages = [{"role": "system", "content": system_instruction_live}] + [
+                            {"role": m["role"], "content": m["content"]} for m in recent_messages
+                        ]
+                        
+                        try:
+                            res = client.chat.completions.create(
+                                model=active_model,
+                                messages=groq_messages,
+                                temperature=0.1,
+                                max_tokens=120
+                            )
+                            raw_reply = res.choices[0].message.content or ""
+                            reply = clean_thinking_tags(raw_reply)
+                            st.markdown(reply)
+                            st.session_state.messages.append({"role": "assistant", "content": reply})
+                        except Exception as err:
+                            st.error(f"Groq API Error: {err}")
+
+        if st.button("🔄 Reset Chat Session"):
+            st.session_state.messages = []
+            st.session_state.pre_messages = []
+            st.rerun()
+
+    # --- TAB 3: VISUAL ANALYTICS ---
+    with tab3:
+        st.subheader("📊 Deep Session Visualizers")
+        
+        with st.expander("🎛️ Unified Master Filters", expanded=True):
+            f_col1, f_col2, f_col3 = st.columns(3)
+            
+            all_families = safe_unique_options(df.get("Family"), [])
+            all_slots = safe_unique_options(df.get("Slot"), [])
+            
+            with f_col1:
+                selected_fam_filter = st.multiselect("Filter by Family", options=all_families, key="master_fam_filter")
+            with f_col2:
+                if selected_fam_filter:
+                    available_slots_filtered = safe_unique_options(df[df["Family"].isin(selected_fam_filter)].get("Slot"), [])
+                else:
+                    available_slots_filtered = all_slots
+                selected_slot_filter = st.multiselect("Filter by Slot Title", options=available_slots_filtered, key="master_slot_filter")
+            with f_col3:
+                min_spins, max_spins = 1, int(df["Spin of feature hit"].max()) if ("Spin of feature hit" in df and not df.empty) else 200
+                spin_range = st.slider("Filter by Feature Spin Window", min_value=1, max_value=max_spins, value=(1, max_spins), key="master_spin_slider")
+
+        filtered_df = df.copy()
+        
+        if selected_fam_filter:
+            filtered_df = filtered_df[filtered_df["Family"].isin(selected_fam_filter)]
+            
+        if selected_slot_filter:
+            filtered_df = filtered_df[filtered_df["Slot"].isin(selected_slot_filter)]
+            
+        if "Spin of feature hit" in filtered_df.columns:
+            filtered_df = filtered_df[
+                (filtered_df["Spin of feature hit"] >= spin_range[0]) & 
+                (filtered_df["Spin of feature hit"] <= spin_range[1])
+            ]
+
+        st.caption(f"Showing **{len(filtered_df)}** of **{len(df)}** total logged feature hits.")
+        st.divider()
+
+        v_col1, v_col2 = st.columns(2)
+        
+        with v_col1:
+            if not filtered_df.empty and "Spin of feature hit" in filtered_df and "Win multiplier" in filtered_df:
+                fig_scatter = px.scatter(
+                    filtered_df,
+                    x="Spin of feature hit",
+                    y="Win multiplier",
+                    color="Family",
+                    hover_data=["Slot"] if "Slot" in filtered_df else None,
+                    title="1. Volatility Radar: Spin Depth vs Multiplier Yield",
+                    labels={"Spin of feature hit": "Spins to Trigger Feature", "Win multiplier": "Win Multiplier (x)"}
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                st.info("No data available for Volatility Radar given current filters.")
+
+        with v_col2:
+            if not filtered_df.empty and "Day" in filtered_df and "Win multiplier" in filtered_df:
+                heatmap_data = filtered_df.groupby(["Day", "Family"])["Win multiplier"].mean().reset_index()
+                fig_heat = px.density_heatmap(
+                    heatmap_data,
+                    x="Day",
+                    y="Family",
+                    z="Win multiplier",
+                    title="2. Day-of-Week Multiplier Yield Heatmap",
+                    color_continuous_scale="Viridis"
+                )
+                st.plotly_chart(fig_heat, use_container_width=True)
+            else:
+                st.info("No data available for Yield Heatmap given current filters.")
+
+        v_col3, v_col4 = st.columns(2)
+        
+        with v_col3:
+            if not filtered_df.empty and "Spin of feature hit" in filtered_df:
+                fig_hist = px.histogram(
+                    filtered_df, 
+                    x="Spin of feature hit", 
+                    nbins=25, 
+                    cumulative=True,
+                    title="3. Cumulative Feature Trigger Probability (CDF)",
+                    color_discrete_sequence=["#10B981"],
+                    labels={"Spin of feature hit": "Spins Elapsed"}
+                )
+                st.plotly_chart(fig_hist, use_container_width=True)
+            else:
+                st.info("No data available for Cumulative Trigger Probability given current filters.")
+
+        with v_col4:
+            if not filtered_df.empty and "Family" in filtered_df and "Win multiplier" in filtered_df:
+                fig_box = px.box(
+                    filtered_df, 
+                    x="Family", 
+                    y="Win multiplier", 
+                    title="4. Win Multiplier Distribution by Family",
+                    color="Family"
+                )
+                st.plotly_chart(fig_box, use_container_width=True)
+            else:
+                st.info("No data available for Multiplier Distribution given current filters.")
+
+except Exception as e:
+    st.error(f"Error loading app: {e}")
