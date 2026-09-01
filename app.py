@@ -1,5 +1,5 @@
 import os
-import streamlit as st
+import Streamlit as st
 import gspread
 import pandas as pd
 import plotly.express as px
@@ -33,6 +33,9 @@ def load_data():
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
             
+    if "Date" in df.columns:
+        df["Date_Parsed"] = pd.to_datetime(df["Date"], errors="coerce")
+        
     return df
 
 def safe_unique_options(series, default_list):
@@ -66,42 +69,42 @@ def get_active_groq_model(client):
         pass
     return "llama-3.3-70b-versatile"
 
-def build_global_dataset_summary(df):
-    """Computes aggregate stats across all historical logs for LLM grounding."""
+def build_strict_dataset_summary(df):
+    """Computes exact aggregated stats across historical logs to prevent LLM hallucinations."""
     if df.empty:
         return "No historical log data available."
     
     total_records = len(df)
-    families = df["Family"].value_counts().to_dict() if "Family" in df else {}
     
-    top_slots = ""
-    if "Slot" in df and "Win multiplier" in df:
-        slot_stats = df.groupby(["Family", "Slot"]).agg(
+    # Exact mapping of Family -> Unique Slots
+    valid_combinations = []
+    if "Family" in df and "Slot" in df:
+        grouped = df.groupby(["Family", "Slot"]).agg(
             hits=("Win multiplier", "count"),
-            avg_spin=("Spin of feature hit", "mean"),
+            avg_spins=("Spin of feature hit", "mean"),
             avg_mult=("Win multiplier", "mean"),
             max_mult=("Win multiplier", "max")
-        ).reset_index().sort_values(by="avg_mult", ascending=False).head(5)
+        ).reset_index()
         
-        top_slots = slot_stats.to_string(index=False)
-        
-    global_avg_spins = round(df["Spin of feature hit"].mean(), 1) if "Spin of feature hit" in df else 0
-    global_avg_mult = round(df["Win multiplier"].mean(), 1) if "Win multiplier" in df else 0
+        for _, row in grouped.iterrows():
+            valid_combinations.append(
+                f"- Family: '{row['Family']}' | Slot: '{row['Slot']}' | Hits: {row['hits']} | Avg Spins: {row['avg_spins']:.1f} | Avg Mult: {row['avg_mult']:.1f}x | Max Mult: {row['max_mult']:.1f}x"
+            )
+            
+    valid_combos_str = "\n".join(valid_combinations)
     
     return f"""
-    --- DATASET GROUNDING (Total Records Analyzed: {total_records}) ---
-    Global Averages: ~{global_avg_spins} spins/feature | {global_avg_mult}x avg win multiplier.
-    Family Distribution: {families}
-    Top 5 Highest Yielding Machines (Historical Data):
-    {top_slots}
-    -------------------------------------------------------------------
+    --- STRICT HISTORICAL DATASET GROUNDING ({total_records} Total Hits Logged) ---
+    YOU MUST ONLY RECOMMEND MACHINES FROM THIS EXACT LIST BELOW. DO NOT INVENT OR MIX SLOTS AND FAMILIES:
+    {valid_combos_str}
+    --------------------------------------------------------------------------------
     """
 
 tab1, tab2, tab3 = st.tabs(["📲 Live Feature Logger", "💬 Interactive AI Co-Pilot", "📊 Visual Analytics"])
 
 try:
     df = load_data()
-    global_data_summary = build_global_dataset_summary(df)
+    global_data_summary = build_strict_dataset_summary(df)
 
     # --- TAB 1: MOBILE FEATURE LOGGER ---
     with tab1:
@@ -177,12 +180,14 @@ try:
 
         if mode == "🎮 Pre-Game Machine Finder":
             st.markdown("### 🎯 Pre-Session Selection Engine")
-            st.caption("Ask Slotpilot which machine to play first based on your overall daily bankroll and full historical dataset.")
+            st.caption("Ask Slotpilot which machine to play first based on your daily bankroll, profit target, and logged historical performance.")
             
-            c_p1, c_p2 = st.columns(2)
+            c_p1, c_p2, c_p3 = st.columns(3)
             with c_p1:
                 total_bankroll = st.number_input("Total Day Bankroll ($)", value=1000.0, step=100.0, key="pre_bankroll")
             with c_p2:
+                target_profit = st.number_input("Target Exit Goal ($)", value=1750.0, step=50.0, key="pre_target")
+            with c_p3:
                 risk_pref = st.selectbox("Risk Preference", ["Balanced", "High Volatility (Big Multipliers)", "Conservative (Short Spin Cycles)"], key="pre_risk")
 
             system_instruction_pre = f"""
@@ -191,24 +196,27 @@ try:
 
             User Context:
             - Daily Bankroll: ${total_bankroll}
-            - Playstyle Preference: {risk_pref}
+            - Target Exit Balance: ${target_profit} (Target Profit: ${target_profit - total_bankroll})
+            - Risk Profile: {risk_pref}
 
-            CRITICAL RESPONSE RULES:
-            1. Recommend top 2-3 specific machines/families from the historical dataset above.
-            2. For each recommendation, provide: Check-In Amount, Base Bet, and expected Spin Cycle length.
-            3. Maximum 4 bullet points, under 100 words total. Strictly base recommendations on actual data provided.
+            CRITICAL MATHEMATICAL & ACCURACY RULES:
+            1. ONLY recommend Family and Slot combinations strictly present in the dataset above. NEVER invent slot names (e.g. Do not invent names like 'Golden Bull' if not in the dataset).
+            2. HARD MATHEMATICAL CONSTRAINT: Maximum Spins = Check-In Amount divided by Base Bet (e.g., $100 check-in at $2.50 bet = exactly 40 spins max). NEVER output spin counts exceeding this formula.
+            3. Recommend 2 specific valid machines from the dataset that best fit the goal.
+            4. State explicitly: Machine Name, Recommended Check-In ($), Starting Base Bet ($), and Mathematical Max Runway (Spins).
+            5. Keep response strictly under 100 words in 3 concise bullet points.
             """
 
             if "pre_messages" not in st.session_state:
                 st.session_state.pre_messages = [
-                    {"role": "assistant", "content": f"👋 **Ready.** Tell me your goals for today's ${total_bankroll} bankroll, or ask me to rank the best machines from your log history!"}
+                    {"role": "assistant", "content": f"👋 **Ready.** Starting Bankroll: **${total_bankroll}** | Exit Target: **${target_profit}**.\nAsk me which machine to play first based on your exact historical dataset!"}
                 ]
 
             for msg in st.session_state.pre_messages:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
 
-            if user_pre_input := st.chat_input("e.g. 'I want to play 2 machines tonight. Where should I start and how much check-in per machine?'"):
+            if user_pre_input := st.chat_input("e.g. 'Recommend ideal slot choice, starting bet, and check-in amount for tonight.'"):
                 st.session_state.pre_messages.append({"role": "user", "content": user_pre_input})
                 with st.chat_message("user"):
                     st.markdown(user_pre_input)
@@ -219,7 +227,7 @@ try:
                         recent = st.session_state.pre_messages[-6:]
                         msgs = [{"role": "system", "content": system_instruction_pre}] + [{"role": m["role"], "content": m["content"]} for m in recent]
                         try:
-                            res = client.chat.completions.create(model=active_model, messages=msgs, temperature=0.3, max_tokens=300)
+                            res = client.chat.completions.create(model=active_model, messages=msgs, temperature=0.2, max_tokens=300)
                             reply = res.choices[0].message.content.strip()
                             st.markdown(reply)
                             st.session_state.pre_messages.append({"role": "assistant", "content": reply})
@@ -255,27 +263,29 @@ try:
             m_avg_spins = round(machine_df["Spin of feature hit"].mean(), 1) if ("Spin of feature hit" in machine_df and not machine_df.empty) else 0
             m_avg_mult = round(machine_df["Win multiplier"].mean(), 1) if ("Win multiplier" in machine_df and not machine_df.empty) else 0
             
+            max_spins_runway = int(checkin_amount / current_bet) if current_bet > 0 else 0
+
             system_instruction_live = f"""
             You are Slotpilot, a real-time mathematical slot co-pilot.
             {global_data_summary}
 
-            Current Live Machine Context:
-            - Target: Family "{selected_family}" | Machine "{selected_slot}"
-            - Historical Machine Stats: Avg Spins: {m_avg_spins}, Avg Multiplier: {m_avg_mult}x (Sample: {m_hits} hits)
-            - Machine Check-In Balance: ${checkin_amount}
-            - Current Bet: ${current_bet}
+            Current Live Context:
+            - Machine: Family "{selected_family}" | Slot "{selected_slot}"
+            - Machine Check-In: ${checkin_amount} | Current Bet: ${current_bet}
+            - Calculated Max Spin Runway: {max_spins_runway} spins
+            - Historical Stats for Machine: Avg Spins: {m_avg_spins}, Avg Multiplier: {m_avg_mult}x (Sample: {m_hits} hits)
 
-            CRITICAL RESPONSE RULES:
-            1. Keep responses concise (maximum 3 bullet points, strictly under 80 words total).
-            2. Never generate cut-off sentences or partial Markdown.
-            3. Acknowledge real physical slot bet increments. Be tactical and actionable.
+            CRITICAL RULES:
+            1. Keep answers concise (max 3 bullets, under 80 words total).
+            2. Never recommend spin counts exceeding the calculated Max Spin Runway ({max_spins_runway} spins).
+            3. Direct, tactical live play advice only.
             """
 
             if "messages" not in st.session_state:
                 st.session_state.messages = [
                     {
                         "role": "assistant",
-                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {int(checkin_amount / current_bet if current_bet else 0)} spins at ${current_bet}.\n- Update me on spin count or balance anytime!"
+                        "content": f"🎯 **Ready for {selected_family} ({selected_slot}) session.**\n- Check-In: ${checkin_amount}\n- Target cycle: ~{m_avg_spins} spins.\n- Max runway: {max_spins_runway} spins at ${current_bet}.\n- Update me on spin count or balance anytime!"
                     }
                 ]
 
@@ -300,7 +310,7 @@ try:
                             res = client.chat.completions.create(
                                 model=active_model,
                                 messages=groq_messages,
-                                temperature=0.3,
+                                temperature=0.2,
                                 max_tokens=300
                             )
                             reply = res.choices[0].message.content.strip()
@@ -314,63 +324,110 @@ try:
             st.session_state.pre_messages = []
             st.rerun()
 
-    # --- TAB 3: VISUAL ANALYTICS ---
+    # --- TAB 3: VISUAL ANALYTICS (UNIFIED MASTER FILTERS) ---
     with tab3:
         st.subheader("📊 Deep Session Visualizers")
         
+        # --- MASTER FILTER CONTROL BAR ---
+        with st.expander("🎛️ Unified Master Filters (Applies to All Charts Below)", expanded=True):
+            f_col1, f_col2, f_col3 = st.columns(3)
+            
+            all_families = safe_unique_options(df.get("Family"), [])
+            all_slots = safe_unique_options(df.get("Slot"), [])
+            
+            with f_col1:
+                selected_fam_filter = st.multiselect("Filter by Family", options=all_families, default=[], key="master_fam_filter")
+            with f_col2:
+                # Dynamically filter slots based on selected families
+                if selected_fam_filter:
+                    available_slots_filtered = safe_unique_options(df[df["Family"].isin(selected_fam_filter)].get("Slot"), [])
+                else:
+                    available_slots_filtered = all_slots
+                selected_slot_filter = st.multiselect("Filter by Slot Title", options=available_slots_filtered, default=[], key="master_slot_filter")
+            with f_col3:
+                min_spins, max_spins = 1, int(df["Spin of feature hit"].max()) if ("Spin of feature hit" in df and not df.empty) else 200
+                spin_range = st.slider("Filter by Feature Spin Window", min_value=1, max_value=max_spins, value=(1, max_spins), key="master_spin_slider")
+
+        # Apply Filters across entire dataframe for all 4 charts simultaneously
+        filtered_df = df.copy()
+        
+        if selected_fam_filter:
+            filtered_df = filtered_df[filtered_df["Family"].isin(selected_fam_filter)]
+            
+        if selected_slot_filter:
+            filtered_df = filtered_df[filtered_df["Slot"].isin(selected_slot_filter)]
+            
+        if "Spin of feature hit" in filtered_df.columns:
+            filtered_df = filtered_df[
+                (filtered_df["Spin of feature hit"] >= spin_range[0]) & 
+                (filtered_df["Spin of feature hit"] <= spin_range[1])
+            ]
+
+        st.caption(f"Showing **{len(filtered_df)}** of **{len(df)}** total logged feature hits.")
+        st.divider()
+
+        # --- UNIFIED GRID OF CHARTS ---
         v_col1, v_col2 = st.columns(2)
         
         with v_col1:
-            if "Spin of feature hit" in df and "Win multiplier" in df:
+            if not filtered_df.empty and "Spin of feature hit" in filtered_df and "Win multiplier" in filtered_df:
                 fig_scatter = px.scatter(
-                    df,
+                    filtered_df,
                     x="Spin of feature hit",
                     y="Win multiplier",
                     color="Family",
-                    hover_data=["Slot"] if "Slot" in df else None,
-                    title="Volatility Radar: Spin Depth vs. Multiplier Yield",
+                    hover_data=["Slot"] if "Slot" in filtered_df else None,
+                    title="1. Volatility Radar: Spin Depth vs Multiplier Yield",
                     labels={"Spin of feature hit": "Spins to Trigger Feature", "Win multiplier": "Win Multiplier (x)"}
                 )
                 st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                st.info("No data available for Volatility Radar given current filters.")
 
         with v_col2:
-            if "Day" in df and "Win multiplier" in df:
-                heatmap_data = df.groupby(["Day", "Family"])["Win multiplier"].mean().reset_index()
+            if not filtered_df.empty and "Day" in filtered_df and "Win multiplier" in filtered_df:
+                heatmap_data = filtered_df.groupby(["Day", "Family"])["Win multiplier"].mean().reset_index()
                 fig_heat = px.density_heatmap(
                     heatmap_data,
                     x="Day",
                     y="Family",
                     z="Win multiplier",
-                    title="Day-of-Week Multiplier Yield Heatmap",
+                    title="2. Day-of-Week Multiplier Yield Heatmap",
                     color_continuous_scale="Viridis"
                 )
                 st.plotly_chart(fig_heat, use_container_width=True)
+            else:
+                st.info("No data available for Yield Heatmap given current filters.")
 
-        st.divider()
-        
         v_col3, v_col4 = st.columns(2)
         
         with v_col3:
-            fig_hist = px.histogram(
-                df, 
-                x="Spin of feature hit", 
-                nbins=25, 
-                cumulative=True,
-                title="Cumulative Feature Trigger Probability (CDF)",
-                color_discrete_sequence=["#10B981"],
-                labels={"Spin of feature hit": "Spins Elapsed"}
-            )
-            st.plotly_chart(fig_hist, use_container_width=True)
-            
+            if not filtered_df.empty and "Spin of feature hit" in filtered_df:
+                fig_hist = px.histogram(
+                    filtered_df, 
+                    x="Spin of feature hit", 
+                    nbins=25, 
+                    cumulative=True,
+                    title="3. Cumulative Feature Trigger Probability (CDF)",
+                    color_discrete_sequence=["#10B981"],
+                    labels={"Spin of feature hit": "Spins Elapsed"}
+                )
+                st.plotly_chart(fig_hist, use_container_width=True)
+            else:
+                st.info("No data available for Cumulative Trigger Probability given current filters.")
+
         with v_col4:
-            fig_box = px.box(
-                df, 
-                x="Family", 
-                y="Win multiplier", 
-                title="Win Multiplier Distribution by Slot Family",
-                color="Family"
-            )
-            st.plotly_chart(fig_box, use_container_width=True)
+            if not filtered_df.empty and "Family" in filtered_df and "Win multiplier" in filtered_df:
+                fig_box = px.box(
+                    filtered_df, 
+                    x="Family", 
+                    y="Win multiplier", 
+                    title="4. Win Multiplier Distribution by Family",
+                    color="Family"
+                )
+                st.plotly_chart(fig_box, use_container_width=True)
+            else:
+                st.info("No data available for Multiplier Distribution given current filters.")
 
 except Exception as e:
     st.error(f"Error loading app: {e}")
