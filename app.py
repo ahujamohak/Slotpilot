@@ -118,9 +118,17 @@ def build_priority_dataset():
             })
     return records
 
-# Initialize Session State Variables
+# Initialize Session State Variables with Migration Safeguard
 if "slots_db" not in st.session_state:
     st.session_state.slots_db = build_priority_dataset()
+else:
+    # Migration safety check: auto-patch existing items missing new keys
+    for item in st.session_state.slots_db:
+        if "step_down_bet" not in item:
+            item["step_down_bet"] = get_proportional_step_down(item["opt_bet"])
+        if "checkin_alloc" not in item:
+            item["checkin_alloc"] = round((20 * item["opt_bet"]) + (15 * item["step_down_bet"]), 2)
+
 if "played_basket" not in st.session_state:
     st.session_state.played_basket = []
 if "display_limit" not in st.session_state:
