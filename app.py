@@ -72,51 +72,49 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
-# 2. STRICT REALISTIC DENOM & BET MATH
+# 2. BET SCALING & ALLOCATION MATH
 # ==========================================
 
-def get_realistic_bet_and_denom():
+ALLOWED_BETS = [1.00, 1.25, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
+
+def get_proportional_step_down(p1_bet):
     """
-    Strict Casino Betting Rules:
-    - 5c Denom (25 lines max): Minimum bet $1.25. Allowed: $1.25, $2.50, $3.75, $5.00, $6.25, $7.50, $10.00.
-    - 10c Denom: Minimum bet $2.50. Allowed: $2.50, $5.00, $7.50, $10.00.
-    - 2c Denom (50 lines): $1.00 (1x), $2.00 (2x), $3.00 (3x), $5.00 (5x), $10.00 (10x). [NO $2.50 on 2c]
-    - 1c Denom (50 lines): $0.50 (1x), $1.00 (2x), $1.50 (3x), $2.50 (5x), $5.00 (10x).
-    - $1.00 Denom: Prioritizes $10.00 bets for maximum base RTP.
+    Ensures Phase 2 step-down bet is proportionally close to Phase 1 bet
+    so a feature trigger in Phase 2 can still recover Phase 1 losses.
+    Rule: Step down is 50%-60% of Phase 1 bet size.
     """
-    valid_configs = [
-        {"denom": "1c", "bet": 1.00, "lines": 50, "mult": 2},
-        {"denom": "2c", "bet": 1.00, "lines": 50, "mult": 1},
-        {"denom": "5c", "bet": 1.25, "lines": 25, "mult": 1},
-        {"denom": "2c", "bet": 2.00, "lines": 50, "mult": 2},
-        {"denom": "5c", "bet": 2.50, "lines": 25, "mult": 2},
-        {"denom": "10c", "bet": 2.50, "lines": 25, "mult": 1},
-        {"denom": "2c", "bet": 3.00, "lines": 50, "mult": 3},
-        {"denom": "5c", "bet": 3.75, "lines": 25, "mult": 3},
-        {"denom": "5c", "bet": 5.00, "lines": 25, "mult": 4},
-        {"denom": "10c", "bet": 5.00, "lines": 25, "mult": 2},
-        {"denom": "2c", "bet": 5.00, "lines": 50, "mult": 5},
-        {"denom": "5c", "bet": 6.25, "lines": 25, "mult": 5},
-        {"denom": "5c", "bet": 7.50, "lines": 25, "mult": 6},
-        {"denom": "10c", "bet": 7.50, "lines": 25, "mult": 3},
-        {"denom": "$1", "bet": 10.00, "lines": 10, "mult": 1},
-        {"denom": "10c", "bet": 10.00, "lines": 25, "mult": 4},
-        {"denom": "5c", "bet": 10.00, "lines": 25, "mult": 8}
-    ]
-    return valid_configs[np.random.choice(len(valid_configs))]
+    if p1_bet >= 10.00:
+        return 5.00
+    elif p1_bet >= 7.50:
+        return 3.75
+    elif p1_bet >= 6.25:
+        return 3.00
+    elif p1_bet >= 5.00:
+        return 2.50
+    elif p1_bet >= 3.75:
+        return 2.00
+    elif p1_bet >= 2.50:
+        return 1.25
+    else:
+        return 1.00
 
 def build_priority_dataset():
     records = []
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
-            config = get_realistic_bet_and_denom()
+            p1_bet = float(np.random.choice(ALLOWED_BETS))
+            p2_bet = get_proportional_step_down(p1_bet)
+            # Calculate total max capital allocation required for a full 35-spin probe
+            checkin_alloc = round((20 * p1_bet) + (15 * p2_bet), 2)
+            
             records.append({
                 "family": fam,
                 "slot": slot,
                 "volatility": np.random.choice(["Med", "Med-High", "High"]),
                 "base_rvi": round(float(np.random.uniform(7.5, 9.5)), 2),
-                "opt_denom": config["denom"],
-                "opt_bet": config["bet"]
+                "opt_bet": p1_bet,
+                "step_down_bet": p2_bet,
+                "checkin_alloc": checkin_alloc
             })
     return records
 
@@ -152,7 +150,7 @@ if "session_logs" not in st.session_state:
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, or multi-phase spin execution plans."}
+        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, check-in amounts, or multi-phase spin execution plans."}
     ]
 
 # Helper Functions
@@ -202,28 +200,29 @@ with col_sb2:
 st.sidebar.markdown("---")
 st.sidebar.subheader("Quick Agent Consultations")
 
-# Quick Action 1: Generates Multi-Phase Plan & Forces Focus to Agent Chat Tab
+# Quick Action 1: Generates Proportional Multi-Phase Plan & Direct Agent View
 if st.sidebar.button("⚡ Suggest 3 Best Available Slots"):
     available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     sorted_avail = sorted(available, key=lambda x: x["base_rvi"], reverse=True)[:3]
     
-    agent_msg = "### 🎯 Dynamic Multi-Phase Slot Plans:\n\n"
+    agent_msg = "### 🎯 Dynamic Multi-Phase Slot Recommendations:\n\n"
     for idx, item in enumerate(sorted_avail, 1):
-        p1_bet = item['opt_bet']
-        p2_bet = 1.25 if p1_bet in [2.50, 3.75] else (2.50 if p1_bet == 5.00 else 1.00)
+        p1 = item['opt_bet']
+        p2 = item['step_down_bet']
+        alloc = item['checkin_alloc']
         
         agent_msg += f"#### **{idx}. {item['slot']}** ({item['family']})\n"
-        agent_msg += f"- **Check-In Config:** Denom: **{item['opt_denom']}** | Initial Bet: **${p1_bet:.2f}**\n"
-        agent_msg += f"- **Phase 1 (Spins 1–20):** Probe at **${p1_bet:.2f}** bet on max lines.\n"
-        agent_msg += f"- **Phase 2 (Spins 21–35):** If no feature by spin 20, step down bet to **${p2_bet:.2f}** on max lines.\n"
-        agent_msg += f"- **Phase 3 (Exit/Spike Rule):** Hard exit if cold at spin 35. If feature hits >50x win, lock 80% profit & execute **8 Backup Spins** at **${p2_bet:.2f}**.\n\n"
+        agent_msg += f"- **Check-In Allocation:** **${alloc:.2f}** (Recommended Machine Capital)\n"
+        agent_msg += f"- **Phase 1 (Spins 1–20):** 20 spins @ **${p1:.2f}** bet. (Max allocation: ${20*p1:.2f})\n"
+        agent_msg += f"- **Phase 2 (Spins 21–35):** Step down to **${p2:.2f}** bet. (Max allocation: ${15*p2:.2f})\n"
+        agent_msg += f"- **Phase 3 (Spike/Exit Rule):** Hard exit after 35 cold spins. On hit >50x, lock core profit & execute **8 Backup Spins** @ **${p2:.2f}**.\n\n"
     
-    st.session_state.chat_messages.append({"role": "user", "content": "Suggest the 3 best available slots right now with step-by-step execution plans."})
+    st.session_state.chat_messages.append({"role": "user", "content": "Suggest the 3 best available slots right now with check-in amounts and proportional step-down bets."})
     st.session_state.chat_messages.append({"role": "assistant", "content": agent_msg})
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
-# Quick Action 2: Generates Re-Trigger Evaluation & Forces Focus to Agent Chat Tab
+# Quick Action 2: Generates Re-Trigger Evaluation & Direct Agent View
 if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
     diff = st.session_state.current_bankroll - st.session_state.session_start_bankroll
     target_dist = st.session_state.session_target - st.session_state.current_bankroll
@@ -231,11 +230,11 @@ if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
     user_q = f"Should I repeat/re-trigger on my current machine? Starting Bankroll: ${st.session_state.session_start_bankroll:.2f}, Current Bankroll: ${st.session_state.current_bankroll:.2f}, Target: ${st.session_state.session_target:.2f}."
     
     if diff > 0 and target_dist <= 200:
-        evaluation = f"🎯 **Target Near (${target_dist:.2f} remaining)!**\n\n- **Phase 1:** Reduce bet to $1.25 / $2.50 max lines.\n- **Phase 2:** Execute **5–10 Backup Spins** max.\n- **Phase 3:** Cash out immediately once target is hit or after 10 spins."
+        evaluation = f"🎯 **Target Near (${target_dist:.2f} remaining)!**\n\n- **Check-In Cap:** Allocate $25–$50 max.\n- **Phase 1:** Step down bet size to $1.25 / $2.50.\n- **Phase 2:** Execute **5–10 Backup Spins** max.\n- **Exit Rule:** Lock profit immediately once target is hit."
     elif diff > 300:
-        evaluation = f"🔥 **Big Win Active (+${diff:.2f})!**\n\n- **Phase 1:** Immediately pocket & lock 80% of win.\n- **Phase 2:** Execute **8 Backup Spins** at step-down bet ($2.50).\n- **Phase 3:** If no cluster re-trigger occurs within 8 spins, hard exit."
+        evaluation = f"🔥 **Big Win Active (+${diff:.2f})!**\n\n- **Check-In Cap:** Allocate $50 from profit buffer.\n- **Phase 1:** Lock 80% of win into core balance.\n- **Phase 2:** Execute **8 Backup Spins** at 50% reduced bet.\n- **Exit Rule:** Hard exit if no re-trigger after 8 spins."
     elif diff < -250:
-        evaluation = f"⚠️ **Cold Cycle Detected (-${abs(diff):.2f})!**\n\n- **Phase 1:** Step down bet to $1.00/$1.25 for 15 spins to preserve bankroll.\n- **Phase 2:** If feature triggers, recover loss and exit immediately.\n- **Phase 3:** If still cold after 15 spins, exit to a fresh machine."
+        evaluation = f"⚠️ **Cold Cycle Detected (-${abs(diff):.2f})!**\n\n- **Check-In Cap:** Preserve remaining bankroll.\n- **Phase 1:** Step down bet size to $1.00/$1.25 for 15 spins.\n- **Phase 2:** Hard exit to a fresh slot if no feature hits."
     else:
         evaluation = "✅ **Standard Operational Window.** Continue standard 35-spin multi-phase probe cycle."
         
@@ -250,7 +249,6 @@ if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
 
 st.title("Casino Slot Optimization & Execution Agent")
 
-# Programmatic Tab Selector using Radio Buttons
 selected_tab = st.radio(
     "Navigation Tabs",
     options=TAB_OPTIONS,
@@ -259,7 +257,6 @@ selected_tab = st.radio(
     label_visibility="collapsed"
 )
 
-# Keep Session State Synced with Radio Button Selection
 if selected_tab != st.session_state.active_tab:
     st.session_state.active_tab = selected_tab
 
@@ -270,7 +267,7 @@ st.markdown("---")
 # ------------------------------------------
 if st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board (Feature-RVI Strategy Matrix)")
-    st.caption("30 top-ranked slots with realistic max-line bet configurations.")
+    st.caption("30 top-ranked slots with check-in capital allocations and proportional bet structures.")
     
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     sorted_priority = sorted(available_slots, key=lambda x: x["base_rvi"], reverse=True)
@@ -278,14 +275,13 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
     
     table_data = []
     for rank, item in enumerate(current_display, 1):
-        eval_spins = int(max(35, round(item["base_rvi"] * 4.5)))
         table_data.append({
             "Rank": rank,
             "Slot Family": item["family"],
             "Slot Theme Name": item["slot"],
-            "Recommended Denom": item["opt_denom"],
-            "Optimal Bet ($)": f"${item['opt_bet']:.2f}",
-            "Min Eval Spin Window": eval_spins,
+            "Phase 1 Bet ($)": f"${item['opt_bet']:.2f}",
+            "Phase 2 Bet ($)": f"${item['step_down_bet']:.2f}",
+            "Suggested Check-In ($)": f"${item['checkin_alloc']:.2f}",
             "Volatility Profile": item["volatility"],
             "RVI Score": item["base_rvi"]
         })
@@ -310,7 +306,7 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
 # ------------------------------------------
 elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
     st.subheader("Pre-Planned Per-Slot Execution Cards")
-    st.caption("Cascading Family $\\rightarrow$ Slot Theme selection for instant step-by-step game plans.")
+    st.caption("Cascading Family $\\rightarrow$ Slot Theme selection for step-by-step game plans and check-in amounts.")
     
     col_c1, col_c2 = st.columns(2)
     with col_c1:
@@ -322,32 +318,36 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
     if card_slot:
         slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot), None)
         if slot_data:
+            p1_bet = slot_data['opt_bet']
+            p2_bet = slot_data['step_down_bet']
+            checkin = slot_data['checkin_alloc']
+
             st.markdown("---")
             st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
             
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Check-In Denom", slot_data["opt_denom"])
-            c2.metric("Base Bet Size", f"${slot_data['opt_bet']:.2f}")
-            c3.metric("Min Evaluation Window", "35–40 Spins Floor")
-            c4.metric("Line Win Offset Buffer", "10% – 15%")
+            c1.metric("Suggested Check-In Amount", f"${checkin:.2f}")
+            c2.metric("Phase 1 Bet Size", f"${p1_bet:.2f}")
+            c3.metric("Phase 2 Bet Size", f"${p2_bet:.2f}")
+            c4.metric("Evaluation Window", "35 Spins Total")
             
-            p1_bet = slot_data['opt_bet']
-            p2_bet = 1.25 if p1_bet in [2.50, 3.75] else (2.50 if p1_bet == 5.00 else 1.00)
-
             st.markdown("---")
-            st.markdown("#### 🔄 Step-by-Step Multi-Phase Execution Plan")
+            st.markdown("#### 🔄 Proportional Multi-Phase Execution Plan")
+            
             st.write(f"**Phase 1: Initial Probe (Spins 1 – 20)**")
-            st.write(f"- Set machine to **{slot_data['opt_denom']}** denomination at **${p1_bet:.2f}** bet on max lines.")
-            st.write(f"- Play 20 full spins. Line hits automatically buffer bankroll decay.")
+            st.write(f"- Insert **${checkin:.2f}** check-in capital.")
+            st.write(f"- Set bet to **${p1_bet:.2f}**.")
+            st.write(f"- Play 20 full spins (Max risk: **${20 * p1_bet:.2f}**).")
             
             st.markdown("---")
-            st.write(f"**Phase 2: Tiered Bet Step-Down (Spins 21 – 35 if No Feature)**")
-            st.write(f"- If no feature triggers by spin 20, **step down bet to ${p2_bet:.2f}** on max lines.")
-            st.write(f"- Continue probing for 15 additional spins.")
+            st.write(f"**Phase 2: Proportional Bet Step-Down (Spins 21 – 35 if No Feature)**")
+            st.write(f"- If no feature triggers by spin 20, step down bet to **${p2_bet:.2f}** (Proportional 50% ratio).")
+            st.write(f"- Continue probing for 15 additional spins (Max risk: **${15 * p2_bet:.2f}**).")
+            st.write(f"- *Note:* A feature trigger at ${p2_bet:.2f} still yields enough multiplier weight to offset Phase 1 decay.")
             
             st.markdown("---")
             st.write(f"**Phase 3: Spike, Backup Spin & Exit Rule**")
-            st.write(f"- **Cold Machine:** If no feature by spin 35, hard exit to next priority slot.")
+            st.write(f"- **Cold Machine:** If no feature triggers by spin 35, hard exit to next priority slot.")
             st.write(f"- **Big Win Hit:** Lock 80% core profit immediately.")
             st.write(f"- **Backup Spins:** Execute **8 Backup Spins** at **${p2_bet:.2f}** to test for cluster re-triggers.")
 
@@ -461,21 +461,21 @@ elif st.session_state.active_tab == "📈 Visual Data Analytics":
 # ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
-    st.caption("Chat with the strategy agent in real-time for multi-phase plans, exit evaluations, or backup spin rules.")
+    st.caption("Chat with the strategy agent in real-time for proportional bet plans, check-in amounts, or backup spin rules.")
     
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             
-    if prompt := st.chat_input("Ask a strategy question (e.g. 'Give me a 3-phase plan for Dragon Link Golden Century'):"):
+    if prompt := st.chat_input("Ask a strategy question (e.g. 'How much should I check in for $5 base bet?'):"):
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
             
         reply = f"**Strategy Guidance:** Based on active bankroll **${st.session_state.current_bankroll:.2f}** and target **${st.session_state.session_target:.2f}**:\n\n"
-        reply += "1. **Phase 1 (Initial Probe):** Play 20 spins at base bet level ($2.50 or $5.00) on max lines.\n"
-        reply += "2. **Phase 2 (Step-Down Probe):** If no feature hits by spin 20, step down bet to $1.25 / $2.50 on max lines for 15 additional spins.\n"
-        reply += "3. **Phase 3 (Profit Lock & Backup Spins):** On major payout, lock 80% core profit and execute 8 backup spins at reduced bet before exiting."
+        reply += "1. **Check-In Rule:** On a $5.00 Phase 1 bet, check in with **$137.50** (20 spins @ $5.00 + 15 spins @ $2.50 step-down).\n"
+        reply += "2. **Proportional Step-Down:** Never drop lower than a 50% bet ratio (e.g., $10 $\\rightarrow$ $5, $5 $\\rightarrow$ $2.50) so Phase 2 feature hits remain profitable.\n"
+        reply += "3. **Backup Spins:** Following a major payout, execute 8 backup spins at the Phase 2 bet size to harvest cluster re-triggers before exiting."
             
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
         with st.chat_message("assistant"):
@@ -515,12 +515,16 @@ elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
 elif st.session_state.active_tab == "📖 Documentation & Rules":
     st.subheader("Strategy Engine Rules & Bounding Logic")
     st.markdown("""
-    ### Bounding & Denomination Rules
-    1. **5c Denom ($1.25 Minimum):** Max 25 lines requires $1.25 min bet. Allowed: $1.25, $2.50, $3.75, $5.00, $6.25, $7.50, $10.00.
-    2. **10c Denom ($2.50 Minimum):** Allowed: $2.50, $5.00, $7.50, $10.00.
-    3. **2c Denom (50 lines):** Allowed: $1.00, $2.00, $3.00, $5.00, $10.00. (No $2.50 on 2c).
-    4. **Multi-Phase Execution Strategy:**
-       - **Phase 1 (Probe):** 20 spins at target bet level on max lines.
-       - **Phase 2 (Step-Down):** 15 spins at reduced bet if feature hasn't triggered.
-       - **Phase 3 (Exit/Spike):** Hard exit after 35 cold spins, or execute 8 backup spins to harvest cluster re-triggers after a major hit.
+    ### Strategy & Bet Scaling Rules
+    1. **Check-In Capital Calculation:** Suggested Machine Allocation = $(20 \times \text{Phase 1 Bet}) + (15 \times \text{Phase 2 Bet})$.
+    2. **Proportional Bet Tiering ($\le 50\%$ Step-Down Ratio):**
+       - $\$10.00 \rightarrow \$5.00$
+       - $\$7.50 \rightarrow \$3.75$
+       - $\$5.00 \rightarrow \$2.50$
+       - $\$3.75 \rightarrow \$2.00$
+       - $\$2.50 \rightarrow \$1.25$
+    3. **Multi-Phase Execution Strategy:**
+       - **Phase 1 (Probe):** 20 spins at target bet level.
+       - **Phase 2 (Proportional Step-Down):** 15 spins at step-down bet level if no feature triggers.
+       - **Phase 3 (Spike & Backup Spins):** Hard exit after 35 cold spins. Execute 8 backup spins at Phase 2 bet following any major win ($>50\text{x}$) to test for cluster re-triggers.
     """)
