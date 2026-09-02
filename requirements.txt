@@ -1,7 +1,7 @@
 streamlit
-gspread
 pandas
 plotly
 groq
 python-dotenv
-st-gsheets-connection
+gspread
+st-gsheets-connection>=0.1.0
