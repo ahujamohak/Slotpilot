@@ -7,6 +7,10 @@ from datetime import datetime
 # Set Streamlit Page Layout
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
+# Initialize Active Tab Tracker in Session State
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = "📊 Today's Priority Board"
+
 # ==========================================
 # 1. MASTER SLOT LIST HIERARCHY
 # ==========================================
@@ -63,11 +67,11 @@ SLOT_MASTER_LIST = {
 
 def get_realistic_bet_and_denom(target_bet=None):
     """
-    Enforces realistic casino betting constraints:
-    - 5c denom (25 lines max): $1.25, $2.50, $3.75, $5.00, $6.25, $7.50, $10.00
-    - 10c denom: $2.50, $5.00, $7.50, $10.00 ($1.00 bets routed to 1c/2c)
-    - $1.00 bet: 1c or 2c denom @ max lines
-    - $10.00 bet: Prioritizes $1.00 or $2.00 denom for higher base paytable RTP
+    Strict Casino Betting Rules:
+    - 5c Denom (25 lines max): Minimum bet $1.25. Allowed: $1.25, $2.50, $3.75, $5.00, $6.25, $7.50, $10.00.
+    - 10c Denom: Minimum bet $2.50. Allowed: $2.50, $5.00, $7.50, $10.00 ($1.00 bets routed to 1c/2c).
+    - $1.00 Bet: 1c (50 lines 2x) or 2c (50 lines 1x).
+    - $10.00 Bet: Prioritizes $1.00 or $2.00 denom for higher base paytable RTP.
     """
     valid_configs = [
         {"denom": "1c", "bet": 1.00, "lines": 50, "mult": 2},
@@ -124,7 +128,6 @@ if "current_bankroll" not in st.session_state:
 if "session_target" not in st.session_state:
     st.session_state.session_target = 1800.0
 
-# Initialized Data Entry Logs adhering strictly to your Google Sheet schema
 if "session_logs" not in st.session_state:
     st.session_state.session_logs = pd.DataFrame([
         {
@@ -138,24 +141,12 @@ if "session_logs" not in st.session_state:
             "Win Multiplier": 72.0,
             "Hit Number": 1,
             "Attempt Number": 1
-        },
-        {
-            "Date": "8/28/2026",
-            "Day": "Friday",
-            "Family": "Dragon Link",
-            "Slot": "Golden Century",
-            "Spin of Feature Hit": 18,
-            "Feature Type": "Hold & Spin",
-            "Win Amount": 350.0,
-            "Win Multiplier": 70.0,
-            "Hit Number": 1,
-            "Attempt Number": 1
         }
     ])
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome back! I'm active and tracking your session targets. Ask me for real-time bet adjustments, machine exit advice, or quick recommendations."}
+        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, or backup spin rules during your session."}
     ]
 
 # Helper Functions
@@ -171,7 +162,7 @@ def restore_slot(slot_name):
 # 3. SIDEBAR CONTROLS & LIVE BANKROLL
 # ==========================================
 
-st.sidebar.title("🎰 Real-Time Session Hub")
+st.sidebar.title("🎰 Live Session Hub")
 
 st.sidebar.subheader("Live Bankroll Controls")
 st.session_state.session_start_bankroll = st.sidebar.number_input(
@@ -203,29 +194,44 @@ with col_sb2:
         st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Quick Floor Actions")
+st.sidebar.subheader("Quick Agent Consultations")
 
+# Quick Action 1: Directly prompt the agent and switch to Chat Tab
 if st.sidebar.button("⚡ Suggest 3 Best Available Slots"):
     available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     sorted_avail = sorted(available, key=lambda x: x["base_rvi"], reverse=True)[:3]
     
-    st.sidebar.success("Top 3 Unplayed Recommendations:")
+    agent_msg = "### 🎯 Top 3 Dynamic Slot Recommendations:\n\n"
     for idx, item in enumerate(sorted_avail, 1):
-        st.sidebar.markdown(f"**{idx}. {item['slot']}** ({item['family']})")
-        st.sidebar.caption(f"Denom: {item['opt_denom']} | Bet: ${item['opt_bet']:.2f}")
+        agent_msg += f"**{idx}. {item['slot']}** ({item['family']})\n"
+        agent_msg += f"- **Recommended Config:** Denom: **{item['opt_denom']}** | Bet: **${item['opt_bet']:.2f}**\n"
+        agent_msg += f"- **Strategy:** Perform a 35-spin probe on max lines. RVI Rating: {item['base_rvi']}/10.\n\n"
+    
+    st.session_state.chat_messages.append({"role": "user", "content": "Suggest the 3 best available slots right now based on my current bankroll."})
+    st.session_state.chat_messages.append({"role": "assistant", "content": agent_msg})
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
+    st.rerun()
 
+# Quick Action 2: Directly evaluate repeat/re-trigger in agent chat
 if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
     diff = st.session_state.current_bankroll - st.session_state.session_start_bankroll
     target_dist = st.session_state.session_target - st.session_state.current_bankroll
     
+    user_q = f"Should I repeat/re-trigger on my current machine? Starting Bankroll: ${st.session_state.session_start_bankroll:.2f}, Current Bankroll: ${st.session_state.current_bankroll:.2f}, Target: ${st.session_state.session_target:.2f}."
+    
     if diff > 0 and target_dist <= 200:
-        st.sidebar.info("🎯 **Target Near!** Play 5–10 Backup Spins at a reduced bet ($1.25/$2.50), then exit to lock profit.")
+        evaluation = "🎯 **Target Near ($" + f"{target_dist:.2f}" + " remaining)!**\n- Execute **5–10 Backup Spins** at a reduced bet level ($1.25 or $2.50).\n- **Hard Exit Rule:** Cash out immediately once you hit the target or finish the 10 backup spins."
     elif diff > 300:
-        st.sidebar.warning("🔥 **Big Hit Active!** Execute 8 Backup Spins max. Lock 80% of win.")
+        evaluation = "🔥 **Big Win Active (+ $" + f"{diff:.2f}" + ")!**\n- Lock in 80% of current session profits.\n- Play exactly **8 Backup Spins** max at $2.50 to test for a cluster feature re-trigger."
     elif diff < -250:
-        st.sidebar.error("⚠️ **Cold Cycle.** Step down bet to $1.00/$1.25 for 15 spins to preserve bankroll or Exit.")
+        evaluation = "⚠️ **Cold Cycle Detected (- $" + f"{abs(diff):.2f}" + ")!**\n- Step down bet size to $1.00/$1.25 on max lines for 15 spins to preserve capital, or exit to a fresh machine from your Priority Board."
     else:
-        st.sidebar.success("✅ **Continue Play.** Within safe operational variance.")
+        evaluation = "✅ **Standard Operational Window.** You are within safe session variance. Continue standard 35-spin evaluation cycle."
+        
+    st.session_state.chat_messages.append({"role": "user", "content": user_q})
+    st.session_state.chat_messages.append({"role": "assistant", "content": f"### 📊 Machine Evaluation & Re-Trigger Strategy:\n\n{evaluation}"})
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
+    st.rerun()
 
 # ==========================================
 # 4. MAIN DASHBOARD TABS
@@ -233,7 +239,8 @@ if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
 
 st.title("Casino Slot Optimization & Execution Agent")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+# Define Tab Labels
+tab_labels = [
     "📊 Today's Priority Board", 
     "📋 Pre-Planned Execution Cards", 
     "📝 Live Data Entry",
@@ -241,12 +248,16 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "🤖 Interactive Agent Chat",
     "🧺 Played Basket & Overrides", 
     "📖 Documentation & Rules"
-])
+]
+
+# Create Tabs
+tabs = st.tabs(tab_labels)
+tab_dict = dict(zip(tab_labels, tabs))
 
 # ------------------------------------------
 # TAB 1: TODAY'S PRIORITY BOARD
 # ------------------------------------------
-with tab1:
+with tab_dict["📊 Today's Priority Board"]:
     st.subheader("Today's Priority Board (Feature-RVI Strategy Matrix)")
     st.caption("30 top-ranked slots with realistic max-line bet configurations (e.g., 5c @ $1.25 min, 10c @ $2.50 min, $10 bets on $1.00 Denom).")
     
@@ -286,7 +297,7 @@ with tab1:
 # ------------------------------------------
 # TAB 2: PRE-PLANNED EXECUTION CARDS
 # ------------------------------------------
-with tab2:
+with tab_dict["📋 Pre-Planned Execution Cards"]:
     st.subheader("Pre-Planned Per-Slot Execution Cards")
     st.caption("Cascading Family $\\rightarrow$ Slot Theme selection for instant step-by-step game plans.")
     
@@ -312,7 +323,6 @@ with tab2:
             c4.metric("Line Win Offset Buffer", "10% – 15%")
             
             p1_bet = slot_data['opt_bet']
-            # Determine realistic lower step-down bet
             if p1_bet >= 10.00:
                 p2_bet = 5.00
             elif p1_bet >= 5.00:
@@ -331,7 +341,7 @@ with tab2:
             st.markdown("---")
             st.write(f"**Phase 2: Tiered Bet Step-Down (Spins 21 – 40 if No Feature)**")
             st.write(f"- If no feature triggers by spin 20, **step down bet to ${p2_bet:.2f}**.")
-            st.write(f"- For example, on 5c denom, adjust from $5.00 (4 bet) down to $2.50 (2 bet) or $1.25 (1 bet) while staying on max lines.")
+            st.write(f"- On 5c denom, adjust from $5.00 down to $2.50 or $1.25 while maintaining max lines.")
             
             st.markdown("---")
             st.write(f"**Phase 3: Spike & Backup Spin Rule**")
@@ -345,9 +355,9 @@ with tab2:
                 st.rerun()
 
 # ------------------------------------------
-# TAB 3: LIVE DATA ENTRY (EXACT GOOGLE SHEET SCHEMA)
+# TAB 3: LIVE DATA ENTRY
 # ------------------------------------------
-with tab3:
+with tab_dict["📝 Live Data Entry"]:
     st.subheader("📝 Live Session Data Entry")
     st.caption("Matches your exact Google Sheet schema. Zone is omitted so sheet formulas calculate it automatically.")
     
@@ -402,7 +412,7 @@ with tab3:
 # ------------------------------------------
 # TAB 4: VISUAL DATA ANALYTICS
 # ------------------------------------------
-with tab4:
+with tab_dict["📈 Visual Data Analytics"]:
     st.subheader("📈 Visual Data Analytics & Performance Metrics")
     
     df_analytics = st.session_state.session_logs
@@ -444,11 +454,11 @@ with tab4:
         st.info("No logs available yet for visual analytics.")
 
 # ------------------------------------------
-# TAB 5: INTERACTIVE AGENT CHAT (RESTORED)
+# TAB 5: INTERACTIVE AGENT CHAT
 # ------------------------------------------
-with tab5:
+with tab_dict["🤖 Interactive Agent Chat"]:
     st.subheader("🤖 Interactive AI Strategy Partner")
-    st.caption("Chat with the strategy agent in real-time to adjust session goals, check backup spin counts, or evaluate current slot heat.")
+    st.caption("Chat with the strategy agent in real-time to adjust session goals, evaluate machine heat, or check backup spin counts.")
     
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
@@ -459,15 +469,14 @@ with tab5:
         with st.chat_message("user"):
             st.markdown(prompt)
             
-        # Agent Reasoning Simulation
         reply = f"**Strategy Guidance:** Based on your current active bankroll of **${st.session_state.current_bankroll:.2f}** and target of **${st.session_state.session_target:.2f}**:\n\n"
         if "won" in prompt.lower() or "hit" in prompt.lower() or "profit" in prompt.lower():
-            reply += "1. **Lock Core Profit:** Immediately preserve 70–80% of the recent win towards today's target.\n"
+            reply += "1. **Lock Core Profit:** Preserve 70–80% of the recent win towards today's target.\n"
             reply += "2. **Backup Spins:** Execute exactly **8 Backup Spins** at a reduced bet level (e.g., step down from $5.00 to $2.50 or $1.25).\n"
-            reply += "3. **Hard Exit Rule:** If no cluster re-trigger occurs within those 8 spins, walk away and move to the next best unplayed slot on your Priority Board."
+            reply += "3. **Hard Exit Rule:** If no cluster re-trigger occurs within those 8 spins, walk away to the next top unplayed slot on your Priority Board."
         else:
-            reply += "1. **Evaluation Window:** Ensure you have completed at least 35–40 spins on the machine to account for multi-line volatility.\n"
-            reply += "2. **Bet Tiering:** If cold after 20 spins, step down to a lower bet level on max lines rather than abandoning the machine immediately.\n"
+            reply += "1. **Evaluation Window:** Complete at least 35–40 spins on the machine to evaluate multi-line volatility.\n"
+            reply += "2. **Bet Tiering:** If cold after 20 spins, step down to a lower bet level on max lines rather than abandoning immediately.\n"
             reply += "3. **Next Machine:** Use the sidebar quick button to pick the next top unplayed slot from your master pool."
             
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
@@ -477,7 +486,7 @@ with tab5:
 # ------------------------------------------
 # TAB 6: PLAYED BASKET & OVERRIDES
 # ------------------------------------------
-with tab6:
+with tab_dict["🧺 Played Basket & Overrides"]:
     st.subheader("Daily Played Basket & Slot Overrides")
     st.caption("Slots played in this session are excluded from recommendations. Click 'Restore' to bring any machine back into your queue.")
     
@@ -505,7 +514,7 @@ with tab6:
 # ------------------------------------------
 # TAB 7: DOCUMENTATION & RULES
 # ------------------------------------------
-with tab7:
+with tab_dict["📖 Documentation & Rules"]:
     st.subheader("Strategy Engine Rules & Bounding Logic")
     st.markdown("""
     ### Bounding & Denomination Rules
