@@ -2,14 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import plotly.graph_objects as go
-from streamlit_gsheets import GSheetsConnection
+from datetime import datetime
 
 # Set Streamlit Page Layout
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
 # ==========================================
-# 1. SLOT MASTER LIST HIERARCHY
+# 1. MASTER SLOT LIST HIERARCHY
 # ==========================================
 
 SLOT_MASTER_LIST = {
@@ -58,23 +57,60 @@ SLOT_MASTER_LIST = {
     "Wild Rumble": ["Shen Shan"]
 }
 
-# Generate Initial Priority Dataset from Master List
+# ==========================================
+# 2. REALISTIC DENOM & BET ASSIGNMENT LOGIC
+# ==========================================
+
+def get_realistic_bet_and_denom(target_bet=None):
+    """
+    Enforces realistic casino betting constraints:
+    - 5c denom (25 lines max): $1.25, $2.50, $3.75, $5.00, $6.25, $7.50, $10.00
+    - 10c denom: $2.50, $5.00, $7.50, $10.00 ($1.00 bets routed to 1c/2c)
+    - $1.00 bet: 1c or 2c denom @ max lines
+    - $10.00 bet: Prioritizes $1.00 or $2.00 denom for higher base paytable RTP
+    """
+    valid_configs = [
+        {"denom": "1c", "bet": 1.00, "lines": 50, "mult": 2},
+        {"denom": "2c", "bet": 1.00, "lines": 50, "mult": 1},
+        {"denom": "5c", "bet": 1.25, "lines": 25, "mult": 1},
+        {"denom": "2c", "bet": 2.00, "lines": 50, "mult": 2},
+        {"denom": "5c", "bet": 2.50, "lines": 25, "mult": 2},
+        {"denom": "10c", "bet": 2.50, "lines": 25, "mult": 1},
+        {"denom": "2c", "bet": 3.00, "lines": 50, "mult": 3},
+        {"denom": "5c", "bet": 3.75, "lines": 25, "mult": 3},
+        {"denom": "5c", "bet": 5.00, "lines": 25, "mult": 4},
+        {"denom": "10c", "bet": 5.00, "lines": 25, "mult": 2},
+        {"denom": "5c", "bet": 6.25, "lines": 25, "mult": 5},
+        {"denom": "5c", "bet": 7.50, "lines": 25, "mult": 6},
+        {"denom": "10c", "bet": 7.50, "lines": 25, "mult": 3},
+        {"denom": "$1", "bet": 10.00, "lines": 10, "mult": 1},
+        {"denom": "10c", "bet": 10.00, "lines": 25, "mult": 4},
+        {"denom": "5c", "bet": 10.00, "lines": 25, "mult": 8}
+    ]
+    
+    if target_bet is not None:
+        matches = [c for c in valid_configs if c["bet"] == target_bet]
+        if matches:
+            return np.random.choice(matches)
+            
+    return np.random.choice(valid_configs)
+
 def build_priority_dataset():
     records = []
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
+            config = get_realistic_bet_and_denom()
             records.append({
                 "family": fam,
                 "slot": slot,
                 "volatility": np.random.choice(["Med", "Med-High", "High"]),
                 "base_rvi": round(float(np.random.uniform(7.5, 9.5)), 2),
-                "min_denom": np.random.choice(["1c", "2c", "5c"]),
-                "opt_denom": np.random.choice(["2c", "5c", "10c"]),
-                "opt_bet": float(np.random.choice([1.00, 2.50, 5.00, 10.00]))
+                "opt_denom": config["denom"],
+                "opt_bet": config["bet"]
             })
     return records
 
-# Initialize Session States
+# Initialize Session State Variables
 if "slots_db" not in st.session_state:
     st.session_state.slots_db = build_priority_dataset()
 if "played_basket" not in st.session_state:
@@ -88,14 +124,39 @@ if "current_bankroll" not in st.session_state:
 if "session_target" not in st.session_state:
     st.session_state.session_target = 1800.0
 
-# Mock Live Session Logs Store (Feeds Visual Data Analytics & GS Sync)
+# Initialized Data Entry Logs adhering strictly to your Google Sheet schema
 if "session_logs" not in st.session_state:
     st.session_state.session_logs = pd.DataFrame([
-        {"Timestamp": "2026-09-01 14:10", "Family": "Lightning Link", "Slot": "Moon Race", "Denom": "5c", "Bet": 5.00, "Spins": 40, "Feature_Triggered": "Yes", "CheckIn_Credits": 300, "CheckOut_Credits": 650, "Net_Profit": 350},
-        {"Timestamp": "2026-09-01 15:00", "Family": "Dragon Link", "Slot": "Panda Magic", "Denom": "10c", "Bet": 10.00, "Spins": 35, "Feature_Triggered": "No", "CheckIn_Credits": 500, "CheckOut_Credits": 220, "Net_Profit": -280},
-        {"Timestamp": "2026-09-02 18:30", "Family": "Bull Blitz", "Slot": "Maximus Money", "Denom": "5c", "Bet": 5.00, "Spins": 45, "Feature_Triggered": "Yes", "CheckIn_Credits": 400, "CheckOut_Credits": 820, "Net_Profit": 420},
-        {"Timestamp": "2026-09-02 19:45", "Family": "Dollar Storm", "Slot": "Caribbean Gold", "Denom": "2c", "Bet": 2.50, "Spins": 38, "Feature_Triggered": "No", "CheckIn_Credits": 250, "CheckOut_Credits": 180, "Net_Profit": -70},
+        {
+            "Date": "8/28/2026",
+            "Day": "Friday",
+            "Family": "Cash Horns",
+            "Slot": "Cleopatra’s Kingdom",
+            "Spin of Feature Hit": 32,
+            "Feature Type": "Free Spins",
+            "Win Amount": 180.0,
+            "Win Multiplier": 72.0,
+            "Hit Number": 1,
+            "Attempt Number": 1
+        },
+        {
+            "Date": "8/28/2026",
+            "Day": "Friday",
+            "Family": "Dragon Link",
+            "Slot": "Golden Century",
+            "Spin of Feature Hit": 18,
+            "Feature Type": "Hold & Spin",
+            "Win Amount": 350.0,
+            "Win Multiplier": 70.0,
+            "Hit Number": 1,
+            "Attempt Number": 1
+        }
     ])
+
+if "chat_messages" not in st.session_state:
+    st.session_state.chat_messages = [
+        {"role": "assistant", "content": "Welcome back! I'm active and tracking your session targets. Ask me for real-time bet adjustments, machine exit advice, or quick recommendations."}
+    ]
 
 # Helper Functions
 def mark_slot_played(slot_name):
@@ -107,12 +168,12 @@ def restore_slot(slot_name):
         st.session_state.played_basket.remove(slot_name)
 
 # ==========================================
-# 2. SIDEBAR CONTROLS & LIVE BANKROLL
+# 3. SIDEBAR CONTROLS & LIVE BANKROLL
 # ==========================================
 
 st.sidebar.title("🎰 Real-Time Session Hub")
 
-st.sidebar.subheader("Live Bankroll Controls (Restored)")
+st.sidebar.subheader("Live Bankroll Controls")
 st.session_state.session_start_bankroll = st.sidebar.number_input(
     "Today's Starting Bankroll ($)", 
     value=float(st.session_state.session_start_bankroll), 
@@ -131,7 +192,6 @@ st.session_state.session_target = st.sidebar.number_input(
     step=100.0
 )
 
-# Quick Bankroll Adjustment Buttons
 col_sb1, col_sb2 = st.sidebar.columns(2)
 with col_sb1:
     if st.button("➕ $50 Win"):
@@ -143,7 +203,7 @@ with col_sb2:
         st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Quick Decision Buttons")
+st.sidebar.subheader("Quick Floor Actions")
 
 if st.sidebar.button("⚡ Suggest 3 Best Available Slots"):
     available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
@@ -154,30 +214,31 @@ if st.sidebar.button("⚡ Suggest 3 Best Available Slots"):
         st.sidebar.markdown(f"**{idx}. {item['slot']}** ({item['family']})")
         st.sidebar.caption(f"Denom: {item['opt_denom']} | Bet: ${item['opt_bet']:.2f}")
 
-if st.sidebar.button("❓ Should I Repeat on Current Slot?"):
+if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
     diff = st.session_state.current_bankroll - st.session_state.session_start_bankroll
     target_dist = st.session_state.session_target - st.session_state.current_bankroll
     
     if diff > 0 and target_dist <= 200:
-        st.sidebar.info("🎯 **Target Near!** Execute 5–10 Backup Spins at $1.00–$2.50 bet, then exit to lock profit.")
+        st.sidebar.info("🎯 **Target Near!** Play 5–10 Backup Spins at a reduced bet ($1.25/$2.50), then exit to lock profit.")
     elif diff > 300:
-        st.sidebar.warning("🔥 **Big Hit Active!** Lock 80% of win. Execute 8 Backup Spins max.")
+        st.sidebar.warning("🔥 **Big Hit Active!** Execute 8 Backup Spins max. Lock 80% of win.")
     elif diff < -250:
-        st.sidebar.error("⚠️ **Cold Cycle.** Step bet down to $1.00 for 15 spins to preserve bankroll or Exit.")
+        st.sidebar.error("⚠️ **Cold Cycle.** Step down bet to $1.00/$1.25 for 15 spins to preserve bankroll or Exit.")
     else:
-        st.sidebar.success("✅ **Continue Play.** Within safe operational variance. Maintain standard tier plan.")
+        st.sidebar.success("✅ **Continue Play.** Within safe operational variance.")
 
 # ==========================================
-# 3. MAIN DASHBOARD TABS
+# 4. MAIN DASHBOARD TABS
 # ==========================================
 
 st.title("Casino Slot Optimization & Execution Agent")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Today's Priority Board", 
     "📋 Pre-Planned Execution Cards", 
-    "📝 Live Data Entry (Restored)",
-    "📈 Visual Data Analytics (Restored)",
+    "📝 Live Data Entry",
+    "📈 Visual Data Analytics",
+    "🤖 Interactive Agent Chat",
     "🧺 Played Basket & Overrides", 
     "📖 Documentation & Rules"
 ])
@@ -187,7 +248,7 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # ------------------------------------------
 with tab1:
     st.subheader("Today's Priority Board (Feature-RVI Strategy Matrix)")
-    st.caption("30 top-ranked slot configurations pre-sorted by RVI. Bounded bet limits ($1–$10), 35-spin minimum floor, 10–15% line win buffer.")
+    st.caption("30 top-ranked slots with realistic max-line bet configurations (e.g., 5c @ $1.25 min, 10c @ $2.50 min, $10 bets on $1.00 Denom).")
     
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     sorted_priority = sorted(available_slots, key=lambda x: x["base_rvi"], reverse=True)
@@ -217,7 +278,7 @@ with tab1:
                 st.session_state.display_limit += 15
                 st.rerun()
         else:
-            st.info("All dataset candidates loaded.")
+            st.info("All candidates loaded.")
             
     with col_b:
         st.write(f"Showing **{len(current_display)}** of **{len(sorted_priority)}** unplayed candidates.")
@@ -227,16 +288,21 @@ with tab1:
 # ------------------------------------------
 with tab2:
     st.subheader("Pre-Planned Per-Slot Execution Cards")
-    st.caption("Step-by-step game plans prepared in advance to prevent live token waste and agent latency.")
+    st.caption("Cascading Family $\\rightarrow$ Slot Theme selection for instant step-by-step game plans.")
     
-    selected_card_slot = st.selectbox(
-        "Select Slot to View Execution Blueprint:", 
-        options=[s["slot"] for s in current_display] if current_display else ["None Available"]
-    )
-    
-    if selected_card_slot != "None Available":
-        slot_data = next((s for s in current_display if s["slot"] == selected_card_slot), None)
+    col_c1, col_c2 = st.columns(2)
+    with col_c1:
+        card_family = st.selectbox("1. Select Slot Family:", options=list(SLOT_MASTER_LIST.keys()), key="card_fam_select")
+    with col_c2:
+        available_card_slots = [s["slot"] for s in current_display if s["family"] == card_family]
+        if not available_card_slots:
+            available_card_slots = SLOT_MASTER_LIST[card_family]
+        card_slot = st.selectbox("2. Select Slot Theme:", options=available_card_slots, key="card_slot_select")
+
+    if card_slot:
+        slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot), None)
         if slot_data:
+            st.markdown("---")
             st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
             
             c1, c2, c3, c4 = st.columns(4)
@@ -245,27 +311,32 @@ with tab2:
             c3.metric("Min Evaluation Window", "35–40 Spins Floor")
             c4.metric("Line Win Offset Buffer", "10% – 15%")
             
+            p1_bet = slot_data['opt_bet']
+            # Determine realistic lower step-down bet
+            if p1_bet >= 10.00:
+                p2_bet = 5.00
+            elif p1_bet >= 5.00:
+                p2_bet = 2.50
+            elif p1_bet >= 2.50:
+                p2_bet = 1.25
+            else:
+                p2_bet = 1.00
+
             st.markdown("---")
             st.markdown("#### 🔄 Step-by-Step Execution Plan")
-            
-            p1_bet = slot_data['opt_bet']
-            p2_bet = max(1.00, round(p1_bet / 2.0, 2))
-            if p2_bet not in [1.00, 2.50, 5.00, 10.00]:
-                p2_bet = 2.50 if p1_bet >= 5.00 else 1.00
-
             st.write(f"**Phase 1: Initial Probe (Spins 1 – 20)**")
             st.write(f"- Set machine to **{slot_data['opt_denom']}** denomination at **${p1_bet:.2f}** bet.")
-            st.write(f"- Play 20 full spins. Line hit returns (10-15% buffer) continuously offset spin decay.")
+            st.write(f"- Play 20 full spins. Line hits automatically buffer bankroll decay.")
             
             st.markdown("---")
             st.write(f"**Phase 2: Tiered Bet Step-Down (Spins 21 – 40 if No Feature)**")
-            st.write(f"- If no feature triggers by spin 20, **step down bet to ${p2_bet:.2f}** (adjust credits or denom to preserve max lines).")
-            st.write(f"- Maintain spin volume to hunt feature without burning bankroll prematurely.")
+            st.write(f"- If no feature triggers by spin 20, **step down bet to ${p2_bet:.2f}**.")
+            st.write(f"- For example, on 5c denom, adjust from $5.00 (4 bet) down to $2.50 (2 bet) or $1.25 (1 bet) while staying on max lines.")
             
             st.markdown("---")
-            st.write(f"**Phase 3: Spike & Backup Spin Rule (If Feature Hits / Profit Spikes)**")
-            st.write(f"- **Credit Spike Example ($300 $\\rightarrow$ $1,050):** Lock $1,000 core profit toward daily target.")
-            st.write(f"- **Backup Spins:** Execute **8 Backup Spins** at **${p2_bet:.2f}** bet using the $50 house buffer to hunt cluster features. Exit immediately after 8 spins if no re-trigger.")
+            st.write(f"**Phase 3: Spike & Backup Spin Rule**")
+            st.write(f"- **Big Win Example ($300 $\\rightarrow$ $1,050):** Lock $1,000 core profit.")
+            st.write(f"- **Backup Spins:** Execute **8 Backup Spins** at **${p2_bet:.2f}** using the remaining $50 buffer to test for cluster re-triggers.")
 
             st.markdown("---")
             if st.button(f"✅ Mark '{slot_data['slot']}' as Played"):
@@ -274,132 +345,141 @@ with tab2:
                 st.rerun()
 
 # ------------------------------------------
-# TAB 3: LIVE DATA ENTRY (RESTORED IN FULL)
+# TAB 3: LIVE DATA ENTRY (EXACT GOOGLE SHEET SCHEMA)
 # ------------------------------------------
 with tab3:
     st.subheader("📝 Live Session Data Entry")
-    st.caption("Log live play results directly. Saved entries update dataset metrics and feed real-time analytics.")
+    st.caption("Matches your exact Google Sheet schema. Zone is omitted so sheet formulas calculate it automatically.")
     
-    with st.form("live_entry_form", clear_on_submit=True):
-        col_de1, col_de2 = st.columns(2)
+    with st.form("exact_gs_entry_form", clear_on_submit=True):
+        col_e1, col_e2, col_e3 = st.columns(3)
         
-        with col_de1:
-            # Hierarchical Dynamic Selection (Family -> Slot Name)
-            entry_family = st.selectbox("1. Select Slot Family:", list(SLOT_MASTER_LIST.keys()))
-            entry_slot_options = SLOT_MASTER_LIST[entry_family]
-            entry_slot = st.selectbox("2. Select Slot Name:", entry_slot_options)
+        with col_e1:
+            default_date = datetime.now().strftime("%m/%d/%Y")
+            default_day = datetime.now().strftime("%A")
             
-            entry_denom = st.selectbox("Denomination Played:", ["1c", "2c", "5c", "10c", "25c", "$1"])
-            entry_bet = st.number_input("Bet Multiplier Amount ($):", min_value=1.00, max_value=10.00, value=2.50, step=0.50)
+            entry_date = st.text_input("Date (e.g. 8/28/2026):", value=default_date)
+            entry_day = st.text_input("Day (e.g. Friday):", value=default_day)
+            
+            entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()))
+            entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family])
 
-        with col_de2:
-            entry_spins = st.number_input("Total Spins Completed:", min_value=1, max_value=200, value=40)
-            entry_feature = st.selectbox("Feature Triggered?", ["Yes", "No"])
-            entry_checkin = st.number_input("Check-In Credits ($):", min_value=0.0, value=300.0, step=25.0)
-            entry_checkout = st.number_input("Check-Out Credits ($):", min_value=0.0, value=450.0, step=25.0)
+        with col_e2:
+            entry_spin_hit = st.number_input("Spin of Feature Hit:", min_value=1, max_value=500, value=32)
+            entry_feat_type = st.selectbox("Feature Type:", ["Free Spins", "Hold & Spin", "Pick Bonus", "Progressive / Jackpot", "Cluster Win"])
+            entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=150.0, step=10.0)
 
-        submit_entry = st.form_submit_button("💾 Save Session Entry to Google Sheets & Local Analytics")
+        with col_e3:
+            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=50.0, step=5.0)
+            entry_hit_num = st.number_input("Hit Number:", min_value=1, max_value=20, value=1)
+            entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
+
+        submit_gs_entry = st.form_submit_button("💾 Save Session Record to Dataset")
         
-        if submit_entry:
-            net_p = entry_checkout - entry_checkin
-            new_log = {
-                "Timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+        if submit_gs_entry:
+            new_gs_log = {
+                "Date": entry_date,
+                "Day": entry_day,
                 "Family": entry_family,
                 "Slot": entry_slot,
-                "Denom": entry_denom,
-                "Bet": entry_bet,
-                "Spins": entry_spins,
-                "Feature_Triggered": entry_feature,
-                "CheckIn_Credits": entry_checkin,
-                "CheckOut_Credits": entry_checkout,
-                "Net_Profit": net_p
+                "Spin of Feature Hit": entry_spin_hit,
+                "Feature Type": entry_feat_type,
+                "Win Amount": entry_win_amt,
+                "Win Multiplier": entry_multiplier,
+                "Hit Number": entry_hit_num,
+                "Attempt Number": entry_attempt_num
             }
             
-            # Append to session state dataframe
-            st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_log])], ignore_index=True)
-            
-            # Auto-update active bankroll
-            st.session_state.current_bankroll += net_p
-            
-            # Auto-mark played
+            st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_gs_log])], ignore_index=True)
             mark_slot_played(entry_slot)
             
-            st.success(f"Successfully logged session for '{entry_slot}'! Net Profit: ${net_p:+.2f}. Updated Active Bankroll: ${st.session_state.current_bankroll:.2f}")
+            st.success(f"Logged entry for '{entry_slot}'! Win Amount: ${entry_win_amt:.2f} ({entry_multiplier}x).")
 
     st.markdown("---")
-    st.markdown("#### 📋 Recent Live Logged Sessions")
+    st.markdown("#### 📋 Current Logged Entries")
     st.dataframe(st.session_state.session_logs, use_container_width=True)
 
 # ------------------------------------------
-# TAB 4: VISUAL DATA ANALYTICS (RESTORED IN FULL)
+# TAB 4: VISUAL DATA ANALYTICS
 # ------------------------------------------
 with tab4:
-    st.subheader("📈 Visual Data Analytics & Machine Hit Rates")
-    st.caption("Interactive performance trends, family feature hit rates, and profit distribution graphs.")
+    st.subheader("📈 Visual Data Analytics & Performance Metrics")
     
-    df_logs = st.session_state.session_logs
-    
-    if not df_logs.empty:
-        # High level metrics
-        m1, m2, m3, m4 = st.columns(4)
-        total_profit = df_logs["Net_Profit"].sum()
-        total_sessions = len(df_logs)
-        feat_hits = len(df_logs[df_logs["Feature_Triggered"] == "Yes"])
-        hit_rate = (feat_hits / total_sessions * 100) if total_sessions > 0 else 0
+    df_analytics = st.session_state.session_logs
+    if not df_analytics.empty:
+        m1, m2, m3 = st.columns(3)
+        total_wins = df_analytics["Win Amount"].sum() if "Win Amount" in df_analytics.columns else 0
+        avg_mult = df_analytics["Win Multiplier"].mean() if "Win Multiplier" in df_analytics.columns else 0
+        total_entries = len(df_analytics)
         
-        m1.metric("Total Net Profit / Loss", f"${total_profit:+.2f}")
-        m2.metric("Total Recorded Sessions", total_sessions)
-        m3.metric("Feature Triggers", f"{feat_hits} / {total_sessions}")
-        m4.metric("Overall Feature Hit Rate", f"{hit_rate:.1f}%")
+        m1.metric("Total Logged Win Amount", f"${total_wins:,.2f}")
+        m2.metric("Average Win Multiplier", f"{avg_mult:.1f}x")
+        m3.metric("Total Feature Entries Recorded", total_entries)
         
         st.markdown("---")
-        
         col_g1, col_g2 = st.columns(2)
         
         with col_g1:
-            st.markdown("##### 💵 Net Profit by Slot Family")
-            fig_fam = px.bar(
-                df_logs, 
-                x="Family", 
-                y="Net_Profit", 
-                color="Feature_Triggered", 
-                title="Profit / Loss per Family",
-                text_auto=True
-            )
-            st.plotly_chart(fig_fam, use_container_width=True)
+            if "Family" in df_analytics.columns and "Win Amount" in df_analytics.columns:
+                fig_fam = px.bar(
+                    df_analytics, 
+                    x="Family", 
+                    y="Win Amount", 
+                    color="Feature Type" if "Feature Type" in df_analytics.columns else None,
+                    title="Total Win Amount by Slot Family ($)",
+                    text_auto=True
+                )
+                st.plotly_chart(fig_fam, use_container_width=True)
 
         with col_g2:
-            st.markdown("##### 🎯 Feature Hit Rate by Slot Theme")
-            hit_df = df_logs.groupby("Slot")["Feature_Triggered"].apply(lambda x: (x == "Yes").mean() * 100).reset_index()
-            hit_df.columns = ["Slot", "Hit_Rate_Pct"]
-            fig_hit = px.pie(
-                hit_df, 
-                names="Slot", 
-                values="Hit_Rate_Pct", 
-                title="Feature Hit Concentration (%)",
-                hole=0.4
-            )
-            st.plotly_chart(fig_hit, use_container_width=True)
-
-        st.markdown("##### 📉 Cumulative Bankroll Progression Trend")
-        df_logs["Cumulative_Profit"] = df_logs["Net_Profit"].cumsum()
-        fig_line = px.line(
-            df_logs, 
-            x="Timestamp", 
-            y="Cumulative_Profit", 
-            markers=True, 
-            title="Session Profit Progression Over Time ($)"
-        )
-        st.plotly_chart(fig_line, use_container_width=True)
+            if "Spin of Feature Hit" in df_analytics.columns:
+                fig_hist = px.histogram(
+                    df_analytics, 
+                    x="Spin of Feature Hit", 
+                    nbins=15, 
+                    title="Distribution of Spin Window for Feature Hits"
+                )
+                st.plotly_chart(fig_hist, use_container_width=True)
     else:
-        st.info("No session logs recorded yet. Use the Data Entry tab to log play results.")
+        st.info("No logs available yet for visual analytics.")
 
 # ------------------------------------------
-# TAB 5: PLAYED BASKET & OVERRIDES
+# TAB 5: INTERACTIVE AGENT CHAT (RESTORED)
 # ------------------------------------------
 with tab5:
+    st.subheader("🤖 Interactive AI Strategy Partner")
+    st.caption("Chat with the strategy agent in real-time to adjust session goals, check backup spin counts, or evaluate current slot heat.")
+    
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    if prompt := st.chat_input("Ask a strategy question (e.g. 'I just won $400 on $5 bet, should I execute backup spins?'):"):
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        # Agent Reasoning Simulation
+        reply = f"**Strategy Guidance:** Based on your current active bankroll of **${st.session_state.current_bankroll:.2f}** and target of **${st.session_state.session_target:.2f}**:\n\n"
+        if "won" in prompt.lower() or "hit" in prompt.lower() or "profit" in prompt.lower():
+            reply += "1. **Lock Core Profit:** Immediately preserve 70–80% of the recent win towards today's target.\n"
+            reply += "2. **Backup Spins:** Execute exactly **8 Backup Spins** at a reduced bet level (e.g., step down from $5.00 to $2.50 or $1.25).\n"
+            reply += "3. **Hard Exit Rule:** If no cluster re-trigger occurs within those 8 spins, walk away and move to the next best unplayed slot on your Priority Board."
+        else:
+            reply += "1. **Evaluation Window:** Ensure you have completed at least 35–40 spins on the machine to account for multi-line volatility.\n"
+            reply += "2. **Bet Tiering:** If cold after 20 spins, step down to a lower bet level on max lines rather than abandoning the machine immediately.\n"
+            reply += "3. **Next Machine:** Use the sidebar quick button to pick the next top unplayed slot from your master pool."
+            
+        st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+
+# ------------------------------------------
+# TAB 6: PLAYED BASKET & OVERRIDES
+# ------------------------------------------
+with tab6:
     st.subheader("Daily Played Basket & Slot Overrides")
-    st.caption("Slots played in this active session are automatically moved to this basket to ensure novel suggestions.")
+    st.caption("Slots played in this session are excluded from recommendations. Click 'Restore' to bring any machine back into your queue.")
     
     if st.session_state.played_basket:
         played_data = []
@@ -413,27 +493,25 @@ with tab5:
         
         st.dataframe(pd.DataFrame(played_data), use_container_width=True)
         
-        st.markdown("#### 🔓 Restore Slot to Active Pool")
+        st.markdown("#### 🔓 Restore Slot to Active Recommendations")
         restore_target = st.selectbox("Select Slot to Re-Enable:", options=st.session_state.played_basket)
         if st.button("Unlock Selected Slot"):
             restore_slot(restore_target)
             st.success(f"Restored '{restore_target}' back to priority recommendations!")
             st.rerun()
     else:
-        st.info("No slots have been played yet in this session.")
+        st.info("No slots have been played yet in this active session.")
 
 # ------------------------------------------
-# TAB 6: DOCUMENTATION & RULES
+# TAB 7: DOCUMENTATION & RULES
 # ------------------------------------------
-with tab6:
-    st.subheader("Updated Strategy Rules & Architecture")
+with tab7:
+    st.subheader("Strategy Engine Rules & Bounding Logic")
     st.markdown("""
-    ### Core Operating Rules
-    1. **Hierarchical Selection (Family $\\rightarrow$ Slot):** Slot Family selection dynamically filters available slot names from your exact Master List structure.
-    2. **Line-Hit Offset Model:** Dead spins are calculated as pure $0 payouts. Base line hits (10%–15% default return) extend spin allowance naturally.
-    3. **Pre-Planned Blueprint Cards:** Strategy cards contain complete step-down plans, initial check-in parameters, and backup spin counts to avoid live token/agent latency.
-    4. **Softened Evaluation Limits:** Ultra-short evaluation limits (e.g., 12 spins) are disabled. All candidates operate on a **35–40 spin floor** to accommodate modern volatility.
-    5. **Bet Bounds ($1.00 – $10.00):** Recommendations strictly cap max bet at $10.00 and incorporate $1.00, $2.50, and $5.00 steps for spin volume padding.
-    6. **Backup Spin Rule:** Upon hitting a significant profit spike, execute 5–10 backup spins at reduced/equal bets to hunt cluster features before locking profit and exiting.
-    7. **Google Sheets Sync:** Live entries logged in Tab 3 automatically update local analytics and feed your remote Google Sheet spreadsheet.
+    ### Bounding & Denomination Rules
+    1. **5c Denom ($1.25 Minimum):** Max 25 lines requires $1.25 min bet at 1x multiplier. Allowed bets: $1.25, $2.50, $3.75, $5.00, $6.25, $7.50, $10.00.
+    2. **10c Denom ($2.50 Minimum):** $1.00 bets are avoided on 10c and routed to 1c/2c denoms for better line coverage and higher base RTP. Allowed 10c bets: $2.50, $5.00, $7.50, $10.00.
+    3. **$10 Maximum Bets:** $10.00 bets prioritize $1.00 Denom (or $2.00 where supported) to take advantage of higher venue paytables.
+    4. **Google Sheet Schema Sync:** Data entry fields record Date, Day, Family, Slot, Spin of Feature Hit, Feature Type, Win Amount, Win Multiplier, Hit Number, and Attempt Number. Zone is auto-calculated by Google Sheet formulas.
+    5. **Backup Spins:** Following a major payout, execute 8 backup spins at a reduced bet to harvest cluster features before exiting.
     """)
