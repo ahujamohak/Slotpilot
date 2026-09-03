@@ -599,28 +599,24 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
         with st.expander("🔀 Active Machine Evaluation (Pivot vs. Stay)", expanded=True):
             st.markdown("Enter details for the machine you are currently playing:")
             
-            # Interactive Cascading Dropdowns Placed Outside Form Boundary for Instant Reactivity
+            # Cascading Slot Family and Slot Theme Dropdowns
             piv_col1, piv_col2 = st.columns(2)
             with piv_col1:
                 curr_fam = st.selectbox("Current Slot Family:", list(SLOT_MASTER_LIST.keys()), key="piv_fam_select")
             with piv_col2:
                 curr_slot = st.selectbox("Current Slot Theme:", SLOT_MASTER_LIST[curr_fam], key="piv_slot_select")
                 
-            # Form Encapsulation for Numerical Inputs & Submit Trigger
-            with st.form("pivot_num_eval_form"):
-                piv_num_col1, piv_num_col2 = st.columns(2)
+            piv_num_col1, piv_num_col2 = st.columns(2)
+            with piv_num_col1:
+                curr_bet = st.number_input("Current Bet Size ($):", min_value=1.00, value=2.50, step=0.25, key="piv_bet_input")
+                spins_done = st.number_input("Spins Completed So Far:", min_value=1, max_value=100, value=15, key="piv_spins_input")
                 
-                with piv_num_col1:
-                    curr_bet = st.number_input("Current Bet Size ($):", min_value=1.00, value=2.50, step=0.25, key="piv_bet_input")
-                    spins_done = st.number_input("Spins Completed So Far:", min_value=1, max_value=100, value=15, key="piv_spins_input")
-                    
-                with piv_num_col2:
-                    total_return = st.number_input("Total Returns / Wins ($):", min_value=0.0, value=0.0, step=5.0, key="piv_ret_input")
-                    active_teaser = st.checkbox("Active Orbs/Scatter Teasers Present?", key="piv_teaser_input")
+            with piv_num_col2:
+                total_return = st.number_input("Total Returns / Wins ($):", min_value=0.0, value=0.0, step=5.0, key="piv_ret_input")
+                active_teaser = st.checkbox("Active Orbs/Scatter Teasers Present?", key="piv_teaser_input")
 
-                submit_eval = st.form_submit_button("⚡ Evaluate Pivot Decision")
-
-            if submit_eval:
+            # Standard Direct Execution Button without Form Boundary
+            if st.button("⚡ Evaluate Pivot Decision", type="primary", use_container_width=True):
                 st.session_state.show_pivot_form = False
                 st.session_state.active_tab = "🤖 Interactive Agent Chat"
                 
