@@ -31,6 +31,7 @@ def reset_all_state():
     st.session_state.current_bankroll = 1000.0
     st.session_state.session_target = 1800.0
     st.session_state.active_tab = "📊 Today's Priority Board"
+    st.session_state.show_pivot_form = False
     st.session_state.chat_messages = [
         {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, stop-loss checks, or machine pivot commands."}
     ]
@@ -66,6 +67,9 @@ if "active_tab" not in st.session_state:
 
 if "live_date_picker" not in st.session_state:
     st.session_state["live_date_picker"] = datetime.now().date()
+
+if "show_pivot_form" not in st.session_state:
+    st.session_state.show_pivot_form = False
 
 if "played_basket" not in st.session_state:
     reset_all_state()
@@ -178,6 +182,13 @@ def restore_slot(slot_name):
     if slot_name in st.session_state.played_basket:
         st.session_state.played_basket.remove(slot_name)
 
+# Helper to find top unplayed slot
+def get_top_unplayed_slot():
+    available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+    if available:
+        return sorted(available, key=lambda x: x["base_rvi"], reverse=True)[0]
+    return None
+
 # ==========================================
 # 3. SIDEBAR CONTROLS & NAVIGATION
 # ==========================================
@@ -276,9 +287,32 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
     curr_b = st.session_state.current_bankroll
     drawdown = start_b - curr_b
     buffer_remaining = curr_b
+    top_candidate = get_top_unplayed_slot()
     
     user_q = f"Evaluate circuit breaker / stop-loss. Starting Bankroll: ${start_b:.2f}, Current: ${curr_b:.2f}."
     
+    # Generate dynamic next machine execution plan at minimum bet tiers ($1.00 / $1.25)
+    rec_plan_str = ""
+    if top_candidate:
+        rec_slot = top_candidate['slot']
+        rec_fam = top_candidate['family']
+        rec_rvi = top_candidate['base_rvi']
+        
+        # Enforce minimum bet tier scaling ($1.25 Phase 1 -> $1.00 Phase 2)
+        p1_min_bet = 1.25
+        p2_min_bet = 1.00
+        raw_checkin = (20 * p1_min_bet) + (15 * p2_min_bet)
+        checkin_min = round_up_to_nearest_50(raw_checkin)
+        
+        rec_plan_str = f"""
+---
+#### 🎰 Dynamic Recovery Plan (Post-Break):
+- **Recommended Machine:** **{rec_slot}** ({rec_fam}) | **RVI Score:** {rec_rvi}
+- **Check-In Capital:** **${checkin_min:.2f}**
+- **Phase 1 (Spins 1–20):** Play **20 spins** @ **${p1_min_bet:.2f}** minimum bet.
+- **Phase 2 (Spins 21–35):** Step down to **15 spins** @ **${p2_min_bet:.2f}** minimum bet.
+- **Exit Rule:** Hard stop if zero feature hits after 35 spins."""
+
     if drawdown >= 300:
         agent_out = f"""### 🚨 CIRCUIT BREAKER TRIGGERED (Critical Drawdown)
 
@@ -288,7 +322,8 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
 - **Action Directive:** ⏸️ **MANDATORY 15-MINUTE BREAK**
   - Walk away from the casino floor immediately.
   - Reset mental fatigue and review today's logged performance.
-  - Upon return, enforce a **strict minimum bet tier ($1.00 / $1.25)** for all subsequent probes."""
+  - Upon return, enforce a **strict minimum bet tier ($1.00 / $1.25)** for all subsequent probes.
+{rec_plan_str}"""
   
     elif drawdown >= 200:
         agent_out = f"""### ⚠️ CIRCUIT BREAKER WARNING (Moderate Cold Streak)
@@ -299,7 +334,8 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
 - **Action Directive:** 📉 **STEP DOWN BET TIER IMMEDIATELY**
   - Lower maximum Phase 1 bet size to **$1.00 / $1.25**.
   - Cap maximum check-in capital at **$50.00** per machine.
-  - If drawdown reaches -$300, take an immediate 15-minute break."""
+  - If drawdown reaches -$300, take an immediate 15-minute break.
+{rec_plan_str}"""
   
     else:
         agent_out = f"""### ✅ CIRCUIT BREAKER STATUS: NORMAL
@@ -313,38 +349,9 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
-# 4. Machine Pivot vs. Stay Advisor
+# 4. Machine Pivot vs. Stay Advisor (Triggers Interactive Input Form)
 if st.sidebar.button("🔄 Machine Pivot vs. Stay", use_container_width=True):
-    available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
-    next_best = sorted(available, key=lambda x: x["base_rvi"], reverse=True)[0] if available else None
-    
-    user_q = "Should I STAY on this machine or PIVOT to another candidate?"
-    
-    if next_best:
-        next_name = f"{next_best['slot']} ({next_best['family']})"
-        next_rvi = next_best['base_rvi']
-        next_alloc = next_best['checkin_alloc']
-        next_p1 = next_best['opt_bet']
-        
-        agent_out = f"""### 🔀 MACHINE PIVOT VS. STAY ADVISOR
-
-- **Queue Status:** Next best available machine is **{next_name}** with an RVI score of **{next_rvi}**.
-
-#### 📋 Decision Framework (Applicable at Any Stage):
-
-1. **COMMAND: PIVOT 🚪**
-   - **Trigger:** Zero features hit, or return is < 20% of bet outlay at current spin stage.
-   - **Action:** Move immediately to **{next_name}**.
-   - **Next Machine Execution:** Insert **${next_alloc:.2f}** check-in allocation, set bet to **${next_p1:.2f}**.
-
-2. **COMMAND: STAY 🎯**
-   - **Trigger:** Machine is displaying active orb/scatter teasers, line wins exceeding 20x, or recent feature re-trigger.
-   - **Action:** Continue current session, capping play to a max 8-spin backup extension."""
-    else:
-        agent_out = "### 🔀 MACHINE PIVOT VS. STAY ADVISOR\n\nNo unplayed candidates remaining in priority queue. **COMMAND: STAY** or reset played basket."
-
-    st.session_state.chat_messages.append({"role": "user", "content": user_q})
-    st.session_state.chat_messages.append({"role": "assistant", "content": agent_out})
+    st.session_state.show_pivot_form = True
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
@@ -585,6 +592,70 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
     st.caption("Chat with the strategy agent in real-time or clear chat history.")
     
+    # Dynamic Machine Pivot Input Form
+    if st.session_state.show_pivot_form:
+        with st.expander("🔀 Active Machine Evaluation (Pivot vs. Stay)", expanded=True):
+            st.markdown("Enter details for the machine you are currently playing:")
+            
+            piv_col1, piv_col2 = st.columns(2)
+            with piv_col1:
+                curr_fam = st.selectbox("Current Slot Family:", list(SLOT_MASTER_LIST.keys()), key="piv_fam_input")
+                curr_slot = st.selectbox("Current Slot Theme:", SLOT_MASTER_LIST[curr_fam], key="piv_slot_input")
+                curr_bet = st.number_input("Current Bet Size ($):", min_value=1.00, value=2.50, step=0.25, key="piv_bet_input")
+                
+            with piv_col2:
+                spins_done = st.number_input("Spins Completed So Far:", min_value=1, max_value=100, value=15, key="piv_spins_input")
+                total_return = st.number_input("Total Returns / Wins ($):", min_value=0.0, value=0.0, step=5.0, key="piv_ret_input")
+                active_teaser = st.checkbox("Active Orbs/Scatter Teasers Present?", key="piv_teaser_input")
+
+            if st.button("Evaluate Pivot Decision"):
+                st.session_state.show_pivot_form = False
+                
+                # Dynamic calculation
+                total_invested = spins_done * curr_bet
+                return_pct = (total_return / total_invested * 100) if total_invested > 0 else 0
+                next_cand = get_top_unplayed_slot()
+                
+                user_msg = f"Evaluating machine performance: Currently on **{curr_slot}** ({curr_fam}). Bet: ${curr_bet:.2f}, Spins Completed: {spins_done}, Returns: ${total_return:.2f} ({return_pct:.1f}% return)."
+                
+                next_info_str = ""
+                if next_cand:
+                    p1_n = next_cand['opt_bet']
+                    p2_n = next_cand['step_down_bet']
+                    alloc_n = next_cand['checkin_alloc']
+                    next_info_str = f"""
+#### 🚪 PIVOT EXECUTION PLAN:
+- **Next Best Machine:** **{next_cand['slot']}** ({next_cand['family']}) | **RVI:** {next_cand['base_rvi']}
+- **Check-In Allocation:** **${alloc_n:.2f}**
+- **Phase 1 (Spins 1–20):** 20 spins @ **${p1_n:.2f}** bet.
+- **Phase 2 (Spins 21–35):** 15 spins @ **${p2_n:.2f}** bet."""
+                
+                # Decision Engine Logic
+                if return_pct < 20.0 and not active_teaser:
+                    pivot_reply = f"""### 🔀 MACHINE EVALUATION RESULT: COMMAND PIVOT 🚪
+
+- **Machine Status:** Cold Cycle Detected on **{curr_slot}**.
+- **Invested Capital:** **${total_invested:.2f}** over {spins_done} spins.
+- **Total Returns:** **${total_return:.2f}** ({return_pct:.1f}% return rate).
+- **Teaser Status:** No active indicators.
+
+**Directive:** Move immediately. Cut losses on {curr_slot} and pivot to the next priority machine in queue.
+{next_info_str}"""
+
+                else:
+                    pivot_reply = f"""### 🔀 MACHINE EVALUATION RESULT: COMMAND STAY 🎯
+
+- **Machine Status:** Operational / Warm Window on **{curr_slot}**.
+- **Invested Capital:** **${total_invested:.2f}** over {spins_done} spins.
+- **Total Returns:** **${total_return:.2f}** ({return_pct:.1f}% return rate).
+- **Teaser Status:** {'Teasers Active' if active_teaser else 'Stable return threshold maintained'}.
+
+**Directive:** Stay on machine. Execute a max **8 Backup Spins** at **${get_proportional_step_down(curr_bet):.2f}**. Hard exit if no feature triggers within 8 spins."""
+
+                st.session_state.chat_messages.append({"role": "user", "content": user_msg})
+                st.session_state.chat_messages.append({"role": "assistant", "content": pivot_reply})
+                st.rerun()
+
     col_ch1, col_ch2 = st.columns([5, 1])
     with col_ch2:
         if st.button("🗑️ Clear Chat"):
