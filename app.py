@@ -53,7 +53,7 @@ SLOT_MASTER_LIST = {
     "All Aboard The Lucky Link": ["Go West", "Shinobi"],
     "Balloon Link": ["Australian Outback", "Skull Island"],
     "Bau Zhu Zhao Fu": ["Blue Festival", "Red Festival"],
-    "Bull Blitz": ["Golden Empress", "Maximus Money"],
+    "Bull Blitz": ["Golden Empress", "Maximus Money", "Roses & Riches"],
     "Bull Rush": ["Fire Mountain", "Golden Empress"],
     "Bull Rush Blitz": ["Golden Empress", "Maximus Money", "Wild Outback", "Yarr Matey"],
     "Bull Rush Blitz 2 Multi": ["Maximus Money", "New York Nights", "Roses & Riches"],
@@ -514,7 +514,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 st.error(f"Failed to update Google Sheets: {e}")
 
 # ------------------------------------------
-# TAB 4: INTERACTIVE AGENT CHAT
+# TAB 4: INTERACTIVE AGENT CHAT (DYNAMIC AI)
 # ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
@@ -602,10 +602,46 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        reply = f"**Strategy Guidance:** Based on active bankroll **${st.session_state.current_bankroll:.2f}** and target **${st.session_state.session_target:.2f}**:\n\n"
-        reply += "1. **Phase 1 Execution:** Play 20 Spins at Phase 1 bet size.\n"
-        reply += "2. **Phase 2 Step-Down:** If no feature triggers by spin 20, step down your bet size by ~50% and play 15 Spins.\n"
-        reply += "3. **Stop-Loss Protection:** If session loss exceeds $200–$300, execute immediate Circuit Breaker protocol."
+        # Dynamic System Instructions incorporating active session context
+        system_instruction = f"""
+You are an expert AI Slot Execution Strategy Agent.
+Current Live Session Context:
+- Starting Bankroll: ${st.session_state.session_start_bankroll:.2f}
+- Current Active Bankroll: ${st.session_state.current_bankroll:.2f}
+- Target Bankroll: ${st.session_state.session_target:.2f}
+
+Strategy Execution Rules:
+1. When the user asks for specific bet recommendations from a list of available options (e.g., 5, 7.5, 50, 250, 500, 2500):
+   - Choose a Phase 1 bet size specifically from their given list. Aim for a sensible risk level relative to their total/checked-in bankroll (typically probing around 1%-5% per spin).
+   - Choose an exact Phase 2 step-down bet size from their list that is roughly 50% lower than Phase 1.
+2. Clearly outline the multi-phase plan:
+   - Phase 1: 20 spins at the chosen Phase 1 bet size.
+   - Phase 2: 15 spins at the chosen Phase 2 bet size (if no feature triggers in Phase 1).
+3. Provide explicit exit rules and stop-loss conditions based on current active bankroll.
+4. Keep responses concise, direct, visually well-structured, and precise with numbers.
+"""
+
+        try:
+            from google import genai
+
+            # Initializes client using st.secrets["GEMINI_API_KEY"] or environment variable
+            client = genai.Client()
+            
+            # Convert session chat history to Gemini SDK format
+            formatted_contents = []
+            for m in st.session_state.chat_messages:
+                role = "user" if m["role"] == "user" else "model"
+                formatted_contents.append({"role": role, "parts": [{"text": m["content"]}]})
+
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=formatted_contents,
+                config={"system_instruction": system_instruction}
+            )
+            reply = response.text
+
+        except Exception as e:
+            reply = f"⚠️ AI Agent Error: {e}\n\nPlease check that `google-genai` is installed (`pip install google-genai`) and `GEMINI_API_KEY` is added to your `.streamlit/secrets.toml`."
 
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
         st.rerun()
