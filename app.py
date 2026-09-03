@@ -182,7 +182,6 @@ def restore_slot(slot_name):
     if slot_name in st.session_state.played_basket:
         st.session_state.played_basket.remove(slot_name)
 
-# Helper to find top unplayed slot
 def get_top_unplayed_slot():
     available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     if available:
@@ -291,14 +290,12 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
     
     user_q = f"Evaluate circuit breaker / stop-loss. Starting Bankroll: ${start_b:.2f}, Current: ${curr_b:.2f}."
     
-    # Generate dynamic next machine execution plan at minimum bet tiers ($1.00 / $1.25)
     rec_plan_str = ""
     if top_candidate:
         rec_slot = top_candidate['slot']
         rec_fam = top_candidate['family']
         rec_rvi = top_candidate['base_rvi']
         
-        # Enforce minimum bet tier scaling ($1.25 Phase 1 -> $1.00 Phase 2)
         p1_min_bet = 1.25
         p2_min_bet = 1.00
         raw_checkin = (20 * p1_min_bet) + (15 * p2_min_bet)
@@ -349,7 +346,7 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
-# 4. Machine Pivot vs. Stay Advisor (Triggers Interactive Input Form)
+# 4. Machine Pivot vs. Stay Advisor
 if st.sidebar.button("🔄 Machine Pivot vs. Stay", use_container_width=True):
     st.session_state.show_pivot_form = True
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
@@ -592,26 +589,30 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
     st.caption("Chat with the strategy agent in real-time or clear chat history.")
     
-    # Dynamic Machine Pivot Input Form
+    # Form-Encapsulated Machine Evaluation to Prevent State Misalignments
     if st.session_state.show_pivot_form:
         with st.expander("🔀 Active Machine Evaluation (Pivot vs. Stay)", expanded=True):
             st.markdown("Enter details for the machine you are currently playing:")
             
-            piv_col1, piv_col2 = st.columns(2)
-            with piv_col1:
-                curr_fam = st.selectbox("Current Slot Family:", list(SLOT_MASTER_LIST.keys()), key="piv_fam_input")
-                curr_slot = st.selectbox("Current Slot Theme:", SLOT_MASTER_LIST[curr_fam], key="piv_slot_input")
-                curr_bet = st.number_input("Current Bet Size ($):", min_value=1.00, value=2.50, step=0.25, key="piv_bet_input")
+            with st.form("pivot_eval_form"):
+                piv_col1, piv_col2 = st.columns(2)
                 
-            with piv_col2:
-                spins_done = st.number_input("Spins Completed So Far:", min_value=1, max_value=100, value=15, key="piv_spins_input")
-                total_return = st.number_input("Total Returns / Wins ($):", min_value=0.0, value=0.0, step=5.0, key="piv_ret_input")
-                active_teaser = st.checkbox("Active Orbs/Scatter Teasers Present?", key="piv_teaser_input")
+                with piv_col1:
+                    curr_fam = st.selectbox("Current Slot Family:", list(SLOT_MASTER_LIST.keys()), key="piv_fam_input")
+                    curr_slot = st.selectbox("Current Slot Theme:", SLOT_MASTER_LIST[curr_fam], key="piv_slot_input")
+                    curr_bet = st.number_input("Current Bet Size ($):", min_value=1.00, value=2.50, step=0.25, key="piv_bet_input")
+                    
+                with piv_col2:
+                    spins_done = st.number_input("Spins Completed So Far:", min_value=1, max_value=100, value=15, key="piv_spins_input")
+                    total_return = st.number_input("Total Returns / Wins ($):", min_value=0.0, value=0.0, step=5.0, key="piv_ret_input")
+                    active_teaser = st.checkbox("Active Orbs/Scatter Teasers Present?", key="piv_teaser_input")
 
-            if st.button("Evaluate Pivot Decision"):
+                submit_eval = st.form_submit_button("⚡ Evaluate Pivot Decision")
+
+            if submit_eval:
                 st.session_state.show_pivot_form = False
+                st.session_state.active_tab = "🤖 Interactive Agent Chat"
                 
-                # Dynamic calculation
                 total_invested = spins_done * curr_bet
                 return_pct = (total_return / total_invested * 100) if total_invested > 0 else 0
                 next_cand = get_top_unplayed_slot()
@@ -630,7 +631,6 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
 - **Phase 1 (Spins 1–20):** 20 spins @ **${p1_n:.2f}** bet.
 - **Phase 2 (Spins 21–35):** 15 spins @ **${p2_n:.2f}** bet."""
                 
-                # Decision Engine Logic
                 if return_pct < 20.0 and not active_teaser:
                     pivot_reply = f"""### 🔀 MACHINE EVALUATION RESULT: COMMAND PIVOT 🚪
 
