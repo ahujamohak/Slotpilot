@@ -32,7 +32,7 @@ def reset_all_state():
     st.session_state.session_target = 1800.0
     st.session_state.active_tab = "📊 Today's Priority Board"
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, check-in amounts, or multi-phase spin execution plans."}
+        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, stop-loss checks, or machine pivot commands."}
     ]
     st.session_state.session_logs = pd.DataFrame([
         {
@@ -270,23 +270,81 @@ if st.sidebar.button("❓ Should I Repeat / Re-Trigger?", use_container_width=Tr
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
-# 3. Calculate Check-In Amount
-if st.sidebar.button("💵 Calculate Check-In Capital", use_container_width=True):
-    st.session_state.chat_messages.append({"role": "user", "content": "How is check-in capital calculated?"})
-    st.session_state.chat_messages.append({
-        "role": "assistant", 
-        "content": "### 💵 Check-In Calculation Rule:\n\nFormula:\n`Check-In = (20 × Phase 1 Bet) + (15 × Phase 2 Bet)` rounded up to the nearest $50 increment.\n\n*Example:* For a $5.00 Phase 1 bet and $2.50 Phase 2 bet:\n- `(20 × $5.00) + (15 × $2.50) = $100 + $37.50 = $137.50`\n- **Check-In Amount = $150.00**"
-    })
+# 3. Circuit Breaker / Stop-Loss Evaluation
+if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=True):
+    start_b = st.session_state.session_start_bankroll
+    curr_b = st.session_state.current_bankroll
+    drawdown = start_b - curr_b
+    buffer_remaining = curr_b
+    
+    user_q = f"Evaluate circuit breaker / stop-loss. Starting Bankroll: ${start_b:.2f}, Current: ${curr_b:.2f}."
+    
+    if drawdown >= 300:
+        agent_out = f"""### 🚨 CIRCUIT BREAKER TRIGGERED (Critical Drawdown)
+
+- **Session Drawdown:** **-${drawdown:.2f}** (Greater than $300 loss threshold)
+- **Remaining Session Buffer:** **${buffer_remaining:.2f}**
+- **Hard Stop-Loss Limit:** Set hard stop at **${max(0.0, curr_b - 100.0):.2f}**
+- **Action Directive:** ⏸️ **MANDATORY 15-MINUTE BREAK**
+  - Walk away from the casino floor immediately.
+  - Reset mental fatigue and review today's logged performance.
+  - Upon return, enforce a **strict minimum bet tier ($1.00 / $1.25)** for all subsequent probes."""
+  
+    elif drawdown >= 200:
+        agent_out = f"""### ⚠️ CIRCUIT BREAKER WARNING (Moderate Cold Streak)
+
+- **Session Drawdown:** **-${drawdown:.2f}** (Hit $200–$300 loss zone)
+- **Remaining Session Buffer:** **${buffer_remaining:.2f}**
+- **Hard Stop-Loss Limit:** Set hard stop at **${curr_b - 150.0:.2f}**
+- **Action Directive:** 📉 **STEP DOWN BET TIER IMMEDIATELY**
+  - Lower maximum Phase 1 bet size to **$1.00 / $1.25**.
+  - Cap maximum check-in capital at **$50.00** per machine.
+  - If drawdown reaches -$300, take an immediate 15-minute break."""
+  
+    else:
+        agent_out = f"""### ✅ CIRCUIT BREAKER STATUS: NORMAL
+
+- **Session Drawdown / Profit:** **{'-$' if drawdown > 0 else '+$'}{abs(drawdown):.2f}**
+- **Remaining Buffer:** **${buffer_remaining:.2f}**
+- **Action Directive:** Safe to operate within standard bet tiers and 35-spin probe parameters."""
+
+    st.session_state.chat_messages.append({"role": "user", "content": user_q})
+    st.session_state.chat_messages.append({"role": "assistant", "content": agent_out})
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
-# 4. Review Multi-Phase Strategy
-if st.sidebar.button("📖 Strategy Overview", use_container_width=True):
-    st.session_state.chat_messages.append({"role": "user", "content": "Explain the multi-phase strategy rules."})
-    st.session_state.chat_messages.append({
-        "role": "assistant", 
-        "content": "### 📋 Multi-Phase Strategy Execution:\n\n1. **Phase 1 (Spins 1–20):** Execute 20 spins at Phase 1 bet size.\n2. **Phase 2 (Spins 21–35):** If no feature hits, step down bet size by ~50% for 15 spins.\n3. **Backup Spins:** After a big feature win (>50x), play 8 backup spins at Phase 2 bet size to check for re-triggers.\n4. **Cold Machine Exit:** If 35 spins yield zero features, immediately switch machines."
-    })
+# 4. Machine Pivot vs. Stay Advisor
+if st.sidebar.button("🔄 Machine Pivot vs. Stay", use_container_width=True):
+    available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+    next_best = sorted(available, key=lambda x: x["base_rvi"], reverse=True)[0] if available else None
+    
+    user_q = "Should I STAY on this machine or PIVOT to another candidate?"
+    
+    if next_best:
+        next_name = f"{next_best['slot']} ({next_best['family']})"
+        next_rvi = next_best['base_rvi']
+        next_alloc = next_best['checkin_alloc']
+        next_p1 = next_best['opt_bet']
+        
+        agent_out = f"""### 🔀 MACHINE PIVOT VS. STAY ADVISOR
+
+- **Queue Status:** Next best available machine is **{next_name}** with an RVI score of **{next_rvi}**.
+
+#### 📋 Decision Framework (Applicable at Any Stage):
+
+1. **COMMAND: PIVOT 🚪**
+   - **Trigger:** Zero features hit, or return is < 20% of bet outlay at current spin stage.
+   - **Action:** Move immediately to **{next_name}**.
+   - **Next Machine Execution:** Insert **${next_alloc:.2f}** check-in allocation, set bet to **${next_p1:.2f}**.
+
+2. **COMMAND: STAY 🎯**
+   - **Trigger:** Machine is displaying active orb/scatter teasers, line wins exceeding 20x, or recent feature re-trigger.
+   - **Action:** Continue current session, capping play to a max 8-spin backup extension."""
+    else:
+        agent_out = "### 🔀 MACHINE PIVOT VS. STAY ADVISOR\n\nNo unplayed candidates remaining in priority queue. **COMMAND: STAY** or reset played basket."
+
+    st.session_state.chat_messages.append({"role": "user", "content": user_q})
+    st.session_state.chat_messages.append({"role": "assistant", "content": agent_out})
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
@@ -547,8 +605,8 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
         reply = f"**Strategy Guidance:** Based on active bankroll **${st.session_state.current_bankroll:.2f}** and target **${st.session_state.session_target:.2f}**:\n\n"
         reply += "1. **Phase 1 Execution:** Play 20 Spins at Phase 1 bet size.\n"
         reply += "2. **Phase 2 Step-Down:** If no feature triggers by spin 20, step down your bet size by ~50% and play 15 Spins.\n"
-        reply += "3. **Check-In Calculation:** `(20 × Phase 1 Bet) + (15 × Phase 2 Bet)` rounded up to nearest $50.\n"
-        reply += "4. **Backup Spins:** Following a major payout, execute 8 backup spins at Phase 2 bet size."
+        reply += "3. **Stop-Loss Protection:** If session drawdown exceeds $200–$300, step down to $1.00/$1.25 or take a mandatory 15-minute break.\n"
+        reply += "4. **Pivot Assessment:** Evaluate machine performance dynamically at any spin stage to command a STAY or PIVOT."
             
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
         with st.chat_message("assistant"):
@@ -594,9 +652,12 @@ elif st.session_state.active_tab == "📖 Documentation & Rules":
     - **Phase 2 Window:** 15 spins @ Step-Down Bet.
     - **Total Evaluation Window:** 35 spins maximum per machine.
 
-    #### 💵 Check-In Capital Formula
-    - **Calculation:** `Suggested Allocation = (20 × Phase 1 Bet) + (15 × Phase 2 Bet)`
-    - **Rounding Rule:** Rounded UP to the nearest **$50** increment.
+    #### 🛑 Circuit Breaker & Stop-Loss Protocol
+    - **$200–$300 Loss Zone:** Drop bet tier to minimum ($1.00 / $1.25) and cap check-ins at $50.
+    - **>$300 Drawdown:** Mandatory 15-minute break away from gaming floor.
+
+    #### 🔀 Pivot vs. Stay Evaluation
+    - Dynamic assessment at any stage of play comparing current machine return against the next highest RVI machine in queue.
 
     #### 📉 Proportional Bet Tiering Structure
     - **$10.00 Base** → **$5.00 Step-Down**
