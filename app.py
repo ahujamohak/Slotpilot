@@ -9,7 +9,7 @@ from datetime import datetime
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
 # ==========================================
-# 0. STATE MANAGEMENT & CALLBACKS
+# 0. STATE MANAGEMENT
 # ==========================================
 
 TAB_OPTIONS = [
@@ -22,22 +22,13 @@ TAB_OPTIONS = [
     "📖 Documentation & Rules"
 ]
 
-# Single source of truth for Active Tab
+# Direct binding key for active tab navigation
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "📊 Today's Priority Board"
 
-# Date & Auto-Day State Management
-if "selected_live_date" not in st.session_state:
-    st.session_state.selected_live_date = datetime.now().date()
-
-if "selected_live_day" not in st.session_state:
-    st.session_state.selected_live_day = datetime.now().strftime("%A")
-
-def update_live_day_callback():
-    """Triggers instantly when date picker changes value."""
-    new_date = st.session_state.live_date_picker
-    st.session_state.selected_live_date = new_date
-    st.session_state.selected_live_day = new_date.strftime("%A")
+# Date picker default tracking
+if "live_date_picker" not in st.session_state:
+    st.session_state["live_date_picker"] = datetime.now().date()
 
 # ==========================================
 # 1. MASTER SLOT LIST HIERARCHY
@@ -154,8 +145,8 @@ if "session_target" not in st.session_state:
 if "session_logs" not in st.session_state:
     st.session_state.session_logs = pd.DataFrame([
         {
-            "Date": "08/28/2026",
-            "Day": "Friday",
+            "Date": "9/3/2026",
+            "Day": "Thursday",
             "Family": "Cash Horns",
             "Slot": "Cleopatra’s Kingdom",
             "Spin of Feature Hit": 32,
@@ -265,7 +256,6 @@ if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
 
 st.title("Casino Slot Optimization & Execution Agent")
 
-# Direct binding to session_state.active_tab fixes lag and double-clicking issues
 st.radio(
     "Navigation Tabs",
     options=TAB_OPTIONS,
@@ -379,23 +369,27 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
 # ------------------------------------------
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
-    st.caption("Matches exact Google Sheet schema. Day of the week updates instantly when changing dates.")
+    st.caption("Matches exact Google Sheet schema. Day of the week updates dynamically and dates save in m/d/yyyy format.")
 
-    # Explicit callback on date input updates state immediately on picking from popup calendar
     col_d1, col_d2 = st.columns([1, 2])
+    
     with col_d1:
-        st.date_input(
+        # Date Input Widget
+        chosen_date = st.date_input(
             "Select Date:", 
-            value=st.session_state.selected_live_date, 
-            key="live_date_picker",
-            on_change=update_live_day_callback
+            key="live_date_picker"
         )
+
+    # Calculate current day of week and m/d/yyyy string instantly on every render pass
+    dynamic_day = chosen_date.strftime("%A")
+    formatted_date_str = f"{chosen_date.month}/{chosen_date.day}/{chosen_date.year}"
+
     with col_d2:
+        # Display computed Day of Week in real-time
         st.text_input(
             "Day of Week (Auto-Selected):", 
-            value=st.session_state.selected_live_day, 
-            disabled=True, 
-            key="live_day_display"
+            value=dynamic_day, 
+            disabled=True
         )
 
     st.markdown("---")
@@ -420,12 +414,9 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
         submit_gs_entry = st.form_submit_button("💾 Save Session Record to Dataset")
         
         if submit_gs_entry:
-            formatted_date_str = st.session_state.selected_live_date.strftime("%m/%d/%Y")
-            current_day_str = st.session_state.selected_live_day
-
             new_gs_log = {
-                "Date": formatted_date_str,
-                "Day": current_day_str,
+                "Date": formatted_date_str,  # Strictly formatted as m/d/yyyy (e.g. 9/3/2026)
+                "Day": dynamic_day,          # Always matches selected date
                 "Family": entry_family,
                 "Slot": entry_slot,
                 "Spin of Feature Hit": entry_spin_hit,
@@ -439,7 +430,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_gs_log])], ignore_index=True)
             mark_slot_played(entry_slot)
             
-            st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str} ({current_day_str}), Feature Type: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
+            st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str} ({dynamic_day}), Feature Type: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
 
     st.markdown("---")
     st.markdown("#### 📋 Current Logged Entries")
