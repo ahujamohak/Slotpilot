@@ -34,7 +34,7 @@ def reset_all_state():
     st.session_state.show_pivot_form = False
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent, calibrated with strict Day/Date tracking penalties."}
+        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent, calibrated with live sheet dynamic repeat-performance analytics."}
     ]
 
 if "show_pivot_form" not in st.session_state:
@@ -108,7 +108,7 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
-# 2. SHEET INSPECTOR & STRICT DAY-AWARE RVI ENGINE
+# 2. SHEET INSPECTOR & DATA ANALYSIS ENGINE
 # ==========================================
 
 @st.cache_data(ttl=15)
@@ -122,11 +122,75 @@ def load_and_inspect_sheet():
     except Exception:
         return pd.DataFrame(), []
 
+def compute_slot_rehit_metrics(slot_name, family_name, live_df):
+    """
+    Analyzes Attempt Number and Hit Number columns to determine repeat-hit profile.
+    Identifies multi-hit frequency (Hit Number >= 2 or Attempt Number >= 2).
+    """
+    default_res = {
+        "repeat_sample_size": 0,
+        "multi_hit_count": 0,
+        "multi_hit_rate": 0.0,
+        "avg_repeat_multiplier": 0.0,
+        "max_repeat_multiplier": 0.0,
+        "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)"
+    }
+    
+    if live_df.empty:
+        return default_res
+
+    cols = {str(c).lower(): c for c in live_df.columns}
+    slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
+    fam_col = cols.get("family") or cols.get("slot family")
+    attempt_col = cols.get("attempt number") or cols.get("attempt")
+    hit_num_col = cols.get("hit number") or cols.get("hit")
+    mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
+
+    matched = live_df.copy()
+
+    if slot_col and slot_col in matched.columns:
+        matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
+    elif fam_col and fam_col in matched.columns:
+        matched = matched[matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
+
+    if matched.empty:
+        return default_res
+
+    matched["_attempt"] = pd.to_numeric(matched[attempt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1) if attempt_col else 1
+    matched["_hit"] = pd.to_numeric(matched[hit_num_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if hit_num_col else 0
+    matched["_mult"] = pd.to_numeric(matched[mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if mult_col else 0
+
+    # Repeat hits occur when Hit Number >= 2 OR Attempt Number >= 2
+    repeat_entries = matched[(matched["_attempt"] >= 2) | (matched["_hit"] >= 2)]
+    total_logs = len(matched)
+    repeat_count = len(repeat_entries)
+
+    if total_logs == 0:
+        return default_res
+
+    multi_hit_rate = round((repeat_count / total_logs) * 100.0, 1)
+    avg_repeat_mult = round(repeat_entries["_mult"].mean(), 1) if not repeat_entries.empty else 0.0
+    max_repeat_mult = round(repeat_entries["_mult"].max(), 1) if not repeat_entries.empty else 0.0
+
+    if multi_hit_rate >= 40.0:
+        recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Reset to Phase 1 immediately after feature hit."
+    elif multi_hit_rate >= 20.0:
+        recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Finish current phase; re-probe if win > 20x."
+    elif repeat_count > 0:
+        recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Single hit machine. Lock profits and exit on feature hit."
+    else:
+        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No multi-attempt/hit data recorded yet. Treat conservatively."
+
+    return {
+        "repeat_sample_size": total_logs,
+        "multi_hit_count": repeat_count,
+        "multi_hit_rate": multi_hit_rate,
+        "avg_repeat_multiplier": avg_repeat_mult,
+        "max_repeat_multiplier": max_repeat_mult,
+        "repeat_recommendation": recommendation
+    }
+
 def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_mode=True):
-    """
-    Calculates weighted RVI strictly checking Family AND Slot Theme Name,
-    and applies heavy Day-of-Week penalties for zero-hit days.
-    """
     baseline_score = 7.5
     if target_day is None:
         target_day = datetime.now().strftime("%A")
@@ -143,11 +207,9 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
 
     matched_rows = live_df.copy()
 
-    # 1. Filter strictly by Slot Theme Name
     if slot_col and slot_col in matched_rows.columns:
         matched_rows = matched_rows[matched_rows[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
 
-    # 2. Filter strictly by Family Name
     if fam_col and fam_col in matched_rows.columns and not matched_rows.empty:
         fam_matched = matched_rows[matched_rows[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
         if not fam_matched.empty:
@@ -162,33 +224,29 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     day_log_count = 0
     day_factor = 1.0
 
-    # 3. Calculate Strict Day-of-Week Performance Factor
     if day_col and day_col in matched_rows.columns:
         day_matches = matched_rows[matched_rows[day_col].astype(str).str.strip().str.lower() == str(target_day).strip().lower()]
         day_log_count = len(day_matches)
 
         if total_logs > 0:
             day_ratio = day_log_count / total_logs
-            
-            # --- STRICT DAY WEIGHTING LOGIC ---
             if day_log_count > 0:
                 if day_ratio == 1.0 and day_log_count >= 2:
-                    day_factor = 1.30  # 100% target day hit rate -> major boost
+                    day_factor = 1.30
                 elif day_ratio >= 0.5:
-                    day_factor = 1.20  # High target day hit rate
+                    day_factor = 1.20
                 elif day_ratio >= 0.25:
                     day_factor = 1.10
                 else:
                     day_factor = 1.00
             else:
-                # ZERO HITS ON TARGET DAY PENALTY
                 if strict_mode:
                     if total_logs >= 5:
-                        day_factor = 0.40  # Massive demotion: Tested 5+ times elsewhere, NEVER on this day
+                        day_factor = 0.40
                     elif total_logs >= 3:
-                        day_factor = 0.55  # Severe penalty
+                        day_factor = 0.55
                     else:
-                        day_factor = 0.75  # Moderate penalty for low sample size
+                        day_factor = 0.75
                 else:
                     day_factor = 0.90
 
@@ -205,15 +263,13 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     avg_mult = np.mean(empirical_multipliers)
     sheet_rvi = min(10.0, max(1.0, (avg_mult / 15.0) + 5.0))
     weighted_rvi = (0.75 * sheet_rvi) + (0.25 * baseline_score)
-    
-    # Apply day weighting multiplier & bound between 1.0 and 10.0
     final_rvi = round(min(10.0, max(1.0, weighted_rvi * day_factor)), 2)
     proof_str = f"75% Live Sheet ({total_logs} total, {day_log_count} on {target_day}s)"
     
     return final_rvi, proof_str, target_day, day_factor, day_log_count, total_logs
 
 # ==========================================
-# 3. DYNAMIC MULTI-PHASE ALLOCATION MATH
+# 3. DYNAMIC MULTI-PHASE EXECUTION ENGINE
 # ==========================================
 
 def get_multi_phase_execution(slot_name, rvi_score):
@@ -257,6 +313,8 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
             rvi_score, source_proof, active_day, day_factor, day_hits, total_hits = compute_75_25_rvi(slot, fam, live_df, target_day, strict_mode)
+            rehit_metrics = compute_slot_rehit_metrics(slot, fam, live_df)
+            
             slot_scores.append({
                 "family": fam,
                 "slot": slot,
@@ -265,12 +323,11 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 "target_day": active_day,
                 "day_factor": day_factor,
                 "day_hits": day_hits,
-                "total_hits": total_hits
+                "total_hits": total_hits,
+                "rehit_metrics": rehit_metrics
             })
 
-    # Primary Sort: Day-Weighted RVI descending
-    # Secondary Sort: Day hits descending (ensures verified day performers break ties)
-    slot_scores = sorted(slot_scores, key=lambda x: (x["rvi"], x["day_hits"]), reverse=True)
+    slot_scores = sorted(slot_scores, key=lambda x: (x["rvi"], x["rehit_metrics"]["multi_hit_rate"], x["day_hits"]), reverse=True)
 
     for item in slot_scores:
         fam = item["family"]
@@ -293,9 +350,10 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             "target_day": item["target_day"],
             "day_factor": item["day_factor"],
             "day_hits": item["day_hits"],
-            "total_hits": item["total_hits"]
+            "total_hits": item["total_hits"],
+            "rehit_metrics": item["rehit_metrics"]
         })
-    return sorted(records, key=lambda x: (x["base_rvi"], x["day_hits"]), reverse=True)
+    return sorted(records, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
 
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 
@@ -361,25 +419,24 @@ st.markdown("---")
 # TAB 1: TODAY'S PRIORITY BOARD
 # ------------------------------------------
 if st.session_state.active_tab == "📊 Today's Priority Board":
-    st.subheader(f"Today's Priority Board (Day-Weighted Matrix for {st.session_state.selected_day})")
-    st.caption("Slots with 0 historical hits on the target day are demoted so proven day performers rise to the top.")
+    st.subheader(f"Today's Priority Board (Day & Repeat-Hit Weighted Matrix for {st.session_state.selected_day})")
 
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     current_display = available_slots[:st.session_state.display_limit]
 
     table_data = []
     for rank, item in enumerate(current_display, 1):
+        rehit = item["rehit_metrics"]
         table_data.append({
             "Rank": rank,
             "Slot Family": item["family"],
             "Slot Theme Name": item["slot"],
             "Day-RVI Score": item["base_rvi"],
+            "Multi-Hit Rate (%)": f"{rehit['multi_hit_rate']}%",
+            "Multi-Hit Hits/Total": f"{rehit['multi_hit_count']} / {rehit['repeat_sample_size']}",
+            "Avg Repeat Win": f"{rehit['avg_repeat_multiplier']}x",
             "Day Factor": f"{item['day_factor']}x",
-            "Target Day Hits": f"{item['day_hits']} / {item['total_hits']}",
             "Proof & History": item["source_proof"],
-            "Phases": f"{item['num_phases']} Phases",
-            "Multi-Phase Strategy Breakdown": item["phase_breakdown"],
-            "Total Evaluation": f"{item['total_spins']} spins",
             "Check-In Alloc ($)": f"${item['checkin_alloc']:.2f}"
         })
 
@@ -406,21 +463,51 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
     if card_slot:
         slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot and s["family"] == card_family), None)
         if slot_data:
+            rehit = slot_data["rehit_metrics"]
             st.markdown("---")
             st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
             
-            col_m1, col_m2 = st.columns(2)
-            col_m1.metric("Total Evaluation Window", f"{slot_data['total_spins']} Spins", delta=f"Check-In: ${slot_data['checkin_alloc']:.2f}")
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("Probe Evaluation Window", f"{slot_data['total_spins']} Spins", delta=f"Check-In: ${slot_data['checkin_alloc']:.2f}")
             col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data['base_rvi']}", delta=f"Day Weighting: {slot_data['day_factor']}x")
+            col_m3.metric("Sheet Multi-Hit Frequency", f"{rehit['multi_hit_rate']}%", delta=f"Avg Repeat Win: {rehit['avg_repeat_multiplier']}x")
 
-            st.caption(f"**Data Proof:** {slot_data['source_proof']} | **Day Hits:** {slot_data['day_hits']} of {slot_data['total_hits']}")
+            st.caption(f"**Data Proof:** {slot_data['source_proof']} | **Repeat Logs Analyzed (Attempt/Hit ≥ 2):** {rehit['multi_hit_count']} of {rehit['repeat_sample_size']}")
 
-            st.markdown("#### 🔄 Dynamic Multi-Phase Execution Plan")
+            # SECTION A: INITIAL PROBE PLAN
+            st.markdown("#### 🔄 Dynamic Initial Probe Plan (Attempt 1 / Hit 0)")
             for idx, phase in enumerate(slot_data["phases"], 1):
                 st.write(f"**Phase {idx}:** **{phase['spins']} Spins** @ **${phase['bet']:.2f}/spin** — *{phase['note']}*")
 
             st.markdown("---")
-            if st.button(f"✅ Mark '{slot_data['slot']}' as Played"):
+
+            # SECTION B: DATA-DRIVEN POST-HIT PROTOCOL (DYNAMIC FROM GOOGLE SHEET)
+            st.markdown("#### 🎯 Post-Hit Repeat Execution Protocol (Driven by Sheet History)")
+            st.info(f"📋 **Live Sheet Recommendation:** {rehit['repeat_recommendation']}")
+
+            col_h1, col_h2 = st.columns(2)
+            
+            p1_bet = slot_data["phases"][0]["bet"]
+            
+            with col_h1:
+                st.markdown("##### 📊 Historical Sheet Stats (Attempt ≥ 2 / Hit ≥ 2)")
+                st.write(f"- **Multi-Hit Occurrences:** {rehit['multi_hit_count']} times")
+                st.write(f"- **Highest Recorded Repeat Multiplier:** {rehit['max_repeat_multiplier']}x")
+                st.write(f"- **Average Repeat Multiplier:** {rehit['avg_repeat_multiplier']}x")
+
+            with col_h2:
+                st.markdown("##### ⚙️ Action Protocol on Feature Trigger")
+                if rehit["multi_hit_rate"] >= 30.0:
+                    st.success("🟢 **ACTION: RESET & RE-PROBE**")
+                    st.write(f"- **Execution:** Reset immediately back to **Phase 1 ({slot_data['phases'][0]['spins']} Spins @ ${p1_bet:.2f})**.")
+                    st.write(f"- **Reason:** Historical data shows a strong {rehit['multi_hit_rate']}% probability of multi-hit feature clustering on this slot.")
+                else:
+                    st.warning("🟡 **ACTION: FINISH CURRENT PHASE OR EXIT**")
+                    st.write(f"- **Execution:** Finish only the remaining spins in the current phase, then lock profits and move to Played Basket.")
+                    st.write(f"- **Reason:** Low multi-hit rate ({rehit['multi_hit_rate']}%) in historical logs suggests poor repeat efficiency.")
+
+            st.markdown("---")
+            if st.button(f"✅ Mark '{slot_data['slot']}' as Played (Move to Basket)"):
                 mark_slot_played(slot_data['slot'])
                 st.success(f"Moved '{slot_data['slot']}' to Played Basket!")
                 st.rerun()
@@ -452,8 +539,8 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             entry_win_amt = st.number_input("Win Amount ($):", min_value=0, value=916, step=10)
             entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0, value=183, step=5)
         with col_e3:
-            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1)
-            entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
+            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1, help="0 or 1 for initial hit, >=2 for repeat hits within same session")
+            entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1, help="1 for initial probe, 2+ for repeat attempts after feature hit")
 
         submit_gs_entry = st.form_submit_button("💾 Save Record to Google Sheets")
 
@@ -486,7 +573,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 conn.update(worksheet="Session Log", data=updated_df)
                 mark_slot_played(entry_slot)
                 st.cache_data.clear()
-                st.success(f"✅ Recorded '{entry_slot}' ({entry_family}) on {dynamic_day}! Priority matrix re-calculated.")
+                st.success(f"✅ Recorded '{entry_slot}' ({entry_family}) on {dynamic_day}! Priority & Multi-Hit matrix re-calculated.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to update Google Sheets: {e}")
@@ -501,24 +588,25 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if prompt := st.chat_input("Ask about machine strategy, exit conditions, or day-based targets:"):
+    if prompt := st.chat_input("Ask about machine strategy, multi-hit stats, or post-hit protocols:"):
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
         available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
         top_cand = available[0] if available else None
-        top_str = f"{top_cand['slot']} ({top_cand['family']}) - Day RVI: {top_cand['base_rvi']} ({top_cand['source_proof']})" if top_cand else "None"
+        top_str = f"{top_cand['slot']} ({top_cand['family']}) - Multi-Hit Rate: {top_cand['rehit_metrics']['multi_hit_rate']}%" if top_cand else "None"
 
         agent_response = f"""### 🤖 AI Agent Evaluation
 - **Active Bankroll:** ${st.session_state.current_bankroll:.2f}
 - **Active Focus Day:** {st.session_state.selected_day}
-- **Top Day-Ranked Target:** {top_str}
+- **Top Day/Multi-Hit Target:** {top_str}
 
-**Strategy & Day Guidance:**
-1. Slots with 0 historical hits on **{st.session_state.selected_day}** are penalized up to 0.40x to prevent unproven day targets from clogging the top priority list.
-2. High day-hit performers receive up to a 1.30x boost.
-3. Check early phases to decide whether to push into higher bet tiers or move to the next prioritized slot.
+**Sheet-Driven Post-Hit Protocol:**
+1. **Initial Probe:** Follow Phase 1-4.
+2. **On Feature Hit:** Check machine's **Multi-Hit Frequency** in the sheet data.
+3. **High Multi-Hit Rate (≥30%):** Re-probe by resetting to Phase 1. Historical data shows multi-hit cluster potential (Attempt ≥ 2 / Hit ≥ 2).
+4. **Low Multi-Hit Rate (<30%):** Finish remaining phase spins and exit machine immediately.
 """
         st.session_state.chat_messages.append({"role": "assistant", "content": agent_response})
         st.rerun()
