@@ -433,7 +433,6 @@ def run_gemini_agent(user_prompt: str):
     tools_list = [tool_mark_machine_played, tool_update_bankroll]
 
     try:
-        # UPDATED: Calling gemini-3.6-flash
         response = client.models.generate_content(
             model="gemini-3.6-flash",
             contents=contents,
@@ -463,6 +462,13 @@ def run_gemini_agent(user_prompt: str):
 # ==========================================
 
 st.sidebar.title("🎰 Live Session Hub")
+
+# ONE-BUTTON GLOBAL RESET
+if st.sidebar.button("🔄 Reset All Session Data", use_container_width=True, type="primary"):
+    reset_all_state()
+    st.rerun()
+
+st.sidebar.markdown("---")
 
 if detected_sheet_cols:
     st.sidebar.success(f"🟢 GSheet Connected ({len(detected_sheet_cols)} Cols)")
@@ -664,62 +670,62 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 st.error(f"Failed to update Google Sheets: {e}")
 
 # ------------------------------------------
-# TAB 4: INTERACTIVE AI AGENT (GEMINI 3.6 SDK & QUICK CHIPS)
+# TAB 4: INTERACTIVE AI AGENT
 # ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive AI Agent":
     st.subheader("🤖 Live Strategy AI Agent (Powered by Gemini 3.6)")
 
-    if not st.session_state.chat_messages:
-        st.session_state.chat_messages = [
-            {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent powered by Gemini 3.6. I am fully synced with your Google Sheets data, Day-RVI calculations, and active session bankroll. Ask me for recommendations, phase progression strategies, or session adjustments."}
-        ]
+    # Display prior chat history
+    for message in st.session_state.chat_messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+    # Quick action prompt chips
+    col_q1, col_q2, col_q3 = st.columns(3)
+    prompt_to_submit = None
 
-    # RESTORED: Quick Suggestion Buttons
-    st.write("⚡ **Quick Agent Queries:**")
-    q_col1, q_col2, q_col3 = st.columns(3)
-    
-    quick_prompt = None
-    if q_col1.button("🎯 Suggest 3 best slots for today", use_container_width=True):
-        quick_prompt = "suggest 3 best slots for today based on given data in the google sheet"
-    if q_col2.button("📊 Explain #1 slot strategy", use_container_width=True):
-        quick_prompt = f"Explain why the #1 ranked slot for {st.session_state.selected_day} is prioritized, and detail its phase plan."
-    if q_col3.button("💰 Check Bankroll Strategy", use_container_width=True):
-        quick_prompt = f"Given my current bankroll of ${st.session_state.current_bankroll:.2f} and target of ${st.session_state.session_target:.2f}, how should I pace my bets?"
+    if col_q1.button("🎯 Top 3 Best Slots Today"):
+        prompt_to_submit = f"What are the top 3 best slots to play today ({st.session_state.selected_day}) based on our Day-RVI matrix?"
+    if col_q2.button("💰 Check Session Bankroll Status"):
+        prompt_to_submit = f"Assess my session status. Starting bankroll was ${st.session_state.session_start_bankroll}, current is ${st.session_state.current_bankroll}, and target is ${st.session_state.session_target}."
+    if col_q3.button("🔄 Check High Multi-Hit Machines"):
+        prompt_to_submit = "Which slots currently have the highest multi-hit frequency (>30%) and should be re-probed immediately after a feature win?"
 
-    user_input = st.chat_input("Ask for strategy advice (e.g., 'Recommend top 3 slots for today', 'Why is New York Nights #1?'):")
-    
-    prompt_to_process = quick_prompt or user_input
+    user_input = st.chat_input("Ask your AI Execution Agent anything about today's session strategy...")
+    if user_input:
+        prompt_to_submit = user_input
 
-    if prompt_to_process:
-        st.session_state.chat_messages.append({"role": "user", "content": prompt_to_process})
+    if prompt_to_submit:
+        st.session_state.chat_messages.append({"role": "user", "content": prompt_to_submit})
         with st.chat_message("user"):
-            st.markdown(prompt_to_process)
+            st.markdown(prompt_to_submit)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analyzing live slot dataset and session state..."):
-                agent_reply = run_gemini_agent(prompt_to_process)
-                st.markdown(agent_reply)
-
-        st.session_state.chat_messages.append({"role": "assistant", "content": agent_reply})
-        if quick_prompt:
-            st.rerun()
+            with st.spinner("Analyzing live matrix & generating strategic plan..."):
+                response_text = run_gemini_agent(prompt_to_submit)
+                st.markdown(response_text)
+                st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
 
 # ------------------------------------------
 # TAB 5: PLAYED BASKET & OVERRIDES
 # ------------------------------------------
 elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
-    st.subheader("🧺 Played Basket & Machine Overrides")
+    st.subheader("🧺 Played Basket & Active Session Overrides")
 
     if not st.session_state.played_basket:
-        st.info("No slots marked as played today.")
+        st.info("No machines have been marked as played yet today.")
     else:
-        for slot in list(st.session_state.played_basket):
+        st.write("The following machines are currently marked as played and excluded from top active priority lists:")
+        for slot in st.session_state.played_basket:
             col_p1, col_p2 = st.columns([3, 1])
-            col_p1.write(f"🎰 **{slot}**")
-            if col_p2.button("🔄 Restore to Priority Board", key=f"restore_{slot}"):
-                restore_slot(slot)
-                st.rerun()
+            with col_p1:
+                st.write(f"• **{slot}**")
+            with col_p2:
+                if st.button("Restore to Active List", key=f"restore_{slot}"):
+                    restore_slot(slot)
+                    st.rerun()
+
+        st.markdown("---")
+        if st.button("🗑️ Clear Entire Played Basket"):
+            st.session_state.played_basket = []
+            st.rerun()
