@@ -1,190 +1,102 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
-import math
-import re
-from datetime import datetime
-
-# Set Streamlit Page Layout
-st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
 # ==========================================
-# 0. STATE MANAGEMENT
+# 1. PAGE CONFIG & INITIAL SESSION STATE
 # ==========================================
+st.set_page_config(
+    page_title="🎰 Slot Strategy Agent & Live Hub",
+    page_icon="🎰",
+    layout="wide"
+)
 
-TAB_OPTIONS = [
-    "📊 Today's Priority Board", 
-    "📋 Pre-Planned Execution Cards", 
-    "📝 Live Data Entry",
-    "📈 Visual Data Analytics",
-    "🤖 Interactive Agent Chat",
-    "🧺 Played Basket & Overrides", 
-    "📖 Documentation & Rules"
-]
+# Initialize Session State Variables
+if "session_start_bankroll" not in st.session_state:
+    st.session_state.session_start_bankroll = 1000.0
 
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "📊 Today's Priority Board"
+if "current_bankroll" not in st.session_state:
+    st.session_state.current_bankroll = 1000.0
 
-if "live_date_picker" not in st.session_state:
-    st.session_state["live_date_picker"] = datetime.now().date()
-
-# ==========================================
-# 1. MASTER SLOT LIST HIERARCHY
-# ==========================================
-
-SLOT_MASTER_LIST = {
-    "All Aboard The Lucky Link": ["Go West", "Shinobi"],
-    "Balloon Link": ["Australian Outback", "Skull Island"],
-    "Bau Zhu Zhao Fu": ["Blue Festival", "Red Festival"],
-    "Bull Blitz": ["Golden Empress", "Maximus Money"],
-    "Bull Rush": ["Fire Mountain", "Golden Empress"],
-    "Bull Rush Blitz": ["Golden Empress", "Maximus Money", "Wild Outback", "Yarr Matey"],
-    "Bull Rush Blitz 2 Multi": ["Maximus Money", "New York Nights", "Roses & Riches"],
-    "Bull Rush Blitz 3 Multi": ["El Metador"],
-    "Bull Rush Stampede": ["Fire Mountain", "Maximus Money", "Minotaur’s Treasure"],
-    "Cash Horns": ["Cleopatra’s Kingdom", "Grand Toro", "Master Warrior", "Ragnar the Great"],
-    "Cash Spark": ["Royal Spark"],
-    "Choy's Kingdom": ["Lunar Festival"],
-    "Dollar Storm": ["Aussie Boomer", "Caribbean Gold", "Egyptian Jewels", "Fight for Troy", "Ninja Moon"],
-    "Dragon Cash": ["Genghis Khan", "Magic Panda"],
-    "Dragon Link": ["Autumn Moon", "Genghis Khan", "Golden Century", "Golden Gong", "Happy & Prosperous", "Panda Magic", "Peace & Long Life", "Peacock Princess", "Silk Road", "Spring Festival"],
-    "Dragon Rush": ["Battle Drum", "Shadow Clan", "Shaolin Style"],
-    "Dragon Train": ["Chillin Wins", "Forever Emperor", "Khutulun Battle Princess", "Sun Shots"],
-    "Dragon Train Link": ["Forever Emperor", "Sun Shots"],
-    "Eureka n more blastin": ["Eureka n more blastin"],
-    "Fabulous Hold & Spin Jackpot": ["Cash Champ", "Come one, Come all", "Glitter & Glitz", "Magic Touch"],
-    "Fireball": ["Sea Queen Express", "Shogun Express"],
-    "Fortune Hearts": ["Emperor's Choice", "Fire Spell", "Lunar Dragon"],
-    "Go for Grand": ["Golden Sombreros", "Outback Gold", "Power Charms"],
-    "Golden Strike": ["Viking Vallhala"],
-    "Grand Legends": ["Great King", "Magic Warrior", "Royal Emperor", "Sun Queen"],
-    "Heaven & Earth": ["Lucky Pig", "Shaolin Ways", "Terracotta Emperor"],
-    "Huff 'N' Even More Puff": ["Huff n Even More Puff"],
-    "Huff n More Puff": ["Huff n More Puff"],
-    "Jewel of the Dragon": ["Red Phoenix"],
-    "Lightning Link": ["Dragon's Riches", "Fire Idol", "Heart Throb", "High Stakes", "Magic Pearl", "Magic Totem", "Mine Mine Mine", "Moon Race", "Raging Bull", "Sahara Gold"],
-    "Lock it Link": ["Bright Lights", "Cats, Hats and more Bats"],
-    "Mystery of the Lamp": ["Enchanted Palace", "Treasure Oasis"],
-    "Nugget Hunter": ["Sands of Fortunes"],
-    "Outgrow Link": ["Eastern Moon", "Spooky Moon", "Western Moon"],
-    "Piggy 'N' More": ["Bankin'"],
-    "Portal Link": ["Wild Whale"],
-    "Power Panther": ["Aztec Thunder", "Power Panther", "Tiki Tiki", "Wild Kingdom"],
-    "Shenlong Unleashed": ["Fortune Town"],
-    "Thunder": ["Fire Legend", "Inca Diamonds"],
-    "Thunder Empire": ["Amazon Hearts", "Inca Diamonds", "King Samurai", "Magic Emperor"],
-    "Ultra Shot Link": ["Sapphire Eyes"],
-    "Where's the Gold": ["Where's the Gold"],
-    "Wild Rumble": ["Shen Shan"]
-}
-
-# ==========================================
-# 2. BET SCALING & ALLOCATION MATH
-# ==========================================
-
-ALLOWED_BETS = [1.00, 1.25, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
-
-def get_proportional_step_down(p1_bet):
-    if p1_bet >= 10.00:
-        return 5.00
-    elif p1_bet >= 7.50:
-        return 3.75
-    elif p1_bet >= 6.25:
-        return 3.00
-    elif p1_bet >= 5.00:
-        return 2.50
-    elif p1_bet >= 3.75:
-        return 2.00
-    elif p1_bet >= 2.50:
-        return 1.25
-    else:
-        return 1.00
-
-def round_up_to_nearest_50(val):
-    return float(math.ceil(val / 50.0) * 50)
-
-def build_priority_dataset():
-    records = []
-    for fam, slots in SLOT_MASTER_LIST.items():
-        for slot in slots:
-            p1_bet = float(np.random.choice(ALLOWED_BETS))
-            p2_bet = get_proportional_step_down(p1_bet)
-            raw_alloc = (20 * p1_bet) + (15 * p2_bet)
-            checkin_alloc = round_up_to_nearest_50(raw_alloc)
-            
-            records.append({
-                "family": fam,
-                "slot": slot,
-                "volatility": np.random.choice(["Med", "Med-High", "High"]),
-                "base_rvi": round(float(np.random.uniform(7.5, 9.5)), 2),
-                "opt_bet": p1_bet,
-                "p1_spins": 20,
-                "step_down_bet": p2_bet,
-                "p2_spins": 15,
-                "checkin_alloc": checkin_alloc
-            })
-    return records
-
-if "slots_db" not in st.session_state:
-    st.session_state.slots_db = build_priority_dataset()
+if "session_target" not in st.session_state:
+    st.session_state.session_target = 1500.0
 
 if "played_basket" not in st.session_state:
     st.session_state.played_basket = []
-if "display_limit" not in st.session_state:
-    st.session_state.display_limit = 30
-if "session_start_bankroll" not in st.session_state:
-    st.session_state.session_start_bankroll = 1000.0
-if "current_bankroll" not in st.session_state:
-    st.session_state.current_bankroll = 1000.0
-if "session_target" not in st.session_state:
-    st.session_state.session_target = 1800.0
 
-if "session_logs" not in st.session_state:
-    st.session_state.session_logs = pd.DataFrame([
-        {
-            "Date": "9/3/2026",
-            "Day": "Thursday",
-            "Family": "Cash Horns",
-            "Slot": "Cleopatra’s Kingdom",
-            "Spin of Feature Hit": "32",
-            "Feature Type": "scatter",
-            "Win Amount": 180.0,
-            "Win Multiplier": 72.0,
-            "Hit Number": 1,
-            "Attempt Number": 1
-        },
-        {
-            "Date": "9/3/2026",
-            "Day": "Thursday",
-            "Family": "Dragon Link",
-            "Slot": "Autumn Moon",
-            "Spin of Feature Hit": "35+",
-            "Feature Type": "na",
-            "Win Amount": 0.0,
-            "Win Multiplier": 0.0,
-            "Hit Number": 1,
-            "Attempt Number": 1
-        }
-    ])
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, rounded check-in amounts, or multi-phase spin execution plans."}
+        {
+            "role": "assistant",
+            "content": "👋 Welcome to your **Live Session Hub & Dynamic Slot Agent**. Use the sidebar to log quick events or consult me about machine choices, phase bet sizing, and pivot rules."
+        }
     ]
 
-def mark_slot_played(slot_name):
-    if slot_name not in st.session_state.played_basket:
-        st.session_state.played_basket.append(slot_name)
+# Default Machine Database with Volatility & Dynamic Phase Data
+if "slots_db" not in st.session_state:
+    st.session_state.slots_db = [
+        {
+            "slot": "Dragon Link - Golden Century",
+            "family": "Dragon Link",
+            "base_rvi": 88.5,
+            "volatility": "High",
+            "opt_bet": 5.00,
+            "phase2_bet": 7.50,  # Dynamic Step UP
+            "phase1_spins": 15,
+            "phase2_spins": 10,
+            "checkin_alloc": 150.00
+        },
+        {
+            "slot": "Lightning Link - Sahara Gold",
+            "family": "Lightning Link",
+            "base_rvi": 84.0,
+            "volatility": "Medium",
+            "opt_bet": 2.50,
+            "phase2_bet": 2.50,  # Dynamic Maintain
+            "phase1_spins": 20,
+            "phase2_spins": 15,
+            "checkin_alloc": 100.00
+        },
+        {
+            "slot": "Dragon Cash - Autumn Moon",
+            "family": "Dragon Cash",
+            "base_rvi": 81.2,
+            "volatility": "Low",
+            "opt_bet": 2.00,
+            "phase2_bet": 1.00,  # Dynamic Step DOWN
+            "phase1_spins": 25,
+            "phase2_spins": 15,
+            "checkin_alloc": 75.00
+        },
+        {
+            "slot": "Dollar Storm - Emperor's Treasure",
+            "family": "Dollar Storm",
+            "base_rvi": 79.5,
+            "volatility": "High",
+            "opt_bet": 5.00,
+            "phase2_bet": 2.50,  # Defensive Step DOWN
+            "phase1_spins": 15,
+            "phase2_spins": 10,
+            "checkin_alloc": 100.00
+        }
+    ]
 
-def restore_slot(slot_name):
-    if slot_name in st.session_state.played_basket:
-        st.session_state.played_basket.remove(slot_name)
+
+# ==========================================
+# 2. HELPER FUNCTIONS
+# ==========================================
+def get_top_unplayed_slot():
+    """Returns the highest RVI machine that hasn't been played yet."""
+    available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+    if available:
+        return sorted(available, key=lambda x: x.get("base_rvi", 0), reverse=True)[0]
+    return None
+
 
 # ==========================================
 # 3. SIDEBAR CONTROLS & DYNAMIC NAV
 # ==========================================
-
 st.sidebar.title("🎰 Live Session Hub")
 
 st.sidebar.subheader("Live Bankroll Controls")
@@ -219,409 +131,234 @@ with col_sb2:
 st.sidebar.markdown("---")
 st.sidebar.subheader("Quick Agent Consultations")
 
+# 1. SUGGEST 3 BEST AVAILABLE SLOTS
 if st.sidebar.button("⚡ Suggest 3 Best Available Slots"):
     available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
-    sorted_avail = sorted(available, key=lambda x: x["base_rvi"], reverse=True)[:3]
+    sorted_avail = sorted(available, key=lambda x: x.get("base_rvi", 0), reverse=True)[:3]
     
-    agent_msg = "### 🎯 Dynamic Multi-Phase Slot Recommendations:\n\n"
-    for idx, item in enumerate(sorted_avail, 1):
-        p1 = item['opt_bet']
-        p2 = item['step_down_bet']
-        alloc = item['checkin_alloc']
-        
-        agent_msg += f"#### **{idx}. {item['slot']}** ({item['family']})\n"
-        agent_msg += f"- **Check-In Allocation:** **${alloc:.2f}** (Rounded cash check-in)\n"
-        agent_msg += f"- **Phase 1 (Spins 1–20):** 20 spins @ **${p1:.2f}** bet.\n"
-        agent_msg += f"- **Phase 2 (Spins 21–35):** Step down to **${p2:.2f}** bet for 15 spins.\n"
-        agent_msg += f"- **Phase 3 (Spike/Exit Rule):** Hard exit after 35 cold spins. On hit >50x, lock core profit & execute **8 Backup Spins** @ **${p2:.2f}**.\n\n"
-    
-    st.session_state.chat_messages.append({"role": "user", "content": "Suggest the 3 best available slots right now with check-in amounts and proportional step-down bets."})
+    if sorted_avail:
+        agent_msg = "### 🎯 Dynamic Multi-Phase Slot Recommendations\n\n"
+        for idx, item in enumerate(sorted_avail, 1):
+            p1 = item.get('opt_bet', 5.0)
+            p2 = item.get('phase2_bet', p1 * 0.5)
+            alloc = item.get('checkin_alloc', 100.0)
+            p1_spins = item.get('phase1_spins', 20)
+            p2_spins = item.get('phase2_spins', 15)
+            volatility = item.get('volatility', 'Medium')
+            
+            bet_action = "Step DOWN to" if p2 < p1 else ("Step UP to" if p2 > p1 else "Maintain")
+            
+            agent_msg += f"#### **{idx}. {item['slot']}** ({item.get('family', 'Standard')}) — *Volatility: {volatility}*\n"
+            agent_msg += f"- **Check-In Allocation:** **${alloc:.2f}**\n"
+            agent_msg += f"- **Phase 1 Probe:** {p1_spins} spins @ **${p1:.2f}**\n"
+            agent_msg += f"- **Phase 2 Adjustment:** {p2_spins} spins — {bet_action} **${p2:.2f}**\n"
+            agent_msg += f"- **Exit/Spike Rule:** Exit if cold after Phase 2. On hit >50x, execute **8 Backup Spins** @ **${p2:.2f}** & lock profit.\n\n"
+    else:
+        agent_msg = "⚠️ **All registered machines have been played in this session.** Reset played basket or add fresh slot profiles."
+
+    st.session_state.chat_messages.append({"role": "user", "content": "Suggest the 3 best available slots right now with check-in allocations and dynamic phase strategy."})
     st.session_state.chat_messages.append({"role": "assistant", "content": agent_msg})
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
+# 2. MACHINE RE-TRIGGER & REPEAT ADVISOR
 if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
     diff = st.session_state.current_bankroll - st.session_state.session_start_bankroll
     target_dist = st.session_state.session_target - st.session_state.current_bankroll
     
-    user_q = f"Should I repeat/re-trigger on my current machine? Starting Bankroll: ${st.session_state.session_start_bankroll:.2f}, Current Bankroll: ${st.session_state.current_bankroll:.2f}, Target: ${st.session_state.session_target:.2f}."
+    user_q = f"Should I repeat/re-trigger on my current machine? Starting: ${st.session_state.session_start_bankroll:.2f}, Current: ${st.session_state.current_bankroll:.2f}, Target: ${st.session_state.session_target:.2f}."
     
     if diff > 0 and target_dist <= 200:
-        evaluation = f"🎯 **Target Near (${target_dist:.2f} remaining)!**\n\n- **Check-In Cap:** Allocate $50 max.\n- **Phase 1:** Step down bet size to $1.25 / $2.50.\n- **Phase 2:** Execute **5–10 Backup Spins** max.\n- **Exit Rule:** Lock profit immediately once target is hit."
+        evaluation = f"🎯 **Target Near (${target_dist:.2f} remaining)!**\n\n"
+        evaluation += f"- **Check-In Cap:** Allocate max $50-$100 from profit.\n"
+        evaluation += f"- **Phase Strategy:** Execute defensive **5–8 Backup Spins** at minimum base bet.\n"
+        evaluation += f"- **Exit Rule:** Cash out instantly once target standard balance hits."
     elif diff > 300:
-        evaluation = f"🔥 **Big Win Active (+${diff:.2f})!**\n\n- **Check-In Cap:** Allocate $50 or $100 from profit buffer.\n- **Phase 1:** Lock 80% of win into core balance.\n- **Phase 2:** Execute **8 Backup Spins** at 50% reduced bet.\n- **Exit Rule:** Hard exit if no re-trigger after 8 spins."
+        evaluation = f"🔥 **Big Win Active (+${diff:.2f} Profit)!**\n\n"
+        evaluation += f"- **Profit Protection:** Lock 80% of win into core balance.\n"
+        evaluation += f"- **Phase Strategy:** Execute **8 Backup Spins**. If volatility is high, hold bet size; if low, step down 50%.\n"
+        evaluation += f"- **Exit Rule:** Hard exit if no feature re-triggers within backup window."
     elif diff < -250:
-        evaluation = f"⚠️ **Cold Cycle Detected (-${abs(diff):.2f})!**\n\n- **Check-In Cap:** Preserve remaining bankroll.\n- **Phase 1:** Step down bet size to $1.00/$1.25 for 15 spins.\n- **Phase 2:** Hard exit to a fresh slot if no feature hits."
+        evaluation = f"⚠️ **Cold Cycle Detected (-${abs(diff):.2f})!**\n\n"
+        evaluation += f"- **Check-In Cap:** Preserve core capital.\n"
+        evaluation += f"- **Phase Strategy:** Do NOT re-trigger high bets. Drop to lowest baseline tier or pivot immediately.\n"
+        evaluation += f"- **Exit Rule:** Exit to fresh candidate if next 10 spins yield zero momentum."
     else:
-        evaluation = "✅ **Standard Operational Window.** Continue standard 35-spin multi-phase probe cycle."
+        evaluation = "✅ **Standard Operational State.** Continue dynamic phase probe cycle based on current machine volatility."
         
     st.session_state.chat_messages.append({"role": "user", "content": user_q})
-    st.session_state.chat_messages.append({"role": "assistant", "content": f"### 📊 Machine Re-Trigger & Exit Strategy:\n\n{evaluation}"})
+    st.session_state.chat_messages.append({"role": "assistant", "content": f"### 📊 Dynamic Re-Trigger & Exit Strategy\n\n{evaluation}"})
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
-# ==========================================
-# 4. MAIN DASHBOARD NAVIGATION
-# ==========================================
+# 3. LOCK-IN PROFIT PLAN
+if st.sidebar.button("🔒 Big Win Profit Lock Plan"):
+    cur_br = st.session_state.current_bankroll
+    start_br = st.session_state.session_start_bankroll
+    profit = cur_br - start_br
+    
+    if profit > 0:
+        cash_out = start_br + (profit * 0.80)
+        play_money = profit * 0.20
+        msg = f"### 💰 Profit Lock & Risk-Free Execution Plan\n\n"
+        msg += f"- **Current Bankroll:** ${cur_br:,.2f} (+${profit:,.2f} Net Profit)\n"
+        msg += f"- **💵 Cash Out Now (Secured Profit):** **${cash_out:,.2f}**\n"
+        msg += f"- **🎰 Risk-Free Play Buffer:** **${play_money:,.2f}**\n\n"
+        msg += f"**Execution Steps:**\n"
+        msg += f"1. Run **8 Backup Spins** on active machine using Phase 2 bet size.\n"
+        msg += f"2. Allocate remaining buffer (${play_money:,.2f}) to top-ranked unplayed machine.\n"
+        msg += f"3. **Strict Floor Rule:** Banked ${cash_out:,.2f} is non-negotiable and cannot be re-inserted."
+    else:
+        msg = "### ℹ️ No Profit Buffer Active\nBankroll is flat or at a loss relative to start. Focus on standard probing before applying lock-in protocols."
 
-st.title("Casino Slot Optimization & Execution Agent")
+    st.session_state.chat_messages.append({"role": "user", "content": "I hit a major win! Give me my exact profit lock-in numbers and exit steps."})
+    st.session_state.chat_messages.append({"role": "assistant", "content": msg})
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
+    st.rerun()
 
-st.radio(
-    "Navigation Tabs",
-    options=TAB_OPTIONS,
-    key="active_tab",
-    horizontal=True,
-    label_visibility="collapsed"
-)
+# 4. STOP LOSS & CIRCUIT BREAKER
+if st.sidebar.button("🛑 Check Circuit Breaker / Stop Loss"):
+    cur_br = st.session_state.current_bankroll
+    start_br = st.session_state.session_start_bankroll
+    loss = start_br - cur_br
+    
+    if loss >= 200:
+        msg = f"### 🚨 CIRCUIT BREAKER TRIGGERED\n\n"
+        msg += f"- **Current Loss:** -${loss:,.2f} from starting capital.\n"
+        msg += f"- **Mandatory Action:** Step away for a **15-minute floor walk / break**.\n"
+        msg += f"- **Bet Floor Restriction:** Cap maximum bet size at lowest baseline tier for next 2 machines.\n"
+        msg += f"- **Hard Session Stop:** End session completely if total bankroll touches **${start_br * 0.5:,.2f}**."
+    else:
+        msg = f"### ✅ Risk Status: Operational\n\nCurrent session variance (-${max(0, loss):,.2f}) is within acceptable parameters. Continue standard execution."
+
+    st.session_state.chat_messages.append({"role": "user", "content": "Check my circuit breaker and risk thresholds."})
+    st.session_state.chat_messages.append({"role": "assistant", "content": msg})
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
+    st.rerun()
+
+# 5. DYNAMIC PHASE 2 GUIDE
+if st.sidebar.button("📉 Dynamic Phase 2 Transition Guide"):
+    msg = "### 🔄 Dynamic Phase 2 Transition Matrix\n\n"
+    msg += "Phase 2 bet adjustments depend on machine volatility and Phase 1 feedback (not hardcoded step-downs):\n\n"
+    msg += "| Machine Profile | Phase 1 State | Recommended Phase 2 Bet Action |\n"
+    msg += "| :--- | :--- | :--- |\n"
+    msg += "| **High Volatility / High RVI** | Cold Probe | **Step UP 25-50%** (Trigger chase window) |\n"
+    msg += "| **Medium Volatility** | Partial Hits | **Maintain Base Bet** (Extend spin count) |\n"
+    msg += "| **Low Volatility / Standard** | Completely Cold | **Step DOWN 50%** (Capital defense) |\n"
+    msg += "| **Post-Feature Spike** | High Return (>50x) | **Step DOWN to Backup Tier** (8-spin exit check) |\n\n"
+    msg += "👉 *Ask the chat agent with your current spin count and machine name for exact dollar figures.*"
+
+    st.session_state.chat_messages.append({"role": "user", "content": "How should I handle Phase 2 bet sizing for my active machine?"})
+    st.session_state.chat_messages.append({"role": "assistant", "content": msg})
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
+    st.rerun()
+
+# 6. TOP CANDIDATE CHECK-IN CALCULATOR
+if st.sidebar.button("💰 Calculate Next Machine Check-In"):
+    next_slot = get_top_unplayed_slot()
+    if next_slot:
+        p1 = next_slot.get('opt_bet', 5.0)
+        p2 = next_slot.get('phase2_bet', p1 * 0.5)
+        p1_spins = next_slot.get('phase1_spins', 20)
+        p2_spins = next_slot.get('phase2_spins', 15)
+        alloc = next_slot.get('checkin_alloc', 100.0)
+        
+        raw_cost = (p1_spins * p1) + (p2_spins * p2)
+        bet_trend = "Increase" if p2 > p1 else ("Decrease" if p2 < p1 else "Maintain")
+        
+        msg = f"### 💵 Next Machine Profile & Capital Required\n\n"
+        msg += f"**Target Machine:** **{next_slot['slot']}** ({next_slot.get('family', 'Standard')})\n\n"
+        msg += f"- **Phase 1 ({p1_spins} spins @ ${p1:.2f}):** ${p1_spins * p1:.2f}\n"
+        msg += f"- **Phase 2 ({p2_spins} spins @ ${p2:.2f} — {bet_trend}):** ${p2_spins * p2:.2f}\n"
+        msg += f"- **Calculated Session Budget:** ${raw_cost:.2f}\n"
+        msg += f"- **💵 Cash Check-In (Rounded):** **${alloc:.2f}**\n"
+    else:
+        msg = "⚠️ All candidate machines in your database have already been logged for this session."
+
+    st.session_state.chat_messages.append({"role": "user", "content": "Calculate cash check-in and phase parameters for the top unplayed machine."})
+    st.session_state.chat_messages.append({"role": "assistant", "content": msg})
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
+    st.rerun()
+
+# 7. ANY-SPIN PIVOT ADVISOR
+if st.sidebar.button("🔄 Pivot or Stay Advisor"):
+    next_slot = get_top_unplayed_slot()
+    next_up = next_slot["slot"] if next_slot else "Fresh Unplayed Machine"
+    
+    msg = f"### 🔄 Any-Spin Pivot & Exit Rules\n\n"
+    msg += f"You can evaluate a machine pivot at **any spin state** during your session:\n\n"
+    msg += f"- **STAY IF:**\n"
+    msg += f"  - You are in Phase 1 and seeing frequent line hits, orb holds, or mini-features.\n"
+    msg += f"  - You hit a feature within the last 8 spins and are executing backup spins.\n"
+    msg += f"  - Active bankroll is trending upward over the last 10 spins.\n\n"
+    msg += f"- **PIVOT IF:**\n"
+    msg += f"  - You completed your Phase 1 & Phase 2 windows with zero feature triggers.\n"
+    msg += f"  - You finished 8 post-hit backup spins without a re-trigger.\n"
+    msg += f"  - Machine went 12+ consecutive spins without a single line win.\n\n"
+    msg += f"👉 **Recommended Pivot Destination:** Move to **{next_up}**."
+
+    st.session_state.chat_messages.append({"role": "user", "content": "Should I pivot to a new machine right now or stay on my active machine?"})
+    st.session_state.chat_messages.append({"role": "assistant", "content": msg})
+    st.session_state.active_tab = "🤖 Interactive Agent Chat"
+    st.rerun()
+
+
+# ==========================================
+# 4. MAIN APP BODY & WORKSPACE
+# ==========================================
+st.title("🎰 Real-Time Slot Strategy & Session Hub")
+
+# Quick Session Overview Metric Bar
+col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+col_m1.metric("Starting Bankroll", f"${st.session_state.session_start_bankroll:,.2f}")
+col_m2.metric("Current Bankroll", f"${st.session_state.current_bankroll:,.2f}", delta=f"{st.session_state.current_bankroll - st.session_state.session_start_bankroll:,.2f}")
+col_m3.metric("Target Goal", f"${st.session_state.session_target:,.2f}")
+col_m4.metric("Played Machines", f"{len(st.session_state.played_basket)}")
 
 st.markdown("---")
 
-# ------------------------------------------
-# TAB 1: TODAY'S PRIORITY BOARD
-# ------------------------------------------
-if st.session_state.active_tab == "📊 Today's Priority Board":
-    st.subheader("Today's Priority Board (Feature-RVI Strategy Matrix)")
-    st.caption("Top-ranked slots with spin allocations, rounded check-in capital ($50 increments), and proportional bet structures.")
+# Navigation Tabs
+tabs = ["🤖 Interactive Agent Chat", "📊 Active Machines Database"]
+active_tab_index = 0 if st.session_state.active_tab == "🤖 Interactive Agent Chat" else 1
+
+selected_tab = st.radio("Workspace View", tabs, index=active_tab_index, horizontal=True)
+st.session_state.active_tab = selected_tab
+
+if selected_tab == "🤖 Interactive Agent Chat":
+    st.subheader("🤖 Strategy Agent Consultation")
     
-    available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
-    sorted_priority = sorted(available_slots, key=lambda x: x["base_rvi"], reverse=True)
-    current_display = sorted_priority[:st.session_state.display_limit]
-    
-    table_data = []
-    for rank, item in enumerate(current_display, 1):
-        table_data.append({
-            "Rank": rank,
-            "Slot Family": item["family"],
-            "Slot Theme Name": item["slot"],
-            "Phase 1 Bet ($)": f"${item['opt_bet']:.2f}",
-            "Phase 1 Spins": f"{item.get('p1_spins', 20)} spins",
-            "Phase 2 Bet ($)": f"${item['step_down_bet']:.2f}",
-            "Phase 2 Spins": f"{item.get('p2_spins', 15)} spins",
-            "Total Evaluation Window": f"{item.get('p1_spins', 20) + item.get('p2_spins', 15)} spins max",
-            "Suggested Check-In ($)": f"${item['checkin_alloc']:.2f}",
-            "Volatility Profile": item["volatility"],
-            "RVI Score": item["base_rvi"]
-        })
-    
-    df_priority = pd.DataFrame(table_data)
-    st.dataframe(df_priority, use_container_width=True, hide_index=True)
-    
-    col_a, col_b = st.columns([1, 4])
-    with col_a:
-        if len(sorted_priority) > st.session_state.display_limit:
-            if st.button("➕ Load 15 More Slots"):
-                st.session_state.display_limit += 15
-                st.rerun()
-        else:
-            st.info("All candidates loaded.")
-            
-    with col_b:
-        st.write(f"Showing **{len(current_display)}** of **{len(sorted_priority)}** unplayed candidates.")
+    # Display Chat History
+    for message in st.session_state.chat_messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
 
-# ------------------------------------------
-# TAB 2: PRE-PLANNED EXECUTION CARDS
-# ------------------------------------------
-elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
-    st.subheader("Pre-Planned Per-Slot Execution Cards")
-    st.caption("Cascading Family $\\rightarrow$ Slot Theme selection for step-by-step game plans and rounded check-in amounts.")
-    
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        card_family = st.selectbox("1. Select Slot Family:", options=list(SLOT_MASTER_LIST.keys()), key="card_fam_select")
-    with col_c2:
-        available_card_slots = SLOT_MASTER_LIST[card_family]
-        card_slot = st.selectbox("2. Select Slot Theme:", options=available_card_slots, key="card_slot_select")
-
-    if card_slot:
-        slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot), None)
-        if slot_data:
-            p1_bet = slot_data['opt_bet']
-            p2_bet = slot_data['step_down_bet']
-            checkin = slot_data['checkin_alloc']
-
-            st.markdown("---")
-            st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
-            
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Suggested Check-In Amount", f"${checkin:.2f}")
-            c2.metric("Phase 1 Bet Size", f"${p1_bet:.2f} (20 Spins)")
-            c3.metric("Phase 2 Bet Size", f"${p2_bet:.2f} (15 Spins)")
-            c4.metric("Evaluation Window", "35 Spins Total")
-            
-            st.markdown("---")
-            st.markdown("#### 🔄 Proportional Multi-Phase Execution Plan")
-            
-            st.write(f"**Phase 1: Initial Probe (Spins 1 – 20)**")
-            st.write(f"- Insert **${checkin:.2f}** check-in capital (rounded to nearest $50).")
-            st.write(f"- Set bet to **${p1_bet:.2f}**.")
-            st.write(f"- Play **20 full spins** (Max risk: **${20 * p1_bet:.2f}**).")
-            
-            st.markdown("---")
-            st.write(f"**Phase 2: Proportional Bet Step-Down (Spins 21 – 35 if No Feature)**")
-            st.write(f"- If no feature triggers by spin 20, step down bet to **${p2_bet:.2f}** (Proportional ~50% ratio).")
-            st.write(f"- Continue probing for **15 additional spins** (Max risk: **${15 * p2_bet:.2f}**).")
-            st.write(f"- *Note:* A feature trigger at ${p2_bet:.2f} still yields enough multiplier weight to offset Phase 1 decay.")
-            
-            st.markdown("---")
-            st.write(f"**Phase 3: Spike, Backup Spin & Exit Rule**")
-            st.write(f"- **Cold Machine:** If no feature triggers by spin 35, hard exit to next priority slot.")
-            st.write(f"- **Big Win Hit:** Lock 80% core profit immediately.")
-            st.write(f"- **Backup Spins:** Execute **8 Backup Spins** at **${p2_bet:.2f}** to test for cluster re-triggers.")
-
-            st.markdown("---")
-            if st.button(f"✅ Mark '{slot_data['slot']}' as Played"):
-                mark_slot_played(slot_data['slot'])
-                st.success(f"Moved '{slot_data['slot']}' to Played Basket!")
-                st.rerun()
-
-# ------------------------------------------
-# TAB 3: LIVE DATA ENTRY
-# ------------------------------------------
-elif st.session_state.active_tab == "📝 Live Data Entry":
-    st.subheader("📝 Live Session Data Entry")
-    st.caption("Matches exact Google Sheet schema. Supports '+' notation (e.g. 35+) for sessions with no feature hits.")
-
-    col_d1, col_d2 = st.columns([1, 2])
-    
-    with col_d1:
-        chosen_date = st.date_input(
-            "Select Date:", 
-            key="live_date_picker"
-        )
-
-    dynamic_day = chosen_date.strftime("%A")
-    formatted_date_str = f"{chosen_date.month}/{chosen_date.day}/{chosen_date.year}"
-
-    with col_d2:
-        st.text_input(
-            "Day of Week (Auto-Selected):", 
-            value=dynamic_day, 
-            disabled=True
-        )
-
-    st.markdown("---")
-
-    with st.form("exact_gs_entry_form", clear_on_submit=True):
-        col_e1, col_e2, col_e3 = st.columns(3)
-        
-        with col_e1:
-            entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()))
-            entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family])
-            # Text input to allow string formats such as "32+" or "35+"
-            entry_spin_hit_raw = st.text_input("Spin of Feature Hit (e.g. 32 or 35+):", value="35")
-
-        with col_e2:
-            entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
-            entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=0.0, step=10.0)
-            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=0.0, step=5.0)
-
-        with col_e3:
-            entry_hit_num = st.number_input("Hit Number:", min_value=1, max_value=20, value=1)
-            entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
-
-        submit_gs_entry = st.form_submit_button("💾 Save Session Record to Dataset")
-        
-        if submit_gs_entry:
-            cleaned_spin_val = entry_spin_hit_raw.strip()
-            
-            # Format logic: if Feature Type is 'na', ensure '+' suffix is applied
-            if entry_feat_type == "na":
-                digits = re.sub(r"[^\d]", "", cleaned_spin_val)
-                spin_final_str = f"{digits}+" if digits else "35+"
-            else:
-                # For hit features, preserve exact user string or clean digits
-                spin_final_str = cleaned_spin_val if cleaned_spin_val else "1"
-
-            new_gs_log = {
-                "Date": formatted_date_str,
-                "Day": dynamic_day,
-                "Family": entry_family,
-                "Slot": entry_slot,
-                "Spin of Feature Hit": spin_final_str,
-                "Feature Type": entry_feat_type,
-                "Win Amount": entry_win_amt,
-                "Win Multiplier": entry_multiplier,
-                "Hit Number": entry_hit_num,
-                "Attempt Number": entry_attempt_num
-            }
-            
-            st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_gs_log])], ignore_index=True)
-            mark_slot_played(entry_slot)
-            
-            st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str}, Spin: '{spin_final_str}', Feature: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
-
-    st.markdown("---")
-    st.markdown("#### 📋 Current Logged Entries")
-    st.dataframe(st.session_state.session_logs, use_container_width=True)
-
-# ------------------------------------------
-# TAB 4: VISUAL DATA ANALYTICS
-# ------------------------------------------
-elif st.session_state.active_tab == "📈 Visual Data Analytics":
-    st.subheader("📈 Visual Data Analytics & Performance Metrics")
-    
-    df_analytics = st.session_state.session_logs.copy()
-    if not df_analytics.empty:
-        m1, m2, m3 = st.columns(3)
-        total_wins = df_analytics["Win Amount"].sum() if "Win Amount" in df_analytics.columns else 0
-        avg_mult = df_analytics["Win Multiplier"].mean() if "Win Multiplier" in df_analytics.columns else 0
-        total_entries = len(df_analytics)
-        
-        m1.metric("Total Logged Win Amount", f"${total_wins:,.2f}")
-        m2.metric("Average Win Multiplier", f"{avg_mult:.1f}x")
-        m3.metric("Total Feature Entries Recorded", total_entries)
-        
-        st.markdown("---")
-        col_g1, col_g2 = st.columns(2)
-        
-        with col_g1:
-            if "Family" in df_analytics.columns and "Win Amount" in df_analytics.columns:
-                fig_fam = px.bar(
-                    df_analytics, 
-                    x="Family", 
-                    y="Win Amount", 
-                    color="Feature Type" if "Feature Type" in df_analytics.columns else None,
-                    title="Total Win Amount by Slot Family ($)",
-                    text_auto=True
-                )
-                st.plotly_chart(fig_fam, use_container_width=True)
-
-        with col_g2:
-            if "Spin of Feature Hit" in df_analytics.columns:
-                # Convert "35+" values to integers for histogram plotting
-                df_analytics["Numeric_Spin"] = df_analytics["Spin of Feature Hit"].astype(str).str.replace("+", "", regex=False)
-                df_analytics["Numeric_Spin"] = pd.to_numeric(df_analytics["Numeric_Spin"], errors="coerce")
-                
-                fig_hist = px.histogram(
-                    df_analytics, 
-                    x="Numeric_Spin", 
-                    nbins=15, 
-                    title="Distribution of Spin Window for Feature Hits",
-                    labels={"Numeric_Spin": "Spin Count"}
-                )
-                st.plotly_chart(fig_hist, use_container_width=True)
-    else:
-        st.info("No logs available yet for visual analytics.")
-
-# ------------------------------------------
-# TAB 5: INTERACTIVE AGENT CHAT
-# ------------------------------------------
-elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
-    st.subheader("🤖 Interactive AI Strategy Partner")
-    st.caption("Real-time execution advice based on active bankroll, session targets, and machine performance.")
-
-    # Display chat history
-    for msg in st.session_state.chat_messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    if prompt := st.chat_input("Ask for advice (e.g., 'Hit $2060 on Shinobi with $10 bet, current bankroll $2260. What next?'):"):
-        # Append user message
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+    # User Chat Input
+    if user_input := st.chat_input("Ask about phase bets, check-in amounts, or pivot rules..."):
+        st.session_state.chat_messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(user_input)
 
-        # Retrieve session context
-        cur_br = float(st.session_state.current_bankroll)
-        target_br = float(st.session_state.session_target)
-        start_br = float(st.session_state.session_start_bankroll)
+        # Dynamic Response Handler
+        top_slot = get_top_unplayed_slot()
+        top_name = top_slot["slot"] if top_slot else "a high-RVI machine"
         
-        # Determine available unplayed slots
-        unplayed = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
-        top_candidates = sorted(unplayed, key=lambda x: x["base_rvi"], reverse=True)[:2]
+        reply = f"Acknowledged. Based on your current bankroll of **${st.session_state.current_bankroll:,.2f}**, keep strict adherence to your phase windows. If evaluating a new play, consider **{top_name}** for your next check-in."
 
-        # Strategic Evaluation Logic
-        if cur_br >= target_br:
-            profit_buffer = cur_br - target_br
-            locked_profit = target_br - start_br
-            play_budget = min(profit_buffer, 250.0) if profit_buffer > 0 else 100.0
-
-            reply = f"### 🎉 Target Surpassed! Strategy Advice\n\n"
-            reply += f"- **Current Bankroll:** ${cur_br:,.2f}\n"
-            reply += f"- **Session Target:** ${target_br:,.2f}\n"
-            reply += f"- **Locked Profit (Banked):** ${locked_profit:,.2f}\n"
-            reply += f"- **Active Play Budget:** **${play_budget:,.2f}** *(Use this buffer to play risk-free)*\n\n"
-            
-            reply += "---\n\n"
-            reply += "#### Option A: Stay on Current Machine (Shinobi)\n"
-            reply += f"- **Action:** Execute **8 Backup Spins** immediately.\n"
-            reply += f"- **Bet Size:** Step down to **$5.00** per spin.\n"
-            reply += f"- **Total Cost:** **$40.00** max.\n"
-            reply += f"- **Exit Rule:** If no re-trigger occurs within 8 spins, CASH OUT immediately.\n\n"
-
-            if top_candidates:
-                c1 = top_candidates[0]
-                reply += "#### Option B: Move to a High-Priority Fresh Machine\n"
-                reply += f"- **Recommended Machine:** **{c1['slot']}** ({c1['family']})\n"
-                reply += f"- **Check-In Budget:** Cash in **${c1['checkin_alloc']:.2f}** from your ${play_budget:.2f} play buffer.\n"
-                reply += f"- **Phase 1 Execution:** Play **20 spins** @ **${c1['opt_bet']:.2f}** per spin.\n"
-                reply += f"- **Phase 2 Step-Down:** If cold after 20 spins, drop to **${c1['step_down_bet']:.2f}** for **15 spins**.\n"
-                reply += f"- **Hard Exit:** Exit machine if no feature triggers after 35 total spins.\n"
-
-        else:
-            # Standard/Deficit State Logic
-            deficit = target_br - cur_br
-            reply = f"### 📊 Session Strategy Update\n\n"
-            reply += f"- **Current Bankroll:** ${cur_br:,.2f}\n"
-            reply += f"- **Target Gap:** ${deficit:,.2f} remaining\n\n"
-
-            if top_candidates:
-                c1 = top_candidates[0]
-                reply += f"#### Recommended Next Move: **{c1['slot']}** ({c1['family']})\n"
-                reply += f"- **Check-In Cash:** **${c1['checkin_alloc']:.2f}**\n"
-                reply += f"- **Phase 1:** 20 spins @ **${c1['opt_bet']:.2f}**\n"
-                reply += f"- **Phase 2 Step-Down:** 15 spins @ **${c1['step_down_bet']:.2f}**\n"
-
-        # Append assistant reply
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
         with st.chat_message("assistant"):
             st.markdown(reply)
 
-# ------------------------------------------
-# TAB 6: PLAYED BASKET & OVERRIDES
-# ------------------------------------------
-elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
-    st.subheader("Daily Played Basket & Slot Overrides")
-    st.caption("Slots played in this session are excluded from recommendations. Click 'Restore' to bring any machine back into your queue.")
+elif selected_tab == "📊 Active Machines Database":
+    st.subheader("📊 Session Candidate Database")
     
-    if st.session_state.played_basket:
-        played_data = []
-        for p_slot in st.session_state.played_basket:
-            s_match = next((s for s in st.session_state.slots_db if s["slot"] == p_slot), None)
-            played_data.append({
-                "Slot Name": p_slot,
-                "Family": s_match["family"] if s_match else "Unknown",
-                "Volatility": s_match["volatility"] if s_match else "N/A"
-            })
-        
-        st.dataframe(pd.DataFrame(played_data), use_container_width=True)
-        
-        st.markdown("#### 🔓 Restore Slot to Active Recommendations")
-        restore_target = st.selectbox("Select Slot to Re-Enable:", options=st.session_state.played_basket)
-        if st.button("Unlock Selected Slot"):
-            restore_slot(restore_target)
-            st.success(f"Restored '{restore_target}' back to priority recommendations!")
+    # Render Machine Data Table
+    st.dataframe(st.session_state.slots_db, use_container_width=True)
+    
+    # Machine Log Management
+    st.subheader("Mark Played Machine")
+    played_choice = st.selectbox("Select machine to mark as played:", [s["slot"] for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket])
+    if st.button("Log to Played Basket"):
+        if played_choice:
+            st.session_state.played_basket.append(played_choice)
+            st.success(f"Added {played_choice} to played basket.")
             st.rerun()
-    else:
-        st.info("No slots have been played yet in this active session.")
-
-# ------------------------------------------
-# TAB 7: DOCUMENTATION & RULES
-# ------------------------------------------
-elif st.session_state.active_tab == "📖 Documentation & Rules":
-    st.subheader("Strategy Engine Rules & Bounding Logic")
-    st.markdown("""
-    ### Strategy & Bet Scaling Rules
-    1. **Spin Windows:**
-       - **Phase 1 Window:** 20 spins @ Base Bet.
-       - **Phase 2 Window:** 15 spins @ Step-Down Bet.
-       - **Total Probe:** 35 spins max per machine.
-    2. **Check-In Capital Calculation:** Suggested Machine Allocation = $(20 \times \text{Phase 1 Bet}) + (15 \times \text{Phase 2 Bet})$, rounded UP to the nearest $\$50$ increment.
-    3. **Proportional Bet Tiering ($\le 50\%$ Step-Down Ratio):**
-       - $\$10.00 \rightarrow \$5.00$
-       - $\$7.50 \rightarrow \$3.75$
-       - $\$5.00 \rightarrow \$2.50$
-       - $\$3.75 \rightarrow \$2.00$
-       - $\$2.50 \rightarrow \$1.25$
-    4. **Feature Options:** `na`, `orb`, `scatter`, `scatter+orb`.
-    """)
