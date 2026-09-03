@@ -508,23 +508,71 @@ elif st.session_state.active_tab == "📈 Visual Data Analytics":
 # ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
-    st.caption("Chat with the strategy agent in real-time for proportional bet plans, rounded check-in amounts, or backup spin rules.")
-    
+    st.caption("Real-time execution advice based on active bankroll, session targets, and machine performance.")
+
+    # Display chat history
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            
-    if prompt := st.chat_input("Ask a strategy question (e.g. 'How much should I check in for $5 base bet?'):"):
+
+    if prompt := st.chat_input("Ask for advice (e.g., 'Hit $2060 on Shinobi with $10 bet, current bankroll $2260. What next?'):"):
+        # Append user message
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
+
+        # Retrieve session context
+        cur_br = float(st.session_state.current_bankroll)
+        target_br = float(st.session_state.session_target)
+        start_br = float(st.session_state.session_start_bankroll)
+        
+        # Determine available unplayed slots
+        unplayed = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+        top_candidates = sorted(unplayed, key=lambda x: x["base_rvi"], reverse=True)[:2]
+
+        # Strategic Evaluation Logic
+        if cur_br >= target_br:
+            profit_buffer = cur_br - target_br
+            locked_profit = target_br - start_br
+            play_budget = min(profit_buffer, 250.0) if profit_buffer > 0 else 100.0
+
+            reply = f"### 🎉 Target Surpassed! Strategy Advice\n\n"
+            reply += f"- **Current Bankroll:** ${cur_br:,.2f}\n"
+            reply += f"- **Session Target:** ${target_br:,.2f}\n"
+            reply += f"- **Locked Profit (Banked):** ${locked_profit:,.2f}\n"
+            reply += f"- **Active Play Budget:** **${play_budget:,.2f}** *(Use this buffer to play risk-free)*\n\n"
             
-        reply = f"**Strategy Guidance:** Based on active bankroll **${st.session_state.current_bankroll:.2f}** and target **${st.session_state.session_target:.2f}**:\n\n"
-        reply += "1. **Phase 1 Execution:** Play **20 Spins** at your base Phase 1 bet size.\n"
-        reply += "2. **Phase 2 Step-Down:** If no feature triggers by spin 20, step down your bet size by ~50% and play **15 Spins**.\n"
-        reply += "3. **Check-In Calculation:** Formula = Math.ceil([(20 × Phase 1 Bet) + (15 × Phase 2 Bet)] / 50) * 50 (Rounded up to nearest $50 increment).\n"
-        reply += "4. **Backup Spins:** Following a major payout, execute 8 backup spins at the Phase 2 bet size before moving to another machine."
-            
+            reply += "---\n\n"
+            reply += "#### Option A: Stay on Current Machine (Shinobi)\n"
+            reply += f"- **Action:** Execute **8 Backup Spins** immediately.\n"
+            reply += f"- **Bet Size:** Step down to **$5.00** per spin.\n"
+            reply += f"- **Total Cost:** **$40.00** max.\n"
+            reply += f"- **Exit Rule:** If no re-trigger occurs within 8 spins, CASH OUT immediately.\n\n"
+
+            if top_candidates:
+                c1 = top_candidates[0]
+                reply += "#### Option B: Move to a High-Priority Fresh Machine\n"
+                reply += f"- **Recommended Machine:** **{c1['slot']}** ({c1['family']})\n"
+                reply += f"- **Check-In Budget:** Cash in **${c1['checkin_alloc']:.2f}** from your ${play_budget:.2f} play buffer.\n"
+                reply += f"- **Phase 1 Execution:** Play **20 spins** @ **${c1['opt_bet']:.2f}** per spin.\n"
+                reply += f"- **Phase 2 Step-Down:** If cold after 20 spins, drop to **${c1['step_down_bet']:.2f}** for **15 spins**.\n"
+                reply += f"- **Hard Exit:** Exit machine if no feature triggers after 35 total spins.\n"
+
+        else:
+            # Standard/Deficit State Logic
+            deficit = target_br - cur_br
+            reply = f"### 📊 Session Strategy Update\n\n"
+            reply += f"- **Current Bankroll:** ${cur_br:,.2f}\n"
+            reply += f"- **Target Gap:** ${deficit:,.2f} remaining\n\n"
+
+            if top_candidates:
+                c1 = top_candidates[0]
+                reply += f"#### Recommended Next Move: **{c1['slot']}** ({c1['family']})\n"
+                reply += f"- **Check-In Cash:** **${c1['checkin_alloc']:.2f}**\n"
+                reply += f"- **Phase 1:** 20 spins @ **${c1['opt_bet']:.2f}**\n"
+                reply += f"- **Phase 2 Step-Down:** 15 spins @ **${c1['step_down_bet']:.2f}**\n"
+
+        # Append assistant reply
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
         with st.chat_message("assistant"):
             st.markdown(reply)
