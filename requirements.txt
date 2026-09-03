@@ -7,4 +7,3 @@ gspread
 st-gsheets-connection>=0.1.0
 numpy
 google-genai
-streamlit-gsheets
