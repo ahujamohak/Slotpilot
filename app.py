@@ -8,7 +8,10 @@ from datetime import datetime
 # Set Streamlit Page Layout
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
-# Initialize Active Tab Tracker
+# ==========================================
+# 0. STATE MANAGEMENT & CALLBACKS
+# ==========================================
+
 TAB_OPTIONS = [
     "📊 Today's Priority Board", 
     "📋 Pre-Planned Execution Cards", 
@@ -19,8 +22,22 @@ TAB_OPTIONS = [
     "📖 Documentation & Rules"
 ]
 
+# Single source of truth for Active Tab
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "📊 Today's Priority Board"
+
+# Date & Auto-Day State Management
+if "selected_live_date" not in st.session_state:
+    st.session_state.selected_live_date = datetime.now().date()
+
+if "selected_live_day" not in st.session_state:
+    st.session_state.selected_live_day = datetime.now().strftime("%A")
+
+def update_live_day_callback():
+    """Triggers instantly when date picker changes value."""
+    new_date = st.session_state.live_date_picker
+    st.session_state.selected_live_date = new_date
+    st.session_state.selected_live_day = new_date.strftime("%A")
 
 # ==========================================
 # 1. MASTER SLOT LIST HIERARCHY
@@ -79,11 +96,6 @@ SLOT_MASTER_LIST = {
 ALLOWED_BETS = [1.00, 1.25, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
 
 def get_proportional_step_down(p1_bet):
-    """
-    Ensures Phase 2 step-down bet is proportionally close to Phase 1 bet
-    so a feature trigger in Phase 2 can still recover Phase 1 losses.
-    Rule: Step down is 50%-60% of Phase 1 bet size.
-    """
     if p1_bet >= 10.00:
         return 5.00
     elif p1_bet >= 7.50:
@@ -100,7 +112,6 @@ def get_proportional_step_down(p1_bet):
         return 1.00
 
 def round_up_to_nearest_50(val):
-    """Rounds up value to nearest multiple of 50 for cash check-ins."""
     return float(math.ceil(val / 50.0) * 50)
 
 def build_priority_dataset():
@@ -125,19 +136,9 @@ def build_priority_dataset():
             })
     return records
 
-# Initialize Session State Variables with Migration Safeguard
+# Session State Data Structure Initialization
 if "slots_db" not in st.session_state:
     st.session_state.slots_db = build_priority_dataset()
-else:
-    for item in st.session_state.slots_db:
-        if "step_down_bet" not in item:
-            item["step_down_bet"] = get_proportional_step_down(item["opt_bet"])
-        raw_alloc = (20 * item["opt_bet"]) + (15 * item["step_down_bet"])
-        item["checkin_alloc"] = round_up_to_nearest_50(raw_alloc)
-        if "p1_spins" not in item:
-            item["p1_spins"] = 20
-        if "p2_spins" not in item:
-            item["p2_spins"] = 15
 
 if "played_basket" not in st.session_state:
     st.session_state.played_basket = []
@@ -171,7 +172,6 @@ if "chat_messages" not in st.session_state:
         {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, rounded check-in amounts, or multi-phase spin execution plans."}
     ]
 
-# Helper Functions
 def mark_slot_played(slot_name):
     if slot_name not in st.session_state.played_basket:
         st.session_state.played_basket.append(slot_name)
@@ -218,7 +218,6 @@ with col_sb2:
 st.sidebar.markdown("---")
 st.sidebar.subheader("Quick Agent Consultations")
 
-# Quick Action 1: Generates Proportional Multi-Phase Plan & Direct Agent View
 if st.sidebar.button("⚡ Suggest 3 Best Available Slots"):
     available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     sorted_avail = sorted(available, key=lambda x: x["base_rvi"], reverse=True)[:3]
@@ -240,7 +239,6 @@ if st.sidebar.button("⚡ Suggest 3 Best Available Slots"):
     st.session_state.active_tab = "🤖 Interactive Agent Chat"
     st.rerun()
 
-# Quick Action 2: Generates Re-Trigger Evaluation & Direct Agent View
 if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
     diff = st.session_state.current_bankroll - st.session_state.session_start_bankroll
     target_dist = st.session_state.session_target - st.session_state.current_bankroll
@@ -267,16 +265,14 @@ if st.sidebar.button("❓ Should I Repeat / Re-Trigger?"):
 
 st.title("Casino Slot Optimization & Execution Agent")
 
-selected_tab = st.radio(
+# Direct binding to session_state.active_tab fixes lag and double-clicking issues
+st.radio(
     "Navigation Tabs",
     options=TAB_OPTIONS,
-    index=TAB_OPTIONS.index(st.session_state.active_tab),
+    key="active_tab",
     horizontal=True,
     label_visibility="collapsed"
 )
-
-if selected_tab != st.session_state.active_tab:
-    st.session_state.active_tab = selected_tab
 
 st.markdown("---")
 
@@ -383,20 +379,27 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
 # ------------------------------------------
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
-    st.caption("Matches exact Google Sheet schema. Day of the week updates automatically based on the selected date.")
+    st.caption("Matches exact Google Sheet schema. Day of the week updates instantly when changing dates.")
 
-    # 1. Interactive Date Selector (Outside form for real-time reactive reruns)
+    # Explicit callback on date input updates state immediately on picking from popup calendar
     col_d1, col_d2 = st.columns([1, 2])
     with col_d1:
-        selected_date = st.date_input("Select Date:", value=datetime.now(), key="live_date_picker")
+        st.date_input(
+            "Select Date:", 
+            value=st.session_state.selected_live_date, 
+            key="live_date_picker",
+            on_change=update_live_day_callback
+        )
     with col_d2:
-        # Dynamically compute day of week on every interaction
-        calculated_day = selected_date.strftime("%A")
-        st.text_input("Day of Week (Auto-Selected):", value=calculated_day, disabled=True, key="live_day_display")
+        st.text_input(
+            "Day of Week (Auto-Selected):", 
+            value=st.session_state.selected_live_day, 
+            disabled=True, 
+            key="live_day_display"
+        )
 
     st.markdown("---")
 
-    # 2. Entry Form for Remaining Fields
     with st.form("exact_gs_entry_form", clear_on_submit=True):
         col_e1, col_e2, col_e3 = st.columns(3)
         
@@ -406,7 +409,6 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             entry_spin_hit = st.number_input("Spin of Feature Hit:", min_value=1, max_value=500, value=32)
 
         with col_e2:
-            # Restricted Feature Types (All Lowercase Only)
             entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
             entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=150.0, step=10.0)
             entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=50.0, step=5.0)
@@ -418,9 +420,12 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
         submit_gs_entry = st.form_submit_button("💾 Save Session Record to Dataset")
         
         if submit_gs_entry:
+            formatted_date_str = st.session_state.selected_live_date.strftime("%m/%d/%Y")
+            current_day_str = st.session_state.selected_live_day
+
             new_gs_log = {
-                "Date": selected_date.strftime("%m/%d/%Y"),
-                "Day": calculated_day,
+                "Date": formatted_date_str,
+                "Day": current_day_str,
                 "Family": entry_family,
                 "Slot": entry_slot,
                 "Spin of Feature Hit": entry_spin_hit,
@@ -434,7 +439,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_gs_log])], ignore_index=True)
             mark_slot_played(entry_slot)
             
-            st.success(f"Logged entry for '{entry_slot}'! Date: {selected_date.strftime('%m/%d/%Y')} ({calculated_day}), Feature Type: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
+            st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str} ({current_day_str}), Feature Type: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
 
     st.markdown("---")
     st.markdown("#### 📋 Current Logged Entries")
