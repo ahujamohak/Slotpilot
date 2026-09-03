@@ -129,7 +129,6 @@ def build_priority_dataset():
 if "slots_db" not in st.session_state:
     st.session_state.slots_db = build_priority_dataset()
 else:
-    # Migration safety check: auto-patch existing items with rounded check-in amounts
     for item in st.session_state.slots_db:
         if "step_down_bet" not in item:
             item["step_down_bet"] = get_proportional_step_down(item["opt_bet"])
@@ -385,28 +384,34 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
     st.caption("Matches exact Google Sheet schema. Day of the week updates automatically based on the selected date.")
-    
+
+    # 1. Interactive Date Selector (Outside form for real-time reactive reruns)
+    col_d1, col_d2 = st.columns([1, 2])
+    with col_d1:
+        selected_date = st.date_input("Select Date:", value=datetime.now(), key="live_date_picker")
+    with col_d2:
+        # Dynamically compute day of week on every interaction
+        calculated_day = selected_date.strftime("%A")
+        st.text_input("Day of Week (Auto-Selected):", value=calculated_day, disabled=True, key="live_day_display")
+
+    st.markdown("---")
+
+    # 2. Entry Form for Remaining Fields
     with st.form("exact_gs_entry_form", clear_on_submit=True):
         col_e1, col_e2, col_e3 = st.columns(3)
         
         with col_e1:
-            # Interactive Date Picker with Auto Day Calculation
-            selected_date = st.date_input("Date:", value=datetime.now())
-            calculated_day = selected_date.strftime("%A")
-            
-            st.selectbox("Day (Auto-Selected):", options=[calculated_day], index=0, disabled=True)
-            
             entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()))
             entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family])
+            entry_spin_hit = st.number_input("Spin of Feature Hit:", min_value=1, max_value=500, value=32)
 
         with col_e2:
-            entry_spin_hit = st.number_input("Spin of Feature Hit:", min_value=1, max_value=500, value=32)
             # Restricted Feature Types (All Lowercase Only)
             entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
             entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=150.0, step=10.0)
+            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=50.0, step=5.0)
 
         with col_e3:
-            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=50.0, step=5.0)
             entry_hit_num = st.number_input("Hit Number:", min_value=1, max_value=20, value=1)
             entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
 
@@ -429,7 +434,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_gs_log])], ignore_index=True)
             mark_slot_played(entry_slot)
             
-            st.success(f"Logged entry for '{entry_slot}'! Feature Type: '{entry_feat_type}', Win Amount: ${entry_win_amt:.2f} ({entry_multiplier}x).")
+            st.success(f"Logged entry for '{entry_slot}'! Date: {selected_date.strftime('%m/%d/%Y')} ({calculated_day}), Feature Type: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
 
     st.markdown("---")
     st.markdown("#### 📋 Current Logged Entries")
