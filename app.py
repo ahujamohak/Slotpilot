@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import math
+import re
 from datetime import datetime
 
 # Set Streamlit Page Layout
@@ -22,11 +23,9 @@ TAB_OPTIONS = [
     "📖 Documentation & Rules"
 ]
 
-# Direct binding key for active tab navigation
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "📊 Today's Priority Board"
 
-# Date picker default tracking
 if "live_date_picker" not in st.session_state:
     st.session_state["live_date_picker"] = datetime.now().date()
 
@@ -127,7 +126,6 @@ def build_priority_dataset():
             })
     return records
 
-# Session State Data Structure Initialization
 if "slots_db" not in st.session_state:
     st.session_state.slots_db = build_priority_dataset()
 
@@ -149,10 +147,22 @@ if "session_logs" not in st.session_state:
             "Day": "Thursday",
             "Family": "Cash Horns",
             "Slot": "Cleopatra’s Kingdom",
-            "Spin of Feature Hit": 32,
+            "Spin of Feature Hit": "32",
             "Feature Type": "scatter",
             "Win Amount": 180.0,
             "Win Multiplier": 72.0,
+            "Hit Number": 1,
+            "Attempt Number": 1
+        },
+        {
+            "Date": "9/3/2026",
+            "Day": "Thursday",
+            "Family": "Dragon Link",
+            "Slot": "Autumn Moon",
+            "Spin of Feature Hit": "35+",
+            "Feature Type": "na",
+            "Win Amount": 0.0,
+            "Win Multiplier": 0.0,
             "Hit Number": 1,
             "Attempt Number": 1
         }
@@ -369,23 +379,20 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
 # ------------------------------------------
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
-    st.caption("Matches exact Google Sheet schema. Day of the week updates dynamically and dates save in m/d/yyyy format.")
+    st.caption("Matches exact Google Sheet schema. Supports '+' notation (e.g. 35+) for sessions with no feature hits.")
 
     col_d1, col_d2 = st.columns([1, 2])
     
     with col_d1:
-        # Date Input Widget
         chosen_date = st.date_input(
             "Select Date:", 
             key="live_date_picker"
         )
 
-    # Calculate current day of week and m/d/yyyy string instantly on every render pass
     dynamic_day = chosen_date.strftime("%A")
     formatted_date_str = f"{chosen_date.month}/{chosen_date.day}/{chosen_date.year}"
 
     with col_d2:
-        # Display computed Day of Week in real-time
         st.text_input(
             "Day of Week (Auto-Selected):", 
             value=dynamic_day, 
@@ -400,12 +407,13 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
         with col_e1:
             entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()))
             entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family])
-            entry_spin_hit = st.number_input("Spin of Feature Hit:", min_value=1, max_value=500, value=32)
+            # Text input to allow string formats such as "32+" or "35+"
+            entry_spin_hit_raw = st.text_input("Spin of Feature Hit (e.g. 32 or 35+):", value="35")
 
         with col_e2:
             entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
-            entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=150.0, step=10.0)
-            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=50.0, step=5.0)
+            entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=0.0, step=10.0)
+            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=0.0, step=5.0)
 
         with col_e3:
             entry_hit_num = st.number_input("Hit Number:", min_value=1, max_value=20, value=1)
@@ -414,12 +422,22 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
         submit_gs_entry = st.form_submit_button("💾 Save Session Record to Dataset")
         
         if submit_gs_entry:
+            cleaned_spin_val = entry_spin_hit_raw.strip()
+            
+            # Format logic: if Feature Type is 'na', ensure '+' suffix is applied
+            if entry_feat_type == "na":
+                digits = re.sub(r"[^\d]", "", cleaned_spin_val)
+                spin_final_str = f"{digits}+" if digits else "35+"
+            else:
+                # For hit features, preserve exact user string or clean digits
+                spin_final_str = cleaned_spin_val if cleaned_spin_val else "1"
+
             new_gs_log = {
-                "Date": formatted_date_str,  # Strictly formatted as m/d/yyyy (e.g. 9/3/2026)
-                "Day": dynamic_day,          # Always matches selected date
+                "Date": formatted_date_str,
+                "Day": dynamic_day,
                 "Family": entry_family,
                 "Slot": entry_slot,
-                "Spin of Feature Hit": entry_spin_hit,
+                "Spin of Feature Hit": spin_final_str,
                 "Feature Type": entry_feat_type,
                 "Win Amount": entry_win_amt,
                 "Win Multiplier": entry_multiplier,
@@ -430,7 +448,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_gs_log])], ignore_index=True)
             mark_slot_played(entry_slot)
             
-            st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str} ({dynamic_day}), Feature Type: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
+            st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str}, Spin: '{spin_final_str}', Feature: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
 
     st.markdown("---")
     st.markdown("#### 📋 Current Logged Entries")
@@ -442,7 +460,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
 elif st.session_state.active_tab == "📈 Visual Data Analytics":
     st.subheader("📈 Visual Data Analytics & Performance Metrics")
     
-    df_analytics = st.session_state.session_logs
+    df_analytics = st.session_state.session_logs.copy()
     if not df_analytics.empty:
         m1, m2, m3 = st.columns(3)
         total_wins = df_analytics["Win Amount"].sum() if "Win Amount" in df_analytics.columns else 0
@@ -470,11 +488,16 @@ elif st.session_state.active_tab == "📈 Visual Data Analytics":
 
         with col_g2:
             if "Spin of Feature Hit" in df_analytics.columns:
+                # Convert "35+" values to integers for histogram plotting
+                df_analytics["Numeric_Spin"] = df_analytics["Spin of Feature Hit"].astype(str).str.replace("+", "", regex=False)
+                df_analytics["Numeric_Spin"] = pd.to_numeric(df_analytics["Numeric_Spin"], errors="coerce")
+                
                 fig_hist = px.histogram(
                     df_analytics, 
-                    x="Spin of Feature Hit", 
+                    x="Numeric_Spin", 
                     nbins=15, 
-                    title="Distribution of Spin Window for Feature Hits"
+                    title="Distribution of Spin Window for Feature Hits",
+                    labels={"Numeric_Spin": "Spin Count"}
                 )
                 st.plotly_chart(fig_hist, use_container_width=True)
     else:
