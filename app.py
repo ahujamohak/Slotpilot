@@ -11,7 +11,6 @@ from datetime import datetime
 
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
-# Initialize Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 TAB_OPTIONS = [
@@ -26,7 +25,6 @@ if "active_tab" not in st.session_state:
     st.session_state.active_tab = "📊 Today's Priority Board"
 
 def reset_all_state():
-    """Clears and resets session data back to baseline state."""
     st.session_state.played_basket = []
     st.session_state.display_limit = 30
     st.session_state.session_start_bankroll = 1000.0
@@ -35,7 +33,7 @@ def reset_all_state():
     st.session_state.active_tab = "📊 Today's Priority Board"
     st.session_state.show_pivot_form = False
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent powered 75% by your Google Sheet history and 25% by strategy intelligence."}
+        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent."}
     ]
 
 if "show_pivot_form" not in st.session_state:
@@ -45,16 +43,20 @@ if "played_basket" not in st.session_state:
     reset_all_state()
 
 # ==========================================
-# 1. FAMILY STRATEGY CONFIGURATION & MASTER LIST
+# 1. MASTER LIST & MULTI-PHASE CONFIG
 # ==========================================
 
-FAMILY_PROFILES = {
-    "Dragon Link": {"base_min_spins": 70, "base_max_spins": 110, "scaling": "HIGHER_FIRST"},
-    "Dragon Cash": {"base_min_spins": 70, "base_max_spins": 110, "scaling": "HIGHER_FIRST"},
-    "Lightning Link": {"base_min_spins": 30, "base_max_spins": 50, "scaling": "LOWER_FIRST"},
-    "Dollar Storm": {"base_min_spins": 40, "base_max_spins": 70, "scaling": "LOWER_FIRST"},
-    "Bull Blitz": {"base_min_spins": 35, "base_max_spins": 65, "scaling": "LOWER_FIRST"},
-    "DEFAULT": {"base_min_spins": 35, "base_max_spins": 60, "scaling": "LOWER_FIRST"}
+# Custom empirical profiles for slots with established historical hit zones
+CUSTOM_HIT_ZONES = {
+    "New York Nights": {
+        # Zone 1: Early Hit (1-15), Zone 2: Checkpoint (16-20), Zone 3: Mid Expansion (21-35), Zone 4: Late Hit Zone (36-50)
+        "phases": [
+            {"spins": 15, "bet": 7.50, "note": "Early Trigger Zone (Spin 15 Hit)"},
+            {"spins": 5,  "bet": 5.00, "note": "Dead Spin Filter (Stop if 0x)"},
+            {"spins": 15, "bet": 3.75, "note": "Mid-Cycle Transition"},
+            {"spins": 15, "bet": 7.50, "note": "Late Trigger Zone (Spin 48 Hit)"}
+        ]
+    }
 }
 
 SLOT_MASTER_LIST = {
@@ -104,12 +106,11 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
-# 2. DYNAMIC GOOGLE SHEET INSPECTOR & WEIGHTED ENGINE
+# 2. SHEET INSPECTOR & RVI ENGINE
 # ==========================================
 
 @st.cache_data(ttl=15)
 def load_and_inspect_sheet():
-    """Dynamically reads Google Sheet, checks columns, and normalizes schema."""
     try:
         df = conn.read(worksheet="Session Log", ttl="0")
         if df.empty:
@@ -120,9 +121,7 @@ def load_and_inspect_sheet():
         return pd.DataFrame(), []
 
 def compute_75_25_rvi(slot_name, family_name, live_df):
-    """Calculates weighted score: 75% real Google Sheet history + 25% baseline intelligence."""
     baseline_score = 7.5
-    
     if live_df.empty:
         return baseline_score, "100% Baseline"
     
@@ -135,7 +134,7 @@ def compute_75_25_rvi(slot_name, family_name, live_df):
     if slot_col and slot_col in live_df.columns:
         matched_rows = live_df[live_df[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
     
-    if matched_rows.empty or len(matched_rows) == 0:
+    if matched_rows.empty:
         return baseline_score, "25% Baseline / 75% Family Prior"
     
     empirical_multipliers = []
@@ -150,50 +149,52 @@ def compute_75_25_rvi(slot_name, family_name, live_df):
     avg_mult = np.mean(empirical_multipliers)
     sheet_rvi = min(10.0, max(1.0, (avg_mult / 15.0) + 5.0))
     weighted_rvi = round((0.75 * sheet_rvi) + (0.25 * baseline_score), 2)
-    return weighted_rvi, f"75% Live Sheet Data ({len(matched_rows)} logs)"
+    return weighted_rvi, f"75% Live Sheet ({len(matched_rows)} logs)"
 
 # ==========================================
-# 3. DYNAMIC BET & SPIN ALLOCATION MATH
+# 3. DYNAMIC MULTI-PHASE ALLOCATION MATH
 # ==========================================
 
-def calculate_dynamic_bet_and_spins(rvi_score, family_name):
+def get_multi_phase_execution(slot_name, rvi_score):
     """
-    Dynamically scales bets and spin limits based on RVI score:
-    - High RVI (best performers): High Bet Levels ($5.00, $7.50, $10.00) & Expanded Spin Windows
-    - Average/Unproven RVI: Standard Baseline Bets ($1.25, $2.50) & Standard Spin Windows
+    Returns dynamic multi-phase (up to 5 phases) strategy structures.
+    Uses custom empirical profiles when logged, or scales 4-phase sequences by RVI.
     """
-    profile = FAMILY_PROFILES.get(family_name, FAMILY_PROFILES["DEFAULT"])
-    base_min = profile["base_min_spins"]
-    base_max = profile["base_max_spins"]
-    scaling = profile["scaling"]
-
-    # Scale total spins dynamically based on performance score
-    if rvi_score >= 8.5:
-        total_spins = int(base_max * 1.3)  # Extended evaluation for top performers
-        p1_bet = 7.50 if rvi_score >= 9.0 else 5.00
-        p2_bet = 10.00 if scaling == "HIGHER_FIRST" else 3.75
-    elif rvi_score >= 7.5:
-        total_spins = base_max
-        p1_bet = 3.75
-        p2_bet = 5.00 if scaling == "HIGHER_FIRST" else 2.50
+    if slot_name in CUSTOM_HIT_ZONES:
+        phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
     else:
-        total_spins = base_min
-        p1_bet = 2.50
-        p2_bet = 3.75 if scaling == "HIGHER_FIRST" else 1.25
+        # Default 4-Phase dynamic structure scaling with RVI
+        if rvi_score >= 8.5:
+            phases = [
+                {"spins": 15, "bet": 7.50, "note": "Initial Probe"},
+                {"spins": 15, "bet": 10.00, "note": "High Hit Zone"},
+                {"spins": 15, "bet": 5.00, "note": "Mid Checkpoint"},
+                {"spins": 15, "bet": 7.50, "note": "Late Expansion"}
+            ]
+        elif rvi_score >= 7.0:
+            phases = [
+                {"spins": 10, "bet": 3.75, "note": "Probe Phase"},
+                {"spins": 15, "bet": 5.00, "note": "Target Zone"},
+                {"spins": 15, "bet": 2.50, "note": "Step Down"},
+                {"spins": 10, "bet": 3.75, "note": "Final Check"}
+            ]
+        else:
+            phases = [
+                {"spins": 10, "bet": 2.50, "note": "Probe Phase"},
+                {"spins": 15, "bet": 3.75, "note": "Evaluation"},
+                {"spins": 10, "bet": 1.25, "note": "Exit Check"}
+            ]
 
-    p1_spins = int(total_spins * 0.6)
-    p2_spins = total_spins - p1_spins
+    total_spins = sum(p["spins"] for p in phases)
+    raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+    checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
 
-    raw_alloc = (p1_spins * p1_bet) + (p2_spins * p2_bet)
-    checkin_alloc = float(math.ceil(raw_alloc / 50.0) * 50)
-
-    return p1_bet, p1_spins, p2_bet, p2_spins, total_spins, checkin_alloc
+    return phases, total_spins, checkin_alloc
 
 def build_priority_dataset(live_df):
     records = []
-    
-    # Calculate RVI scores first for all slots
     slot_scores = []
+    
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
             rvi_score, source_proof = compute_75_25_rvi(slot, fam, live_df)
@@ -204,36 +205,30 @@ def build_priority_dataset(live_df):
                 "source_proof": source_proof
             })
 
-    # Sort slots by RVI score descending so top performers get assigned top bets
     slot_scores = sorted(slot_scores, key=lambda x: x["rvi"], reverse=True)
 
-    for idx, item in enumerate(slot_scores):
+    for item in slot_scores:
         fam = item["family"]
         slot = item["slot"]
         rvi_score = item["rvi"]
 
-        # Boost top 10% overall performers to top-tier high bets
-        if idx < max(1, int(len(slot_scores) * 0.10)) and rvi_score >= 7.5:
-            rvi_score = max(rvi_score, 8.8)
+        phases, total_spins, checkin_alloc = get_multi_phase_execution(slot, rvi_score)
 
-        p1_bet, p1_spins, p2_bet, p2_spins, total_spins, checkin_alloc = calculate_dynamic_bet_and_spins(rvi_score, fam)
+        # Build readable phase strings for display
+        phase_breakdown_str = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(phases)])
 
         records.append({
             "family": fam,
             "slot": slot,
             "base_rvi": rvi_score,
-            "data_source": item["source_proof"],
-            "opt_bet": p1_bet,
-            "p1_spins": p1_spins,
-            "step_down_bet": p2_bet,
-            "p2_spins": p2_spins,
+            "phases": phases,
+            "num_phases": len(phases),
+            "phase_breakdown": phase_breakdown_str,
             "total_spins": total_spins,
-            "scaling": FAMILY_PROFILES.get(fam, FAMILY_PROFILES["DEFAULT"])["scaling"],
             "checkin_alloc": checkin_alloc
         })
     return sorted(records, key=lambda x: x["base_rvi"], reverse=True)
 
-# Fetch Live Data Sheet
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 st.session_state.slots_db = build_priority_dataset(live_sheet_df)
 
@@ -246,15 +241,15 @@ def restore_slot(slot_name):
         st.session_state.played_basket.remove(slot_name)
 
 # ==========================================
-# 4. SIDEBAR CONTROLS & NAVIGATION
+# 4. SIDEBAR & NAVIGATION
 # ==========================================
 
 st.sidebar.title("🎰 Live Session Hub")
 
 if detected_sheet_cols:
-    st.sidebar.success(f"🟢 GSheet Connected ({len(detected_sheet_cols)} Columns)")
+    st.sidebar.success(f"🟢 GSheet Connected ({len(detected_sheet_cols)} Cols)")
 else:
-    st.sidebar.warning("🟡 GSheet Off-line (Fallback Mode)")
+    st.sidebar.warning("🟡 GSheet Off-line")
 
 st.sidebar.subheader("📌 Navigation")
 for tab_name in TAB_OPTIONS:
@@ -265,33 +260,12 @@ for tab_name in TAB_OPTIONS:
         st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Live Bankroll Controls")
-st.session_state.session_start_bankroll = st.sidebar.number_input(
-    "Today's Starting Bankroll ($)", 
-    value=float(st.session_state.session_start_bankroll), 
-    step=50.0
-)
-
-st.session_state.current_bankroll = st.sidebar.number_input(
-    "Current Active Bankroll ($)", 
-    value=float(st.session_state.current_bankroll), 
-    step=25.0
-)
-
-st.session_state.session_target = st.sidebar.number_input(
-    "Today's Target Bankroll ($)", 
-    value=float(st.session_state.session_target), 
-    step=100.0
-)
-
-st.sidebar.markdown("---")
-if st.sidebar.button("🔄 Reset Entire Session State", use_container_width=True):
-    reset_all_state()
-    st.sidebar.success("App state reset!")
-    st.rerun()
+st.session_state.session_start_bankroll = st.sidebar.number_input("Starting Bankroll ($)", value=float(st.session_state.session_start_bankroll), step=50.0)
+st.session_state.current_bankroll = st.sidebar.number_input("Current Bankroll ($)", value=float(st.session_state.current_bankroll), step=25.0)
+st.session_state.session_target = st.sidebar.number_input("Target Bankroll ($)", value=float(st.session_state.session_target), step=100.0)
 
 # ==========================================
-# 5. MAIN DASHBOARD CONTENT AREA
+# 5. DASHBOARD VIEWS
 # ==========================================
 
 st.title("Casino Slot Optimization & Execution Agent")
@@ -302,13 +276,12 @@ st.markdown("---")
 # TAB 1: TODAY'S PRIORITY BOARD
 # ------------------------------------------
 if st.session_state.active_tab == "📊 Today's Priority Board":
-    st.subheader("Today's Priority Board (Live Sheet Weighted Matrix)")
-    st.caption("Highest RVI performers dynamically receive higher bet levels ($5.00–$10.00) and expanded spin windows.")
+    st.subheader("Today's Priority Board (Multi-Phase Live Sheet Matrix)")
+    st.caption("Execution plans dynamically expand up to 5 phases to reflect actual empirical trigger zones.")
 
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     current_display = available_slots[:st.session_state.display_limit]
 
-    # Clean priority table without "Data Source Proof" or "Strategy" columns
     table_data = []
     for rank, item in enumerate(current_display, 1):
         table_data.append({
@@ -316,28 +289,19 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
             "Slot Family": item["family"],
             "Slot Theme Name": item["slot"],
             "RVI Score": item["base_rvi"],
-            "Phase 1 Bet ($)": f"${item['opt_bet']:.2f}",
-            "Phase 1 Spins": f"{item['p1_spins']}",
-            "Phase 2 Bet ($)": f"${item['step_down_bet']:.2f}",
-            "Phase 2 Spins": f"{item['p2_spins']}",
-            "Total Window": f"{item['total_spins']} spins",
-            "Check-In ($)": f"${item['checkin_alloc']:.2f}"
+            "Phases": f"{item['num_phases']} Phases",
+            "Multi-Phase Strategy Breakdown": item["phase_breakdown"],
+            "Total Evaluation": f"{item['total_spins']} spins",
+            "Check-In Alloc ($)": f"${item['checkin_alloc']:.2f}"
         })
 
     df_priority = pd.DataFrame(table_data)
     st.dataframe(df_priority, use_container_width=True, hide_index=True)
 
-    col_a, col_b = st.columns([1, 4])
-    with col_a:
-        if len(available_slots) > st.session_state.display_limit:
-            if st.button("➕ Load 15 More Slots"):
-                st.session_state.display_limit += 15
-                st.rerun()
-        else:
-            st.info("All slots displayed.")
-
-    with col_b:
-        st.write(f"Displaying **{len(current_display)}** of **{len(available_slots)}** unplayed slots.")
+    if len(available_slots) > st.session_state.display_limit:
+        if st.button("➕ Load 15 More Slots"):
+            st.session_state.display_limit += 15
+            st.rerun()
 
 # ------------------------------------------
 # TAB 2: PRE-PLANNED EXECUTION CARDS
@@ -356,17 +320,11 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
         if slot_data:
             st.markdown("---")
             st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
+            st.metric("Total Evaluation Window", f"{slot_data['total_spins']} Spins", delta=f"Check-In: ${slot_data['checkin_alloc']:.2f}")
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Check-In Capital", f"${slot_data['checkin_alloc']:.2f}")
-            c2.metric("Phase 1 Bet", f"${slot_data['opt_bet']:.2f} ({slot_data['p1_spins']} Spins)")
-            c3.metric("Phase 2 Bet", f"${slot_data['step_down_bet']:.2f} ({slot_data['p2_spins']} Spins)")
-            c4.metric("Total Evaluation Window", f"{slot_data['total_spins']} Spins")
-
-            st.markdown("---")
-            st.markdown("#### 🔄 Step Execution Plan")
-            st.write(f"**Phase 1:** Bet **${slot_data['opt_bet']:.2f}** for **{slot_data['p1_spins']}** spins.")
-            st.write(f"**Phase 2:** Adjust bet to **${slot_data['step_down_bet']:.2f}** for remaining **{slot_data['p2_spins']}** spins.")
+            st.markdown("#### 🔄 Dynamic Multi-Phase Execution Plan")
+            for idx, phase in enumerate(slot_data["phases"], 1):
+                st.write(f"**Phase {idx}:** **{phase['spins']} Spins** @ **${phase['bet']:.2f}/spin** — *{phase['note']}*")
 
             st.markdown("---")
             if st.button(f"✅ Mark '{slot_data['slot']}' as Played"):
@@ -393,13 +351,13 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
     with st.form("dynamic_gs_entry_form", clear_on_submit=True):
         col_e1, col_e2, col_e3 = st.columns(3)
         with col_e1:
-            entry_spin_hit_raw = st.text_input("Spin of Feature Hit:", value="32+")
-            entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
+            entry_spin_hit_raw = st.text_input("Spin of Feature Hit:", value="15")
+            entry_feat_type = st.selectbox("Feature Type:", ["orb", "scatter", "scatter+orb", "na"])
         with col_e2:
-            entry_win_amt = st.number_input("Win Amount ($):", min_value=0, value=0, step=10)
-            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0, value=0, step=5)
+            entry_win_amt = st.number_input("Win Amount ($):", min_value=0, value=916, step=10)
+            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0, value=183, step=5)
         with col_e3:
-            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=0)
+            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1)
             entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
 
         submit_gs_entry = st.form_submit_button("💾 Save Record to Google Sheets")
@@ -454,15 +412,15 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
 
         available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
         top_cand = available[0] if available else None
-        top_str = f"{top_cand['slot']} ({top_cand['family']}) - Bet: ${top_cand['opt_bet']:.2f}, RVI: {top_cand['base_rvi']}" if top_cand else "None"
+        top_str = f"{top_cand['slot']} ({top_cand['family']}) - RVI: {top_cand['base_rvi']}" if top_cand else "None"
 
         agent_response = f"""### 🤖 AI Agent Evaluation
-- **Active Bankroll:** ${st.session_state.current_bankroll:.2f} (Target: ${st.session_state.session_target:.2f})
+- **Active Bankroll:** ${st.session_state.current_bankroll:.2f}
 - **Top Sheet-Ranked Target:** {top_str}
 
 **Strategy Guidance:**
-1. Top performers currently scale up to **${top_cand['opt_bet']:.2f}** per spin.
-2. Maintain strict spin limits; exit if no feature hits within the allocated total spin window.
+1. Multi-phase checkpoints are active. Exit early if probe phases show zero feature activity.
+2. Focus bets heavily on hit zones identified in your session log history.
 """
         st.session_state.chat_messages.append({"role": "assistant", "content": agent_response})
         st.rerun()
