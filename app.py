@@ -32,12 +32,16 @@ def reset_all_state():
     st.session_state.session_target = 1800.0
     st.session_state.active_tab = "📊 Today's Priority Board"
     st.session_state.show_pivot_form = False
+    st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent, calibrated with Date/Day historical tracking."}
+        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent, calibrated with strict Day/Date tracking penalties."}
     ]
 
 if "show_pivot_form" not in st.session_state:
     st.session_state.show_pivot_form = False
+
+if "strict_day_penalty" not in st.session_state:
+    st.session_state.strict_day_penalty = True
 
 if "played_basket" not in st.session_state:
     reset_all_state()
@@ -104,7 +108,7 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
-# 2. SHEET INSPECTOR & DAY-AWARE RVI ENGINE
+# 2. SHEET INSPECTOR & STRICT DAY-AWARE RVI ENGINE
 # ==========================================
 
 @st.cache_data(ttl=15)
@@ -118,17 +122,17 @@ def load_and_inspect_sheet():
     except Exception:
         return pd.DataFrame(), []
 
-def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None):
+def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_mode=True):
     """
     Calculates weighted RVI strictly checking Family AND Slot Theme Name,
-    and applies Day-of-Week weighting based on historical session performance.
+    and applies heavy Day-of-Week penalties for zero-hit days.
     """
     baseline_score = 7.5
     if target_day is None:
         target_day = datetime.now().strftime("%A")
 
     if live_df.empty:
-        return baseline_score, "100% Baseline (No Sheet Data)", target_day, 1.0
+        return baseline_score, "100% Baseline (No Data)", target_day, 1.0, 0, 0
 
     cols = {str(c).lower(): c for c in live_df.columns}
     slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
@@ -149,27 +153,44 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None):
         if not fam_matched.empty:
             matched_rows = fam_matched
         else:
-            return baseline_score, "25% Baseline / 0 Logs for Family", target_day, 1.0
+            return baseline_score, "25% Baseline / 0 Logs for Family", target_day, 1.0, 0, 0
 
     if matched_rows.empty:
-        return baseline_score, "25% Baseline / 0 Logs", target_day, 1.0
+        return baseline_score, "25% Baseline / 0 Logs", target_day, 1.0, 0, 0
 
-    # 3. Calculate Day-of-Week Performance Factor
-    day_factor = 1.0
+    total_logs = len(matched_rows)
     day_log_count = 0
+    day_factor = 1.0
+
+    # 3. Calculate Strict Day-of-Week Performance Factor
     if day_col and day_col in matched_rows.columns:
         day_matches = matched_rows[matched_rows[day_col].astype(str).str.strip().str.lower() == str(target_day).strip().lower()]
         day_log_count = len(day_matches)
-        
-        if len(matched_rows) > 0:
-            day_ratio = day_log_count / len(matched_rows)
-            # Boost if a high percentage of hits occur on this day, slight penalty if rarely active
-            if day_ratio >= 0.4 and day_log_count >= 2:
-                day_factor = 1.15
-            elif day_ratio >= 0.25:
-                day_factor = 1.08
-            elif day_log_count == 0 and len(matched_rows) >= 3:
-                day_factor = 0.92
+
+        if total_logs > 0:
+            day_ratio = day_log_count / total_logs
+            
+            # --- STRICT DAY WEIGHTING LOGIC ---
+            if day_log_count > 0:
+                if day_ratio == 1.0 and day_log_count >= 2:
+                    day_factor = 1.30  # 100% target day hit rate -> major boost
+                elif day_ratio >= 0.5:
+                    day_factor = 1.20  # High target day hit rate
+                elif day_ratio >= 0.25:
+                    day_factor = 1.10
+                else:
+                    day_factor = 1.00
+            else:
+                # ZERO HITS ON TARGET DAY PENALTY
+                if strict_mode:
+                    if total_logs >= 5:
+                        day_factor = 0.40  # Massive demotion: Tested 5+ times elsewhere, NEVER on this day
+                    elif total_logs >= 3:
+                        day_factor = 0.55  # Severe penalty
+                    else:
+                        day_factor = 0.75  # Moderate penalty for low sample size
+                else:
+                    day_factor = 0.90
 
     empirical_multipliers = []
     if win_mult_col and win_mult_col in matched_rows.columns:
@@ -179,17 +200,17 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None):
 
     if not empirical_multipliers:
         final_rvi = round(baseline_score * day_factor, 2)
-        return final_rvi, f"Day-Weighted Hybrid ({day_log_count} {target_day} hits)", target_day, day_factor
+        return final_rvi, f"Day-Weighted Hybrid ({day_log_count} {target_day} hits)", target_day, day_factor, day_log_count, total_logs
 
     avg_mult = np.mean(empirical_multipliers)
     sheet_rvi = min(10.0, max(1.0, (avg_mult / 15.0) + 5.0))
     weighted_rvi = (0.75 * sheet_rvi) + (0.25 * baseline_score)
     
-    # Apply day weighting multiplier
-    final_rvi = round(min(10.0, weighted_rvi * day_factor), 2)
-    proof_str = f"75% Live Sheet ({len(matched_rows)} total, {day_log_count} on {target_day}s)"
+    # Apply day weighting multiplier & bound between 1.0 and 10.0
+    final_rvi = round(min(10.0, max(1.0, weighted_rvi * day_factor)), 2)
+    proof_str = f"75% Live Sheet ({total_logs} total, {day_log_count} on {target_day}s)"
     
-    return final_rvi, proof_str, target_day, day_factor
+    return final_rvi, proof_str, target_day, day_factor, day_log_count, total_logs
 
 # ==========================================
 # 3. DYNAMIC MULTI-PHASE ALLOCATION MATH
@@ -226,7 +247,7 @@ def get_multi_phase_execution(slot_name, rvi_score):
 
     return phases, total_spins, checkin_alloc
 
-def build_priority_dataset(live_df, target_day=None):
+def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     records = []
     slot_scores = []
     
@@ -235,18 +256,21 @@ def build_priority_dataset(live_df, target_day=None):
     
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
-            rvi_score, source_proof, active_day, day_factor = compute_75_25_rvi(slot, fam, live_df, target_day)
+            rvi_score, source_proof, active_day, day_factor, day_hits, total_hits = compute_75_25_rvi(slot, fam, live_df, target_day, strict_mode)
             slot_scores.append({
                 "family": fam,
                 "slot": slot,
                 "rvi": rvi_score,
                 "source_proof": source_proof,
                 "target_day": active_day,
-                "day_factor": day_factor
+                "day_factor": day_factor,
+                "day_hits": day_hits,
+                "total_hits": total_hits
             })
 
-    # Sort strictly by Day-Weighted RVI score descending
-    slot_scores = sorted(slot_scores, key=lambda x: x["rvi"], reverse=True)
+    # Primary Sort: Day-Weighted RVI descending
+    # Secondary Sort: Day hits descending (ensures verified day performers break ties)
+    slot_scores = sorted(slot_scores, key=lambda x: (x["rvi"], x["day_hits"]), reverse=True)
 
     for item in slot_scores:
         fam = item["family"]
@@ -267,16 +291,18 @@ def build_priority_dataset(live_df, target_day=None):
             "checkin_alloc": checkin_alloc,
             "source_proof": item["source_proof"],
             "target_day": item["target_day"],
-            "day_factor": item["day_factor"]
+            "day_factor": item["day_factor"],
+            "day_hits": item["day_hits"],
+            "total_hits": item["total_hits"]
         })
-    return sorted(records, key=lambda x: x["base_rvi"], reverse=True)
+    return sorted(records, key=lambda x: (x["base_rvi"], x["day_hits"]), reverse=True)
 
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 
 if "selected_day" not in st.session_state:
     st.session_state.selected_day = datetime.now().strftime("%A")
 
-st.session_state.slots_db = build_priority_dataset(live_sheet_df, st.session_state.selected_day)
+st.session_state.slots_db = build_priority_dataset(live_sheet_df, st.session_state.selected_day, st.session_state.strict_day_penalty)
 
 def mark_slot_played(slot_name):
     if slot_name not in st.session_state.played_basket:
@@ -302,9 +328,12 @@ days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 current_day_idx = datetime.now().weekday()
 selected_day_input = st.sidebar.selectbox("Filter Target Day:", options=days_list, index=current_day_idx)
 
-if selected_day_input != st.session_state.selected_day:
+strict_penalty_toggle = st.sidebar.checkbox("Strict Day Match (Penalize 0-Hit Days)", value=st.session_state.strict_day_penalty)
+
+if selected_day_input != st.session_state.selected_day or strict_penalty_toggle != st.session_state.strict_day_penalty:
     st.session_state.selected_day = selected_day_input
-    st.session_state.slots_db = build_priority_dataset(live_sheet_df, st.session_state.selected_day)
+    st.session_state.strict_day_penalty = strict_penalty_toggle
+    st.session_state.slots_db = build_priority_dataset(live_sheet_df, st.session_state.selected_day, st.session_state.strict_day_penalty)
     st.rerun()
 
 st.sidebar.subheader("📌 Navigation")
@@ -325,7 +354,7 @@ st.session_state.session_target = st.sidebar.number_input("Target Bankroll ($)",
 # ==========================================
 
 st.title("Casino Slot Optimization & Execution Agent")
-st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day Context: **{st.session_state.selected_day}**")
+st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day Context: **{st.session_state.selected_day}** | Strict Mode: **{'ON' if st.session_state.strict_day_penalty else 'OFF'}**")
 st.markdown("---")
 
 # ------------------------------------------
@@ -333,7 +362,7 @@ st.markdown("---")
 # ------------------------------------------
 if st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader(f"Today's Priority Board (Day-Weighted Matrix for {st.session_state.selected_day})")
-    st.caption("Slots are weighted and sorted by historic performance AND day-of-week win trends.")
+    st.caption("Slots with 0 historical hits on the target day are demoted so proven day performers rise to the top.")
 
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     current_display = available_slots[:st.session_state.display_limit]
@@ -346,6 +375,7 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
             "Slot Theme Name": item["slot"],
             "Day-RVI Score": item["base_rvi"],
             "Day Factor": f"{item['day_factor']}x",
+            "Target Day Hits": f"{item['day_hits']} / {item['total_hits']}",
             "Proof & History": item["source_proof"],
             "Phases": f"{item['num_phases']} Phases",
             "Multi-Phase Strategy Breakdown": item["phase_breakdown"],
@@ -383,7 +413,7 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
             col_m1.metric("Total Evaluation Window", f"{slot_data['total_spins']} Spins", delta=f"Check-In: ${slot_data['checkin_alloc']:.2f}")
             col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data['base_rvi']}", delta=f"Day Weighting: {slot_data['day_factor']}x")
 
-            st.caption(f"**Data Proof:** {slot_data['source_proof']}")
+            st.caption(f"**Data Proof:** {slot_data['source_proof']} | **Day Hits:** {slot_data['day_hits']} of {slot_data['total_hits']}")
 
             st.markdown("#### 🔄 Dynamic Multi-Phase Execution Plan")
             for idx, phase in enumerate(slot_data["phases"], 1):
@@ -486,8 +516,8 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
 - **Top Day-Ranked Target:** {top_str}
 
 **Strategy & Day Guidance:**
-1. Machine sorting explicitly incorporates historical **{st.session_state.selected_day}** performance records to weigh active candidates.
-2. Family and Theme pair matching prevents cross-family score leakage.
+1. Slots with 0 historical hits on **{st.session_state.selected_day}** are penalized up to 0.40x to prevent unproven day targets from clogging the top priority list.
+2. High day-hit performers receive up to a 1.30x boost.
 3. Check early phases to decide whether to push into higher bet tiers or move to the next prioritized slot.
 """
         st.session_state.chat_messages.append({"role": "assistant", "content": agent_response})
