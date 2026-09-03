@@ -434,11 +434,11 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
                 st.rerun()
 
 # ------------------------------------------
-# TAB 3: LIVE DATA ENTRY (DIRECT GSHEETS WRITE)
+# TAB 3: LIVE DATA ENTRY (EXACT GSHEETS FORMATTING FIXED)
 # ------------------------------------------
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
-    st.caption("Writes directly to your connected Google Sheet. Supports '+' notation (e.g. 35+).")
+    st.caption("Writes directly to your connected Google Sheet while retaining exact column headers and text formatting.")
 
     col_d1, col_d2 = st.columns([1, 2])
 
@@ -463,15 +463,15 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
         col_e1, col_e2, col_e3 = st.columns(3)
 
         with col_e1:
-            entry_spin_hit_raw = st.text_input("Spin of Feature Hit (e.g. 32 or 35+):", value="35")
+            entry_spin_hit_raw = st.text_input("Spin of Feature Hit (e.g. 32 or 35+):", value="32+")
             entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
 
         with col_e2:
-            entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=0.0, step=10.0)
-            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=0.0, step=5.0)
+            entry_win_amt = st.number_input("Win Amount ($):", min_value=0, value=0, step=10)
+            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0, value=0, step=5)
 
         with col_e3:
-            entry_hit_num = st.number_input("Hit Number:", min_value=1, max_value=20, value=1)
+            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=0)
             entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
 
         submit_gs_entry = st.form_submit_button("💾 Save Session Record to Google Sheets")
@@ -485,31 +485,35 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             else:
                 spin_final_str = cleaned_spin_val if cleaned_spin_val else "1"
 
+            # Create new row dataframe matching exact field casing and order
             new_gs_log = pd.DataFrame([{
-                "Date": formatted_date_str,
-                "Day": dynamic_day,
-                "Family": entry_family,
-                "Slot": entry_slot,
-                "Spin of Feature Hit": spin_final_str,
-                "Feature Type": entry_feat_type,
-                "Win Amount": entry_win_amt,
-                "Win Multiplier": entry_multiplier,
-                "Hit Number": entry_hit_num,
-                "Attempt Number": entry_attempt_num
+                "Date": str(formatted_date_str),
+                "Day": str(dynamic_day),
+                "Family": str(entry_family),
+                "Slot": str(entry_slot),
+                "Spin of feature hit": str(spin_final_str),
+                "Feature type": str(entry_feat_type),
+                "Win amount": str(entry_win_amt),
+                "Win multiplier": str(entry_multiplier),
+                "Hit Number": str(entry_hit_num),
+                "Attempt Number": str(entry_attempt_num)
             }])
 
             try:
-                # 1. Read existing data from Google Sheets ("Session Log" worksheet)
+                # Read existing worksheet
                 existing_data = conn.read(worksheet="Session Log", ttl="0")
+                
+                # Convert all columns in existing sheet to string to prevent automatic type coercion corruption
+                existing_data = existing_data.astype(str)
 
-                # 2. Append new log
+                # Append new log with string-safe type matching
                 updated_df = pd.concat([existing_data, new_gs_log], ignore_index=True)
 
-                # 3. Write back to Google Sheets ("Session Log" worksheet)
+                # Write back to Google Sheets cleanly
                 conn.update(worksheet="Session Log", data=updated_df)
 
                 mark_slot_played(entry_slot)
-                st.success(f"✅ Successfully written to Google Sheets! Entry for '{entry_slot}' saved.")
+                st.success(f"✅ Successfully written to Google Sheets! Entry for '{entry_slot}' saved with exact cell formatting.")
             except Exception as e:
                 st.error(f"Failed to update Google Sheets: {e}")
 
@@ -602,7 +606,6 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Dynamic System Instructions incorporating active session context
         system_instruction = f"""
 You are an expert AI Slot Execution Strategy Agent.
 Current Live Session Context:
@@ -611,7 +614,7 @@ Current Live Session Context:
 - Target Bankroll: ${st.session_state.session_target:.2f}
 
 Strategy Execution Rules:
-1. When the user asks for specific bet recommendations from a list of available options (e.g., 5, 7.5, 50, 250, 500, 2500):
+1. When the user asks for specific bet recommendations from a list of available options:
    - Choose a Phase 1 bet size specifically from their given list. Aim for a sensible risk level relative to their total/checked-in bankroll (typically probing around 1%-5% per spin).
    - Choose an exact Phase 2 step-down bet size from their list that is roughly 50% lower than Phase 1.
 2. Clearly outline the multi-phase plan:
@@ -624,17 +627,15 @@ Strategy Execution Rules:
         try:
             from google import genai
 
-            # Initializes client using st.secrets["GEMINI_API_KEY"] or environment variable
             client = genai.Client()
             
-            # Convert session chat history to Gemini SDK format
             formatted_contents = []
             for m in st.session_state.chat_messages:
                 role = "user" if m["role"] == "user" else "model"
                 formatted_contents.append({"role": role, "parts": [{"text": m["content"]}]})
 
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.6-flash",
                 contents=formatted_contents,
                 config={"system_instruction": system_instruction}
             )
