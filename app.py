@@ -6,12 +6,11 @@ import math
 import re
 from datetime import datetime
 
-# Set Streamlit Page Layout
-st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
+# ==========================================
+# 0. PAGE CONFIG & STATE MANAGEMENT
+# ==========================================
 
-# ==========================================
-# 0. STATE MANAGEMENT & INITIALIZATION
-# ==========================================
+st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
 TAB_OPTIONS = [
     "📊 Today's Priority Board", 
@@ -22,6 +21,10 @@ TAB_OPTIONS = [
     "🧺 Played Basket & Overrides", 
     "📖 Documentation & Rules"
 ]
+
+# Ensure active_tab is initialized FIRST and ALWAYS preserved
+if "active_tab" not in st.session_state:
+    st.session_state.active_tab = "📊 Today's Priority Board"
 
 def reset_all_state():
     """Clears and resets all session data back to default state."""
@@ -61,12 +64,6 @@ def reset_all_state():
             "Attempt Number": 1
         }
     ])
-
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "📊 Today's Priority Board"
-
-if "live_date_picker" not in st.session_state:
-    st.session_state["live_date_picker"] = datetime.now().date()
 
 if "show_pivot_form" not in st.session_state:
     st.session_state.show_pivot_form = False
@@ -194,7 +191,6 @@ def get_top_unplayed_slot():
 
 st.sidebar.title("🎰 Live Session Hub")
 
-# Sidebar Navigation Buttons
 st.sidebar.subheader("📌 Navigation")
 for tab_name in TAB_OPTIONS:
     is_active = (st.session_state.active_tab == tab_name)
@@ -321,7 +317,7 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
   - Reset mental fatigue and review today's logged performance.
   - Upon return, enforce a **strict minimum bet tier ($1.00 / $1.25)** for all subsequent probes.
 {rec_plan_str}"""
-  
+    
     elif drawdown >= 200:
         agent_out = f"""### ⚠️ CIRCUIT BREAKER WARNING (Moderate Cold Streak)
 
@@ -333,7 +329,7 @@ if st.sidebar.button("🛑 Circuit Breaker / Stop-Loss", use_container_width=Tru
   - Cap maximum check-in capital at **$50.00** per machine.
   - If drawdown reaches -$300, take an immediate 15-minute break.
 {rec_plan_str}"""
-  
+    
     else:
         agent_out = f"""### ✅ CIRCUIT BREAKER STATUS: NORMAL
 
@@ -353,7 +349,6 @@ if st.sidebar.button("🔄 Machine Pivot vs. Stay", use_container_width=True):
     st.rerun()
 
 st.sidebar.markdown("---")
-# Global Reset Control
 if st.sidebar.button("🔄 Reset Entire Session State", use_container_width=True):
     reset_all_state()
     st.sidebar.success("App state successfully reset!")
@@ -474,7 +469,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
     col_d1, col_d2 = st.columns([1, 2])
     
     with col_d1:
-        chosen_date = st.date_input("Select Date:", key="live_date_picker")
+        chosen_date = st.date_input("Select Date:", value=datetime.now().date(), key="live_date_picker")
 
     dynamic_day = chosen_date.strftime("%A")
     formatted_date_str = f"{chosen_date.month}/{chosen_date.day}/{chosen_date.year}"
@@ -484,7 +479,6 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
 
     st.markdown("---")
 
-    # Dynamic family selection outside form for instant list cascading
     col_f1, col_f2 = st.columns(2)
     with col_f1:
         entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()), key="live_fam_select")
@@ -594,12 +588,10 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
     st.caption("Chat with the strategy agent in real-time or clear chat history.")
     
-    # Active Machine Pivot Evaluation Container
     if st.session_state.show_pivot_form:
         with st.expander("🔀 Active Machine Evaluation (Pivot vs. Stay)", expanded=True):
             st.markdown("Enter details for the machine you are currently playing:")
             
-            # Cascading Slot Family and Slot Theme Dropdowns
             piv_col1, piv_col2 = st.columns(2)
             with piv_col1:
                 curr_fam = st.selectbox("Current Slot Family:", list(SLOT_MASTER_LIST.keys()), key="piv_fam_select")
@@ -615,10 +607,8 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
                 total_return = st.number_input("Total Returns / Wins ($):", min_value=0.0, value=0.0, step=5.0, key="piv_ret_input")
                 active_teaser = st.checkbox("Active Orbs/Scatter Teasers Present?", key="piv_teaser_input")
 
-            # Standard Direct Execution Button without Form Boundary
             if st.button("⚡ Evaluate Pivot Decision", type="primary", use_container_width=True):
                 st.session_state.show_pivot_form = False
-                st.session_state.active_tab = "🤖 Interactive Agent Chat"
                 
                 total_invested = spins_done * curr_bet
                 return_pct = (total_return / total_invested * 100) if total_invested > 0 else 0
@@ -683,70 +673,54 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
         reply = f"**Strategy Guidance:** Based on active bankroll **${st.session_state.current_bankroll:.2f}** and target **${st.session_state.session_target:.2f}**:\n\n"
         reply += "1. **Phase 1 Execution:** Play 20 Spins at Phase 1 bet size.\n"
         reply += "2. **Phase 2 Step-Down:** If no feature triggers by spin 20, step down your bet size by ~50% and play 15 Spins.\n"
-        reply += "3. **Stop-Loss Protection:** If session drawdown exceeds $200–$300, step down to $1.00/$1.25 or take a mandatory 15-minute break.\n"
-        reply += "4. **Pivot Assessment:** Evaluate machine performance dynamically at any spin stage to command a STAY or PIVOT."
-            
+        reply += "3. **Stop-Loss Protection:** If session loss exceeds $200–$300, execute immediate Circuit Breaker protocol."
+        
         st.session_state.chat_messages.append({"role": "assistant", "content": reply})
-        with st.chat_message("assistant"):
-            st.markdown(reply)
+        st.rerun()
 
 # ------------------------------------------
 # TAB 6: PLAYED BASKET & OVERRIDES
 # ------------------------------------------
 elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
-    st.subheader("Daily Played Basket & Slot Overrides")
-    st.caption("Slots played in this session are excluded from recommendations.")
+    st.subheader("🧺 Played Machine Basket & Manual Overrides")
+    st.caption("Manage played slot inventory and restore candidates back into active strategy rotation.")
     
     if st.session_state.played_basket:
-        played_data = []
-        for p_slot in st.session_state.played_basket:
-            s_match = next((s for s in st.session_state.slots_db if s["slot"] == p_slot), None)
-            played_data.append({
-                "Slot Name": p_slot,
-                "Family": s_match["family"] if s_match else "Unknown",
-                "Volatility": s_match["volatility"] if s_match else "N/A"
-            })
+        st.write(f"Currently tracking **{len(st.session_state.played_basket)}** played machine(s):")
         
-        st.dataframe(pd.DataFrame(played_data), use_container_width=True)
-        
-        st.markdown("#### 🔓 Restore Slot to Active Recommendations")
-        restore_target = st.selectbox("Select Slot to Re-Enable:", options=st.session_state.played_basket)
-        if st.button("Unlock Selected Slot"):
-            restore_slot(restore_target)
-            st.success(f"Restored '{restore_target}' back to priority recommendations!")
-            st.rerun()
+        for slot_item in list(st.session_state.played_basket):
+            col_p1, col_p2 = st.columns([3, 1])
+            with col_p1:
+                st.write(f"• **{slot_item}**")
+            with col_p2:
+                if st.button(f"🔄 Restore", key=f"restore_{slot_item}"):
+                    restore_slot(slot_item)
+                    st.success(f"Restored '{slot_item}' to Priority Queue!")
+                    st.rerun()
     else:
-        st.info("No slots have been played yet in this active session.")
+        st.info("No machines currently in the played basket.")
 
 # ------------------------------------------
 # TAB 7: DOCUMENTATION & RULES
 # ------------------------------------------
 elif st.session_state.active_tab == "📖 Documentation & Rules":
-    st.subheader("Strategy Engine Rules & Bounding Logic")
+    st.subheader("📖 Strategy Rules & Operational Playbook")
     
     st.markdown("""
-    #### 🎯 Spin Windows & Phase Allocation
-    - **Phase 1 Window:** 20 spins @ Base Bet.
-    - **Phase 2 Window:** 15 spins @ Step-Down Bet.
-    - **Total Evaluation Window:** 35 spins maximum per machine.
-
-    #### 🛑 Circuit Breaker & Stop-Loss Protocol
-    - **$200–$300 Loss Zone:** Drop bet tier to minimum ($1.00 / $1.25) and cap check-ins at $50.
-    - **>$300 Drawdown:** Mandatory 15-minute break away from gaming floor.
-
-    #### 🔀 Pivot vs. Stay Evaluation
-    - Dynamic assessment at any stage of play comparing current machine return against the next highest RVI machine in queue.
-
-    #### 📉 Proportional Bet Tiering Structure
-    - **$10.00 Base** → **$5.00 Step-Down**
-    - **$7.50 Base** → **$3.75 Step-Down**
-    - **$5.00 Base** → **$2.50 Step-Down**
-    - **$3.75 Base** → **$2.00 Step-Down**
-    - **$2.50 Base** → **$1.25 Step-Down**
-
-    #### 🎰 Supported Feature Types
-    - `na`: No feature triggered (logged as 35+ spins).
-    - `orb`: Hold & Spin or Cash orb features.
-    - `scatter`: Free Game / Scatter symbol triggers.
-    - `scatter+orb`: Combined free games and orb hold-and-spin features.
+    ### 🎯 Multi-Phase Strategy Rules
+    1. **Phase 1 (Initial Probe - 20 Spins):**
+       - Execute 20 spins at Phase 1 optimal bet size.
+       - Capital Allocated = $20 \times \text{Phase 1 Bet}$.
+    
+    2. **Phase 2 (Step-Down Probe - 15 Spins):**
+       - If zero features trigger during Phase 1, reduce bet by ~50% (Step-Down Bet).
+       - Play 15 additional spins.
+    
+    3. **Phase 3 (Exit or Backup Spins):**
+       - **Cold Cycle:** Zero features after 35 total spins = Hard Exit immediately.
+       - **Feature Hit (>50x):** Execute 8 Backup Spins at Step-Down Bet before evaluating exit.
+    
+    4. **Circuit Breaker Protocol:**
+       - Drawdown > **$200**: Force bet step-down to $1.00 / $1.25 tier.
+       - Drawdown > **$300**: Enforce mandatory **15-minute floor break**.
     """)
