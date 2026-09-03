@@ -360,10 +360,9 @@ def restore_slot(slot_name):
     return f"'{slot_name}' was not found in played basket."
 
 # ==========================================
-# 3. GEMINI 2.5 LIVE AGENT ENGINE & TOOLS
+# 3. GEMINI 3.6 LIVE AGENT ENGINE & TOOLS
 # ==========================================
 
-# Initialize Gemini Client
 @st.cache_resource
 def get_gemini_client():
     api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
@@ -389,7 +388,6 @@ def run_gemini_agent(user_prompt: str):
 
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
 
-    # Compress dataset context into essential metrics for the LLM context window
     slot_context_summary = []
     for s in available_slots[:20]:
         slot_context_summary.append({
@@ -420,34 +418,31 @@ def run_gemini_agent(user_prompt: str):
 
     OPERATIONAL INSTRUCTIONS:
     1. Reason through user questions dynamically using the live slot dataset provided above.
-    2. When asked for N recommendations (e.g., "Recommend top 3 slots"), extract the exact top N unplayed machines from the dataset, provide their dynamic phase progression plans, and detail the post-hit repeat execution protocol.
+    2. When asked for N recommendations (e.g., "Suggest 3 best slots for today"), extract the top N unplayed machines from the dataset, provide their dynamic phase progression plans, and detail the post-hit repeat execution protocol.
     3. Be precise with mathematical references (Day-RVI scores, Multi-Hit Rates, spin counts, and bet sizes).
     4. You have access to tool function calls to mark machines played or update bankrolls directly if requested by the user.
     """
 
-    # Format previous chat history into Gemini contents objects
     contents = []
     for msg in st.session_state.chat_messages:
         role = "user" if msg["role"] == "user" else "model"
         contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
     
-    # Append latest user input
     contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_prompt)]))
 
     tools_list = [tool_mark_machine_played, tool_update_bankroll]
 
     try:
+        # UPDATED: Calling gemini-3.6-flash
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
-                temperature=0.2,
                 tools=tools_list
             )
         )
 
-        # Handle function call returns from the model
         if response.function_calls:
             for fn in response.function_calls:
                 if fn.name == "tool_mark_machine_played":
@@ -669,31 +664,49 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 st.error(f"Failed to update Google Sheets: {e}")
 
 # ------------------------------------------
-# TAB 4: INTERACTIVE AI AGENT (GEMINI 2.5 SDK INTEGRATED)
+# TAB 4: INTERACTIVE AI AGENT (GEMINI 3.6 SDK & QUICK CHIPS)
 # ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive AI Agent":
-    st.subheader("🤖 Live Strategy AI Agent (Powered by Gemini 2.5)")
+    st.subheader("🤖 Live Strategy AI Agent (Powered by Gemini 3.6)")
 
     if not st.session_state.chat_messages:
         st.session_state.chat_messages = [
-            {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent powered by Gemini 2.5 Flash. I am fully synced with your Google Sheets data, Day-RVI calculations, and active session bankroll. Ask me for recommendations, phase progression strategies, or session adjustments."}
+            {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent powered by Gemini 3.6. I am fully synced with your Google Sheets data, Day-RVI calculations, and active session bankroll. Ask me for recommendations, phase progression strategies, or session adjustments."}
         ]
 
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if prompt := st.chat_input("Ask for strategy advice (e.g., 'Recommend top 3 slots for today', 'Why is New York Nights #1?'):"):
-        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+    # RESTORED: Quick Suggestion Buttons
+    st.write("⚡ **Quick Agent Queries:**")
+    q_col1, q_col2, q_col3 = st.columns(3)
+    
+    quick_prompt = None
+    if q_col1.button("🎯 Suggest 3 best slots for today", use_container_width=True):
+        quick_prompt = "suggest 3 best slots for today based on given data in the google sheet"
+    if q_col2.button("📊 Explain #1 slot strategy", use_container_width=True):
+        quick_prompt = f"Explain why the #1 ranked slot for {st.session_state.selected_day} is prioritized, and detail its phase plan."
+    if q_col3.button("💰 Check Bankroll Strategy", use_container_width=True):
+        quick_prompt = f"Given my current bankroll of ${st.session_state.current_bankroll:.2f} and target of ${st.session_state.session_target:.2f}, how should I pace my bets?"
+
+    user_input = st.chat_input("Ask for strategy advice (e.g., 'Recommend top 3 slots for today', 'Why is New York Nights #1?'):")
+    
+    prompt_to_process = quick_prompt or user_input
+
+    if prompt_to_process:
+        st.session_state.chat_messages.append({"role": "user", "content": prompt_to_process})
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(prompt_to_process)
 
         with st.chat_message("assistant"):
             with st.spinner("Analyzing live slot dataset and session state..."):
-                agent_reply = run_gemini_agent(prompt)
+                agent_reply = run_gemini_agent(prompt_to_process)
                 st.markdown(agent_reply)
 
         st.session_state.chat_messages.append({"role": "assistant", "content": agent_reply})
+        if quick_prompt:
+            st.rerun()
 
 # ------------------------------------------
 # TAB 5: PLAYED BASKET & OVERRIDES
