@@ -46,10 +46,8 @@ if "played_basket" not in st.session_state:
 # 1. MASTER LIST & MULTI-PHASE CONFIG
 # ==========================================
 
-# Custom empirical profiles for slots with established historical hit zones
 CUSTOM_HIT_ZONES = {
     "New York Nights": {
-        # Zone 1: Early Hit (1-15), Zone 2: Checkpoint (16-20), Zone 3: Mid Expansion (21-35), Zone 4: Late Hit Zone (36-50)
         "phases": [
             {"spins": 15, "bet": 7.50, "note": "Early Trigger Zone (Spin 15 Hit)"},
             {"spins": 5,  "bet": 5.00, "note": "Dead Spin Filter (Stop if 0x)"},
@@ -106,7 +104,7 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
-# 2. SHEET INSPECTOR & RVI ENGINE
+# 2. SHEET INSPECTOR & STRICT PAIR-MATCHING RVI ENGINE
 # ==========================================
 
 @st.cache_data(ttl=15)
@@ -121,21 +119,37 @@ def load_and_inspect_sheet():
         return pd.DataFrame(), []
 
 def compute_75_25_rvi(slot_name, family_name, live_df):
+    """
+    Calculates weighted RVI strictly checking BOTH Family AND Slot Theme Name.
+    Prevents cross-contamination when the same theme exists across multiple families.
+    """
     baseline_score = 7.5
     if live_df.empty:
         return baseline_score, "100% Baseline"
     
     cols = {str(c).lower(): c for c in live_df.columns}
     slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
+    fam_col = cols.get("family") or cols.get("slot family") or cols.get("family name")
     win_mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
     win_amt_col = cols.get("win amount") or cols.get("win ($)")
     
-    matched_rows = pd.DataFrame()
-    if slot_col and slot_col in live_df.columns:
-        matched_rows = live_df[live_df[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-    
+    matched_rows = live_df.copy()
+
+    # 1. Filter strictly by Slot Theme Name
+    if slot_col and slot_col in matched_rows.columns:
+        matched_rows = matched_rows[matched_rows[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
+
+    # 2. Filter strictly by Family Name (Crucial to prevent Golden Empress cross-leak)
+    if fam_col and fam_col in matched_rows.columns and not matched_rows.empty:
+        fam_matched = matched_rows[matched_rows[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
+        # If we have exact family matches, use them; otherwise, fall back to baseline
+        if not fam_matched.empty:
+            matched_rows = fam_matched
+        else:
+            return baseline_score, "25% Baseline / 0 Logs for Family"
+
     if matched_rows.empty:
-        return baseline_score, "25% Baseline / 75% Family Prior"
+        return baseline_score, "25% Baseline / 0 Logs"
     
     empirical_multipliers = []
     if win_mult_col and win_mult_col in matched_rows.columns:
@@ -156,14 +170,9 @@ def compute_75_25_rvi(slot_name, family_name, live_df):
 # ==========================================
 
 def get_multi_phase_execution(slot_name, rvi_score):
-    """
-    Returns dynamic multi-phase (up to 5 phases) strategy structures.
-    Uses custom empirical profiles when logged, or scales 4-phase sequences by RVI.
-    """
     if slot_name in CUSTOM_HIT_ZONES:
         phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
     else:
-        # Default 4-Phase dynamic structure scaling with RVI
         if rvi_score >= 8.5:
             phases = [
                 {"spins": 15, "bet": 7.50, "note": "Initial Probe"},
@@ -205,6 +214,7 @@ def build_priority_dataset(live_df):
                 "source_proof": source_proof
             })
 
+    # Sort strictly by RVI score descending
     slot_scores = sorted(slot_scores, key=lambda x: x["rvi"], reverse=True)
 
     for item in slot_scores:
@@ -213,8 +223,6 @@ def build_priority_dataset(live_df):
         rvi_score = item["rvi"]
 
         phases, total_spins, checkin_alloc = get_multi_phase_execution(slot, rvi_score)
-
-        # Build readable phase strings for display
         phase_breakdown_str = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(phases)])
 
         records.append({
@@ -276,8 +284,8 @@ st.markdown("---")
 # TAB 1: TODAY'S PRIORITY BOARD
 # ------------------------------------------
 if st.session_state.active_tab == "📊 Today's Priority Board":
-    st.subheader("Today's Priority Board (Multi-Phase Live Sheet Matrix)")
-    st.caption("Execution plans dynamically expand up to 5 phases to reflect actual empirical trigger zones.")
+    st.subheader("Today's Priority Board (Strict Family-Slot Weighted Matrix)")
+    st.caption("Each Slot Family and Theme pair is now evaluated independently to prevent score leakage.")
 
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     current_display = available_slots[:st.session_state.display_limit]
@@ -316,7 +324,7 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
         card_slot = st.selectbox("2. Select Slot Theme:", options=SLOT_MASTER_LIST[card_family], key="card_slot_select")
 
     if card_slot:
-        slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot), None)
+        slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot and s["family"] == card_family), None)
         if slot_data:
             st.markdown("---")
             st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
@@ -391,7 +399,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 conn.update(worksheet="Session Log", data=updated_df)
                 mark_slot_played(entry_slot)
                 st.cache_data.clear()
-                st.success(f"✅ Recorded '{entry_slot}'! Priority matrix updated.")
+                st.success(f"✅ Recorded '{entry_slot}' under '{entry_family}'! Priority matrix updated.")
             except Exception as e:
                 st.error(f"Failed to update Google Sheets: {e}")
 
@@ -419,8 +427,8 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
 - **Top Sheet-Ranked Target:** {top_str}
 
 **Strategy Guidance:**
-1. Multi-phase checkpoints are active. Exit early if probe phases show zero feature activity.
-2. Focus bets heavily on hit zones identified in your session log history.
+1. Family and Theme pair matching is strictly enforced to eliminate cross-family score leaks.
+2. Monitor early phase performance to decide whether to push into higher bet tiers.
 """
         st.session_state.chat_messages.append({"role": "assistant", "content": agent_response})
         st.rerun()
