@@ -1,9 +1,13 @@
+import os
+import re
+import math
+import numpy as np
+import pandas as pd
+from datetime import datetime
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
-import pandas as pd
-import numpy as np
-import math
-from datetime import datetime
+from google import genai
+from google.genai import types
 
 # ==========================================
 # 0. PAGE CONFIG & CONNECTION MANAGEMENT
@@ -11,13 +15,14 @@ from datetime import datetime
 
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
+# Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 TAB_OPTIONS = [
     "📊 Today's Priority Board", 
     "📋 Pre-Planned Execution Cards", 
     "📝 Live Data Entry",
-    "🤖 Interactive Agent Chat",
+    "🤖 Interactive AI Agent",
     "🧺 Played Basket & Overrides"
 ]
 
@@ -31,14 +36,8 @@ def reset_all_state():
     st.session_state.current_bankroll = 1000.0
     st.session_state.session_target = 1800.0
     st.session_state.active_tab = "📊 Today's Priority Board"
-    st.session_state.show_pivot_form = False
     st.session_state.strict_day_penalty = True
-    st.session_state.chat_messages = [
-        {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent, calibrated with live sheet dynamic repeat-performance analytics."}
-    ]
-
-if "show_pivot_form" not in st.session_state:
-    st.session_state.show_pivot_form = False
+    st.session_state.chat_messages = []
 
 if "strict_day_penalty" not in st.session_state:
     st.session_state.strict_day_penalty = True
@@ -108,7 +107,7 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
-# 2. SHEET INSPECTOR & DATA ANALYSIS ENGINE
+# 2. SHEET DATA INSPECTION & CALCULATION ENGINE
 # ==========================================
 
 @st.cache_data(ttl=15)
@@ -123,10 +122,6 @@ def load_and_inspect_sheet():
         return pd.DataFrame(), []
 
 def compute_slot_rehit_metrics(slot_name, family_name, live_df):
-    """
-    Analyzes Attempt Number and Hit Number columns to determine repeat-hit profile.
-    Identifies multi-hit frequency (Hit Number >= 2 or Attempt Number >= 2).
-    """
     default_res = {
         "repeat_sample_size": 0,
         "multi_hit_count": 0,
@@ -135,7 +130,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "max_repeat_multiplier": 0.0,
         "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)"
     }
-    
     if live_df.empty:
         return default_res
 
@@ -147,7 +141,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
 
     matched = live_df.copy()
-
     if slot_col and slot_col in matched.columns:
         matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
     elif fam_col and fam_col in matched.columns:
@@ -160,7 +153,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     matched["_hit"] = pd.to_numeric(matched[hit_num_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if hit_num_col else 0
     matched["_mult"] = pd.to_numeric(matched[mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if mult_col else 0
 
-    # Repeat hits occur when Hit Number >= 2 OR Attempt Number >= 2
     repeat_entries = matched[(matched["_attempt"] >= 2) | (matched["_hit"] >= 2)]
     total_logs = len(matched)
     repeat_count = len(repeat_entries)
@@ -177,9 +169,9 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     elif multi_hit_rate >= 20.0:
         recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Finish current phase; re-probe if win > 20x."
     elif repeat_count > 0:
-        recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Single hit machine. Lock profits and exit on feature hit."
+        recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Single hit machine. Lock profits and exit."
     else:
-        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No multi-attempt/hit data recorded yet. Treat conservatively."
+        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No multi-attempt/hit data recorded yet."
 
     return {
         "repeat_sample_size": total_logs,
@@ -206,7 +198,6 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     win_amt_col = cols.get("win amount") or cols.get("win ($)")
 
     matched_rows = live_df.copy()
-
     if slot_col and slot_col in matched_rows.columns:
         matched_rows = matched_rows[matched_rows[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
 
@@ -268,10 +259,6 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     
     return final_rvi, proof_str, target_day, day_factor, day_log_count, total_logs
 
-# ==========================================
-# 3. DYNAMIC MULTI-PHASE EXECUTION ENGINE
-# ==========================================
-
 def get_multi_phase_execution(slot_name, rvi_score):
     if slot_name in CUSTOM_HIT_ZONES:
         phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
@@ -300,13 +287,11 @@ def get_multi_phase_execution(slot_name, rvi_score):
     total_spins = sum(p["spins"] for p in phases)
     raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
     checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
-
     return phases, total_spins, checkin_alloc
 
 def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     records = []
     slot_scores = []
-    
     if target_day is None:
         target_day = datetime.now().strftime("%A")
     
@@ -365,10 +350,118 @@ st.session_state.slots_db = build_priority_dataset(live_sheet_df, st.session_sta
 def mark_slot_played(slot_name):
     if slot_name not in st.session_state.played_basket:
         st.session_state.played_basket.append(slot_name)
+        return f"Successfully marked '{slot_name}' as played."
+    return f"'{slot_name}' is already in the played basket."
 
 def restore_slot(slot_name):
     if slot_name in st.session_state.played_basket:
         st.session_state.played_basket.remove(slot_name)
+        return f"Restored '{slot_name}' to active status."
+    return f"'{slot_name}' was not found in played basket."
+
+# ==========================================
+# 3. GEMINI 2.5 LIVE AGENT ENGINE & TOOLS
+# ==========================================
+
+# Initialize Gemini Client
+@st.cache_resource
+def get_gemini_client():
+    api_key = os.environ.get("GEMINI_API_KEY") or st.secrets.get("GEMINI_API_KEY", None)
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
+def tool_mark_machine_played(slot_name: str) -> str:
+    """Marks a machine as played, moving it out of active recommendations and into the played basket."""
+    res = mark_slot_played(slot_name)
+    st.rerun()
+    return res
+
+def tool_update_bankroll(new_amount: float) -> str:
+    """Updates the user's current bankroll during a live casino session."""
+    st.session_state.current_bankroll = float(new_amount)
+    return f"Current bankroll updated to ${new_amount:.2f}"
+
+def run_gemini_agent(user_prompt: str):
+    client = get_gemini_client()
+    if not client:
+        return "⚠️ Gemini Client error: `GEMINI_API_KEY` is not set in environment or Streamlit secrets."
+
+    available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+
+    # Compress dataset context into essential metrics for the LLM context window
+    slot_context_summary = []
+    for s in available_slots[:20]:
+        slot_context_summary.append({
+            "slot": s["slot"],
+            "family": s["family"],
+            "rvi_score": s["base_rvi"],
+            "multi_hit_rate": f"{s['rehit_metrics']['multi_hit_rate']}%",
+            "multi_hit_count": s['rehit_metrics']['multi_hit_count'],
+            "total_logs": s['rehit_metrics']['repeat_sample_size'],
+            "phase_plan": s["phase_breakdown"],
+            "checkin_alloc": s["checkin_alloc"],
+            "recommendation_protocol": s['rehit_metrics']['repeat_recommendation']
+        })
+
+    system_instruction = f"""
+    You are an expert AI Casino Slot Optimization & Execution Agent.
+
+    CURRENT LIVE SESSION ENVIRONMENT:
+    - Active Target Day: {st.session_state.selected_day}
+    - Current Active Bankroll: ${st.session_state.current_bankroll:.2f}
+    - Starting Bankroll: ${st.session_state.session_start_bankroll:.2f}
+    - Target Bankroll: ${st.session_state.session_target:.2f}
+    - Strict Day Penalty Mode: {'ON' if st.session_state.strict_day_penalty else 'OFF'}
+    - Played Basket (Played Today): {st.session_state.played_basket}
+
+    AVAILABLE TOP-RANKED SLOTS DATASET (Ranked by 75/25 Hybrid Day-RVI & Multi-Hit Rate):
+    {slot_context_summary}
+
+    OPERATIONAL INSTRUCTIONS:
+    1. Reason through user questions dynamically using the live slot dataset provided above.
+    2. When asked for N recommendations (e.g., "Recommend top 3 slots"), extract the exact top N unplayed machines from the dataset, provide their dynamic phase progression plans, and detail the post-hit repeat execution protocol.
+    3. Be precise with mathematical references (Day-RVI scores, Multi-Hit Rates, spin counts, and bet sizes).
+    4. You have access to tool function calls to mark machines played or update bankrolls directly if requested by the user.
+    """
+
+    # Format previous chat history into Gemini contents objects
+    contents = []
+    for msg in st.session_state.chat_messages:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+    
+    # Append latest user input
+    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=user_prompt)]))
+
+    tools_list = [tool_mark_machine_played, tool_update_bankroll]
+
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.2,
+                tools=tools_list
+            )
+        )
+
+        # Handle function call returns from the model
+        if response.function_calls:
+            for fn in response.function_calls:
+                if fn.name == "tool_mark_machine_played":
+                    args = fn.args
+                    tool_res = tool_mark_machine_played(args.get("slot_name"))
+                    return f"🤖 Tool Action: {tool_res}"
+                elif fn.name == "tool_update_bankroll":
+                    args = fn.args
+                    tool_res = tool_update_bankroll(args.get("new_amount"))
+                    return f"🤖 Tool Action: {tool_res}"
+
+        return response.text
+    except Exception as e:
+        return f"Error communicating with Gemini Agent: {e}"
 
 # ==========================================
 # 4. SIDEBAR & NAVIGATION
@@ -474,19 +567,16 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
 
             st.caption(f"**Data Proof:** {slot_data['source_proof']} | **Repeat Logs Analyzed (Attempt/Hit ≥ 2):** {rehit['multi_hit_count']} of {rehit['repeat_sample_size']}")
 
-            # SECTION A: INITIAL PROBE PLAN
             st.markdown("#### 🔄 Dynamic Initial Probe Plan (Attempt 1 / Hit 0)")
             for idx, phase in enumerate(slot_data["phases"], 1):
                 st.write(f"**Phase {idx}:** **{phase['spins']} Spins** @ **${phase['bet']:.2f}/spin** — *{phase['note']}*")
 
             st.markdown("---")
 
-            # SECTION B: DATA-DRIVEN POST-HIT PROTOCOL (DYNAMIC FROM GOOGLE SHEET)
             st.markdown("#### 🎯 Post-Hit Repeat Execution Protocol (Driven by Sheet History)")
             st.info(f"📋 **Live Sheet Recommendation:** {rehit['repeat_recommendation']}")
 
             col_h1, col_h2 = st.columns(2)
-            
             p1_bet = slot_data["phases"][0]["bet"]
             
             with col_h1:
@@ -503,7 +593,7 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
                     st.write(f"- **Reason:** Historical data shows a strong {rehit['multi_hit_rate']}% probability of multi-hit feature clustering on this slot.")
                 else:
                     st.warning("🟡 **ACTION: FINISH CURRENT PHASE OR EXIT**")
-                    st.write(f"- **Execution:** Finish only the remaining spins in the current phase, then lock profits and move to Played Basket.")
+                    st.write(f"- **Execution:** Finish only remaining spins in current phase, lock profits, and move to Played Basket.")
                     st.write(f"- **Reason:** Low multi-hit rate ({rehit['multi_hit_rate']}%) in historical logs suggests poor repeat efficiency.")
 
             st.markdown("---")
@@ -539,8 +629,8 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             entry_win_amt = st.number_input("Win Amount ($):", min_value=0, value=916, step=10)
             entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0, value=183, step=5)
         with col_e3:
-            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1, help="0 or 1 for initial hit, >=2 for repeat hits within same session")
-            entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1, help="1 for initial probe, 2+ for repeat attempts after feature hit")
+            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1)
+            entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
 
         submit_gs_entry = st.form_submit_button("💾 Save Record to Google Sheets")
 
@@ -573,43 +663,37 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 conn.update(worksheet="Session Log", data=updated_df)
                 mark_slot_played(entry_slot)
                 st.cache_data.clear()
-                st.success(f"✅ Recorded '{entry_slot}' ({entry_family}) on {dynamic_day}! Priority & Multi-Hit matrix re-calculated.")
+                st.success(f"✅ Recorded '{entry_slot}' ({entry_family}) on {dynamic_day}! Matrix recalculated.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to update Google Sheets: {e}")
 
 # ------------------------------------------
-# TAB 4: INTERACTIVE AGENT CHAT
+# TAB 4: INTERACTIVE AI AGENT (GEMINI 2.5 SDK INTEGRATED)
 # ------------------------------------------
-elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
-    st.subheader("🤖 Live Strategy AI Agent")
+elif st.session_state.active_tab == "🤖 Interactive AI Agent":
+    st.subheader("🤖 Live Strategy AI Agent (Powered by Gemini 2.5)")
+
+    if not st.session_state.chat_messages:
+        st.session_state.chat_messages = [
+            {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent powered by Gemini 2.5 Flash. I am fully synced with your Google Sheets data, Day-RVI calculations, and active session bankroll. Ask me for recommendations, phase progression strategies, or session adjustments."}
+        ]
 
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if prompt := st.chat_input("Ask about machine strategy, multi-hit stats, or post-hit protocols:"):
+    if prompt := st.chat_input("Ask for strategy advice (e.g., 'Recommend top 3 slots for today', 'Why is New York Nights #1?'):"):
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        available = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
-        top_cand = available[0] if available else None
-        top_str = f"{top_cand['slot']} ({top_cand['family']}) - Multi-Hit Rate: {top_cand['rehit_metrics']['multi_hit_rate']}%" if top_cand else "None"
+        with st.chat_message("assistant"):
+            with st.spinner("Analyzing live slot dataset and session state..."):
+                agent_reply = run_gemini_agent(prompt)
+                st.markdown(agent_reply)
 
-        agent_response = f"""### 🤖 AI Agent Evaluation
-- **Active Bankroll:** ${st.session_state.current_bankroll:.2f}
-- **Active Focus Day:** {st.session_state.selected_day}
-- **Top Day/Multi-Hit Target:** {top_str}
-
-**Sheet-Driven Post-Hit Protocol:**
-1. **Initial Probe:** Follow Phase 1-4.
-2. **On Feature Hit:** Check machine's **Multi-Hit Frequency** in the sheet data.
-3. **High Multi-Hit Rate (≥30%):** Re-probe by resetting to Phase 1. Historical data shows multi-hit cluster potential (Attempt ≥ 2 / Hit ≥ 2).
-4. **Low Multi-Hit Rate (<30%):** Finish remaining phase spins and exit machine immediately.
-"""
-        st.session_state.chat_messages.append({"role": "assistant", "content": agent_response})
-        st.rerun()
+        st.session_state.chat_messages.append({"role": "assistant", "content": agent_reply})
 
 # ------------------------------------------
 # TAB 5: PLAYED BASKET & OVERRIDES
