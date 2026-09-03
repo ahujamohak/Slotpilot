@@ -484,16 +484,21 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
 
     st.markdown("---")
 
+    # Dynamic family selection outside form for instant list cascading
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()), key="live_fam_select")
+    with col_f2:
+        entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family], key="live_slot_select")
+
     with st.form("exact_gs_entry_form", clear_on_submit=True):
         col_e1, col_e2, col_e3 = st.columns(3)
         
         with col_e1:
-            entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()))
-            entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family])
             entry_spin_hit_raw = st.text_input("Spin of Feature Hit (e.g. 32 or 35+):", value="35")
+            entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
 
         with col_e2:
-            entry_feat_type = st.selectbox("Feature Type:", ["na", "orb", "scatter", "scatter+orb"])
             entry_win_amt = st.number_input("Win Amount ($):", min_value=0.0, value=0.0, step=10.0)
             entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=0.0, step=5.0)
 
@@ -589,21 +594,27 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
     st.caption("Chat with the strategy agent in real-time or clear chat history.")
     
-    # Form-Encapsulated Machine Evaluation to Prevent State Misalignments
+    # Active Machine Pivot Evaluation Container
     if st.session_state.show_pivot_form:
         with st.expander("🔀 Active Machine Evaluation (Pivot vs. Stay)", expanded=True):
             st.markdown("Enter details for the machine you are currently playing:")
             
-            with st.form("pivot_eval_form"):
-                piv_col1, piv_col2 = st.columns(2)
+            # Interactive Cascading Dropdowns Placed Outside Form Boundary for Instant Reactivity
+            piv_col1, piv_col2 = st.columns(2)
+            with piv_col1:
+                curr_fam = st.selectbox("Current Slot Family:", list(SLOT_MASTER_LIST.keys()), key="piv_fam_select")
+            with piv_col2:
+                curr_slot = st.selectbox("Current Slot Theme:", SLOT_MASTER_LIST[curr_fam], key="piv_slot_select")
                 
-                with piv_col1:
-                    curr_fam = st.selectbox("Current Slot Family:", list(SLOT_MASTER_LIST.keys()), key="piv_fam_input")
-                    curr_slot = st.selectbox("Current Slot Theme:", SLOT_MASTER_LIST[curr_fam], key="piv_slot_input")
+            # Form Encapsulation for Numerical Inputs & Submit Trigger
+            with st.form("pivot_num_eval_form"):
+                piv_num_col1, piv_num_col2 = st.columns(2)
+                
+                with piv_num_col1:
                     curr_bet = st.number_input("Current Bet Size ($):", min_value=1.00, value=2.50, step=0.25, key="piv_bet_input")
-                    
-                with piv_col2:
                     spins_done = st.number_input("Spins Completed So Far:", min_value=1, max_value=100, value=15, key="piv_spins_input")
+                    
+                with piv_num_col2:
                     total_return = st.number_input("Total Returns / Wins ($):", min_value=0.0, value=0.0, step=5.0, key="piv_ret_input")
                     active_teaser = st.checkbox("Active Orbs/Scatter Teasers Present?", key="piv_teaser_input")
 
