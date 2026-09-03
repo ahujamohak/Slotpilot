@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import numpy as np
 import math
@@ -11,6 +12,9 @@ from datetime import datetime
 
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
+# Initialize Google Sheets Connection
+conn = st.connection("gsheets", type=GSheetsConnection)
+
 TAB_OPTIONS = [
     "📊 Today's Priority Board", 
     "📋 Pre-Planned Execution Cards", 
@@ -19,7 +23,6 @@ TAB_OPTIONS = [
     "🧺 Played Basket & Overrides"
 ]
 
-# Ensure active_tab is initialized FIRST and ALWAYS preserved
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "📊 Today's Priority Board"
 
@@ -35,32 +38,6 @@ def reset_all_state():
     st.session_state.chat_messages = [
         {"role": "assistant", "content": "Welcome! I am your AI Slot Execution Agent. Ask me for real-time recommendations, exit evaluations, stop-loss checks, or machine pivot commands."}
     ]
-    st.session_state.session_logs = pd.DataFrame([
-        {
-            "Date": "9/3/2026",
-            "Day": "Thursday",
-            "Family": "Cash Horns",
-            "Slot": "Cleopatra’s Kingdom",
-            "Spin of Feature Hit": "32",
-            "Feature Type": "scatter",
-            "Win Amount": 180.0,
-            "Win Multiplier": 72.0,
-            "Hit Number": 1,
-            "Attempt Number": 1
-        },
-        {
-            "Date": "9/3/2026",
-            "Day": "Thursday",
-            "Family": "Dragon Link",
-            "Slot": "Autumn Moon",
-            "Spin of Feature Hit": "35+",
-            "Feature Type": "na",
-            "Win Amount": 0.0,
-            "Win Multiplier": 0.0,
-            "Hit Number": 1,
-            "Attempt Number": 1
-        }
-    ])
 
 if "show_pivot_form" not in st.session_state:
     st.session_state.show_pivot_form = False
@@ -457,11 +434,11 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
                 st.rerun()
 
 # ------------------------------------------
-# TAB 3: LIVE DATA ENTRY
+# TAB 3: LIVE DATA ENTRY (DIRECT GSHEETS WRITE)
 # ------------------------------------------
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
-    st.caption("Matches exact log schema. Supports '+' notation (e.g. 35+) for sessions with no feature hits.")
+    st.caption("Writes directly to your connected Google Sheet. Supports '+' notation (e.g. 35+).")
 
     col_d1, col_d2 = st.columns([1, 2])
     
@@ -497,7 +474,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             entry_hit_num = st.number_input("Hit Number:", min_value=1, max_value=20, value=1)
             entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
 
-        submit_gs_entry = st.form_submit_button("💾 Save Session Record")
+        submit_gs_entry = st.form_submit_button("💾 Save Session Record to Google Sheets")
         
         if submit_gs_entry:
             cleaned_spin_val = entry_spin_hit_raw.strip()
@@ -508,7 +485,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             else:
                 spin_final_str = cleaned_spin_val if cleaned_spin_val else "1"
 
-            new_gs_log = {
+            new_gs_log = pd.DataFrame([{
                 "Date": formatted_date_str,
                 "Day": dynamic_day,
                 "Family": entry_family,
@@ -519,12 +496,22 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 "Win Multiplier": entry_multiplier,
                 "Hit Number": entry_hit_num,
                 "Attempt Number": entry_attempt_num
-            }
+            }])
             
-            st.session_state.session_logs = pd.concat([st.session_state.session_logs, pd.DataFrame([new_gs_log])], ignore_index=True)
-            mark_slot_played(entry_slot)
-            
-            st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str}, Spin: '{spin_final_str}', Feature: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
+            try:
+                # 1. Read existing data from Google Sheets
+                existing_data = conn.read(ttl="0")
+                
+                # 2. Append new log
+                updated_df = pd.concat([existing_data, new_gs_log], ignore_index=True)
+                
+                # 3. Write back to Google Sheets
+                conn.update(data=updated_df)
+                
+                mark_slot_played(entry_slot)
+                st.success(f"✅ Successfully written to Google Sheets! Entry for '{entry_slot}' saved.")
+            except Exception as e:
+                st.error(f"Failed to update Google Sheets: {e}")
 
 # ------------------------------------------
 # TAB 4: INTERACTIVE AGENT CHAT
