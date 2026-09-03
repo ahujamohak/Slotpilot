@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import math
 import re
 from datetime import datetime
@@ -16,10 +15,8 @@ TAB_OPTIONS = [
     "📊 Today's Priority Board", 
     "📋 Pre-Planned Execution Cards", 
     "📝 Live Data Entry",
-    "📈 Visual Data Analytics",
     "🤖 Interactive Agent Chat",
-    "🧺 Played Basket & Overrides", 
-    "📖 Documentation & Rules"
+    "🧺 Played Basket & Overrides"
 ]
 
 # Ensure active_tab is initialized FIRST and ALWAYS preserved
@@ -529,60 +526,8 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             
             st.success(f"Logged entry for '{entry_slot}'! Date: {formatted_date_str}, Spin: '{spin_final_str}', Feature: '{entry_feat_type}', Win: ${entry_win_amt:.2f}.")
 
-    st.markdown("---")
-    st.markdown("#### 📋 Current Logged Entries")
-    st.dataframe(st.session_state.session_logs, use_container_width=True)
-
 # ------------------------------------------
-# TAB 4: VISUAL DATA ANALYTICS
-# ------------------------------------------
-elif st.session_state.active_tab == "📈 Visual Data Analytics":
-    st.subheader("📈 Visual Data Analytics & Performance Metrics")
-    
-    df_analytics = st.session_state.session_logs.copy()
-    if not df_analytics.empty:
-        m1, m2, m3 = st.columns(3)
-        total_wins = df_analytics["Win Amount"].sum() if "Win Amount" in df_analytics.columns else 0
-        avg_mult = df_analytics["Win Multiplier"].mean() if "Win Multiplier" in df_analytics.columns else 0
-        total_entries = len(df_analytics)
-        
-        m1.metric("Total Logged Win Amount", f"${total_wins:,.2f}")
-        m2.metric("Average Win Multiplier", f"{avg_mult:.1f}x")
-        m3.metric("Total Feature Entries Recorded", total_entries)
-        
-        st.markdown("---")
-        col_g1, col_g2 = st.columns(2)
-        
-        with col_g1:
-            if "Family" in df_analytics.columns and "Win Amount" in df_analytics.columns:
-                fig_fam = px.bar(
-                    df_analytics, 
-                    x="Family", 
-                    y="Win Amount", 
-                    color="Feature Type" if "Feature Type" in df_analytics.columns else None,
-                    title="Total Win Amount by Slot Family ($)",
-                    text_auto=True
-                )
-                st.plotly_chart(fig_fam, use_container_width=True)
-
-        with col_g2:
-            if "Spin of Feature Hit" in df_analytics.columns:
-                df_analytics["Numeric_Spin"] = df_analytics["Spin of Feature Hit"].astype(str).str.replace("+", "", regex=False)
-                df_analytics["Numeric_Spin"] = pd.to_numeric(df_analytics["Numeric_Spin"], errors="coerce")
-                
-                fig_hist = px.histogram(
-                    df_analytics, 
-                    x="Numeric_Spin", 
-                    nbins=15, 
-                    title="Distribution of Spin Window for Feature Hits",
-                    labels={"Numeric_Spin": "Spin Count"}
-                )
-                st.plotly_chart(fig_hist, use_container_width=True)
-    else:
-        st.info("No logs available yet for visual analytics.")
-
-# ------------------------------------------
-# TAB 5: INTERACTIVE AGENT CHAT
+# TAB 4: INTERACTIVE AGENT CHAT
 # ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
     st.subheader("🤖 Interactive AI Strategy Partner")
@@ -679,7 +624,7 @@ elif st.session_state.active_tab == "🤖 Interactive Agent Chat":
         st.rerun()
 
 # ------------------------------------------
-# TAB 6: PLAYED BASKET & OVERRIDES
+# TAB 5: PLAYED BASKET & OVERRIDES
 # ------------------------------------------
 elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
     st.subheader("🧺 Played Machine Basket & Manual Overrides")
@@ -699,28 +644,3 @@ elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
                     st.rerun()
     else:
         st.info("No machines currently in the played basket.")
-
-# ------------------------------------------
-# TAB 7: DOCUMENTATION & RULES
-# ------------------------------------------
-elif st.session_state.active_tab == "📖 Documentation & Rules":
-    st.subheader("📖 Strategy Rules & Operational Playbook")
-    
-    st.markdown("""
-    ### 🎯 Multi-Phase Strategy Rules
-    1. **Phase 1 (Initial Probe - 20 Spins):**
-       - Execute 20 spins at Phase 1 optimal bet size.
-       - Capital Allocated = $20 \times \text{Phase 1 Bet}$.
-    
-    2. **Phase 2 (Step-Down Probe - 15 Spins):**
-       - If zero features trigger during Phase 1, reduce bet by ~50% (Step-Down Bet).
-       - Play 15 additional spins.
-    
-    3. **Phase 3 (Exit or Backup Spins):**
-       - **Cold Cycle:** Zero features after 35 total spins = Hard Exit immediately.
-       - **Feature Hit (>50x):** Execute 8 Backup Spins at Step-Down Bet before evaluating exit.
-    
-    4. **Circuit Breaker Protocol:**
-       - Drawdown > **$200**: Force bet step-down to $1.00 / $1.25 tier.
-       - Drawdown > **$300**: Enforce mandatory **15-minute floor break**.
-    """)
