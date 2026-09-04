@@ -145,8 +145,8 @@ def restore_slot(slot_name: str):
 VALID_SLOT_BETS = [1.00, 1.25, 1.50, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
 
 def snap_to_valid_bet(bet: float) -> float:
-"""Snaps any arbitrary calculated bet to the nearest valid slot bet denomination."""
-return min(VALID_SLOT_BETS, key=lambda x: abs(x - bet))
+    """Snaps any arbitrary calculated bet to the nearest valid slot bet denomination."""
+    return min(VALID_SLOT_BETS, key=lambda x: abs(x - bet))
 
 CUSTOM_HIT_ZONES = {
     "New York Nights": {
