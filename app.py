@@ -396,79 +396,79 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
     checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
 
     return phases, total_spins, checkin_alloc
-# ==========================================
-# 2. SHEET DATA INSPECTION & CALCULATION ENGINE
-# ==========================================
+# # ==========================================
+# # 2. SHEET DATA INSPECTION & CALCULATION ENGINE
+# # ==========================================
 
-@st.cache_data(ttl=15)
-def load_and_inspect_sheet():
-    try:
-        df = conn.read(worksheet=SESSION_LOG_WORKSHEET, ttl="0")
-        if df.empty:
-            return pd.DataFrame(), []
-        df.columns = [str(c).strip() for c in df.columns]
-        return df, list(df.columns)
-    except Exception:
-        return pd.DataFrame(), []
+# @st.cache_data(ttl=15)
+# def load_and_inspect_sheet():
+#     try:
+#         df = conn.read(worksheet=SESSION_LOG_WORKSHEET, ttl="0")
+#         if df.empty:
+#             return pd.DataFrame(), []
+#         df.columns = [str(c).strip() for c in df.columns]
+#         return df, list(df.columns)
+#     except Exception:
+#         return pd.DataFrame(), []
 
-def parse_session_log_data(live_df, slot_name, family_name):
-    """
-    Parses live sheet logs for a specific slot/family to clean spins,
-    distinguish exact hits from censored exit entries (32+), and extract win metrics.
-    """
-    if live_df.empty:
-        return pd.DataFrame()
+# def parse_session_log_data(live_df, slot_name, family_name):
+#     """
+#     Parses live sheet logs for a specific slot/family to clean spins,
+#     distinguish exact hits from censored exit entries (32+), and extract win metrics.
+#     """
+#     if live_df.empty:
+#         return pd.DataFrame()
 
-    cols = {str(c).lower(): c for c in live_df.columns}
-    slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
-    fam_col = cols.get("family") or cols.get("slot family")
-    spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
-    attempt_col = cols.get("attempt number") or cols.get("attempt")
-    hit_num_col = cols.get("hit number") or cols.get("hit")
-    mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
-    win_amt_col = cols.get("win amount") or cols.get("win ($)")
-    day_col = cols.get("day") or cols.get("day of week")
+#     cols = {str(c).lower(): c for c in live_df.columns}
+#     slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
+#     fam_col = cols.get("family") or cols.get("slot family")
+#     spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
+#     attempt_col = cols.get("attempt number") or cols.get("attempt")
+#     hit_num_col = cols.get("hit number") or cols.get("hit")
+#     mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
+#     win_amt_col = cols.get("win amount") or cols.get("win ($)")
+#     day_col = cols.get("day") or cols.get("day of week")
 
-    matched = live_df.copy()
+#     matched = live_df.copy()
 
-    # Dual filter on Family AND Slot Name to avoid cross-contamination
-    has_slot = slot_col and slot_col in matched.columns
-    has_fam = fam_col and fam_col in matched.columns
+#     # Dual filter on Family AND Slot Name to avoid cross-contamination
+#     has_slot = slot_col and slot_col in matched.columns
+#     has_fam = fam_col and fam_col in matched.columns
 
-    if has_slot and has_fam:
-        dual_matched = matched[
-            (matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()) &
-            (matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower())
-        ]
-        if not dual_matched.empty:
-            matched = dual_matched
-        else:
-            matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-    elif has_slot:
-        matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-    elif has_fam:
-        matched = matched[matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
+#     if has_slot and has_fam:
+#         dual_matched = matched[
+#             (matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()) &
+#             (matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower())
+#         ]
+#         if not dual_matched.empty:
+#             matched = dual_matched
+#         else:
+#             matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
+#     elif has_slot:
+#         matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
+#     elif has_fam:
+#         matched = matched[matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
 
-    if matched.empty:
-        return pd.DataFrame()
+#     if matched.empty:
+#         return pd.DataFrame()
 
-    # Extract raw string spin
-    spin_raw = matched[spin_col].astype(str).str.strip() if spin_col else pd.Series(["0"] * len(matched))
+#     # Extract raw string spin
+#     spin_raw = matched[spin_col].astype(str).str.strip() if spin_col else pd.Series(["0"] * len(matched))
 
-    # 1. Flag censored data ('32+' means no feature hit, exited after those spins)
-    matched["_is_censored"] = spin_raw.str.contains(r'\+', regex=True)
+#     # 1. Flag censored data ('32+' means no feature hit, exited after those spins)
+#     matched["_is_censored"] = spin_raw.str.contains(r'\+', regex=True)
 
-    # 2. Clean numeric spin count
-    matched["_spins"] = pd.to_numeric(spin_raw.str.extract(r'(\d+)')[0], errors='coerce').fillna(0)
+#     # 2. Clean numeric spin count
+#     matched["_spins"] = pd.to_numeric(spin_raw.str.extract(r'(\d+)')[0], errors='coerce').fillna(0)
 
-    # 3. Clean numeric attempt, hit number, multiplier, and win amount
-    matched["_attempt"] = pd.to_numeric(matched[attempt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1) if attempt_col else 1
-    matched["_hit"] = pd.to_numeric(matched[hit_num_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if hit_num_col else 0
-    matched["_mult"] = pd.to_numeric(matched[mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if mult_col else 0
-    matched["_win_amt"] = pd.to_numeric(matched[win_amt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if win_amt_col else 0
-    matched["_day"] = matched[day_col].astype(str).str.strip() if day_col else ""
+#     # 3. Clean numeric attempt, hit number, multiplier, and win amount
+#     matched["_attempt"] = pd.to_numeric(matched[attempt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1) if attempt_col else 1
+#     matched["_hit"] = pd.to_numeric(matched[hit_num_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if hit_num_col else 0
+#     matched["_mult"] = pd.to_numeric(matched[mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if mult_col else 0
+#     matched["_win_amt"] = pd.to_numeric(matched[win_amt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if win_amt_col else 0
+#     matched["_day"] = matched[day_col].astype(str).str.strip() if day_col else ""
 
-    return matched
+#     return matched
 
 # ==========================================
 # CALCULATION ENGINE HELPERS (REHIT UPDATE)
