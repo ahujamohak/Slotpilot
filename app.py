@@ -243,19 +243,36 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
 
     empirical_multipliers = []
     if win_mult_col and win_mult_col in matched_rows.columns:
-        empirical_multipliers = pd.to_numeric(matched_rows[win_mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').dropna().tolist()
+        empirical_multipliers = pd.to_numeric(matched_rows[win_mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0).tolist()
     elif win_amt_col and win_amt_col in matched_rows.columns:
-        empirical_multipliers = pd.to_numeric(matched_rows[win_amt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').dropna().tolist()
+        empirical_multipliers = pd.to_numeric(matched_rows[win_amt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0).tolist()
 
     if not empirical_multipliers:
         final_rvi = round(baseline_score * day_factor, 2)
         return final_rvi, f"Day-Weighted Hybrid ({day_log_count} {target_day} hits)", target_day, day_factor, day_log_count, total_logs
 
-    avg_mult = np.mean(empirical_multipliers)
-    sheet_rvi = min(10.0, max(1.0, (avg_mult / 15.0) + 5.0))
+    # --- RVI CALCULATION BUG FIX: SEPARATING HIT RATE FROM WIN MAGNITUDE ---
+    # Filter only positive win events (> 0 multiplier) to derive actual win magnitude given a hit
+    actual_hits = [m for m in empirical_multipliers if m > 0]
+    
+    # 1. Hit Rate Signal (Frequency of feature trigger)
+    hit_rate = len(actual_hits) / total_logs if total_logs > 0 else 0.0
+    hit_rate_score = min(10.0, max(1.0, hit_rate * 10.0))  # Scale 0-100% hit rate into 1.0 - 10.0 score
+
+    # 2. Win Magnitude Signal (Average payout when feature hits)
+    if len(actual_hits) > 0:
+        avg_win_when_hit = np.mean(actual_hits)
+        win_magnitude_score = min(10.0, max(1.0, (avg_win_when_hit / 15.0) + 5.0))
+    else:
+        win_magnitude_score = 1.0
+
+    # Combine signals independently: 40% Hit Frequency, 60% Win Magnitude
+    sheet_rvi = (0.40 * hit_rate_score) + (0.60 * win_magnitude_score)
+    
+    # Final 75/25 Hybrid Blending with baseline & Day Factor
     weighted_rvi = (0.75 * sheet_rvi) + (0.25 * baseline_score)
     final_rvi = round(min(10.0, max(1.0, weighted_rvi * day_factor)), 2)
-    proof_str = f"75% Live Sheet ({total_logs} total, {day_log_count} on {target_day}s)"
+    proof_str = f"75% Live Sheet ({len(actual_hits)}/{total_logs} hits, {day_log_count} on {target_day}s)"
     
     return final_rvi, proof_str, target_day, day_factor, day_log_count, total_logs
 
@@ -358,7 +375,7 @@ def restore_slot(slot_name):
         st.session_state.played_basket.remove(slot_name)
         return f"Restored '{slot_name}' to active status."
     return f"'{slot_name}' was not found in played basket."
-
+    
 # ==========================================
 # 3. GEMINI 3.6 LIVE AGENT ENGINE & TOOLS
 # ==========================================
