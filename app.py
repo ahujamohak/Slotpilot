@@ -770,17 +770,13 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
 # single check-in at a configurable % of current bankroll.
 
 def compute_bankroll_scale():
-    start = max(st.session_state.session_start_bankroll, 1.0)
+    start = max(st.session_state.session_start_bankroll, 0.0)
     current = max(st.session_state.current_bankroll, 0.0)
-    target = st.session_state.session_target
+    if start <= 0:
+        return 1.0, "Normal staking — no drawdown adjustment active."
 
     bankroll_ratio = current / start
-    target_span = max(target - start, 1.0)
-    progress_ratio = (current - start) / target_span
-
-    if progress_ratio >= 1.0:
-        return 0.5, "🎯 Target reached or exceeded — bets scaled to 50% to protect winnings."
-    elif bankroll_ratio <= 0.5:
+    if bankroll_ratio <= 0.5:
         return 0.5, "🛑 Bankroll down 50%+ from session start — bets scaled to 50% to preserve capital."
     elif bankroll_ratio <= 0.75:
         return 0.75, "⚠️ Bankroll down 25%+ from session start — bets scaled to 75%."
@@ -793,15 +789,15 @@ def scale_phases_for_bankroll(phases, checkin_alloc):
     max_risk_pct = st.session_state.get("max_risk_pct", 20) / 100.0
     risk_cap = current * max_risk_pct
 
-    # Change 1: Snap bets after scaling by bankroll posture
     scaled_phases = [dict(p, bet=snap_to_valid_bet(p["bet"] * scale)) for p in phases]
     raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
 
     cap_note = None
     if risk_cap > 0 and raw_alloc > risk_cap:
         cap_ratio = risk_cap / raw_alloc
-        # Change 2: Snap bets again if risk cap forces a reduction
-        scaled_phases = [dict(p, bet=snap_to_valid_bet(p["bet"] * cap_ratio)) for p in scaled_phases]
+        scaled_phases = [
+            dict(p, bet=snap_to_valid_bet(p["bet"] * cap_ratio)) for p in scaled_phases
+        ]
         raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
         cap_note = f"Capped to {max_risk_pct*100:.0f}% of current bankroll (${risk_cap:.2f})."
 
