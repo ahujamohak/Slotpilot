@@ -614,39 +614,62 @@ st.title("Casino Slot Optimization & Execution Agent")
 st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day Context: **{st.session_state.selected_day}** | Strict Mode: **{'ON' if st.session_state.strict_day_penalty else 'OFF'}**")
 st.markdown("---")
 
-# ------------------------------------------
+# ==========================================
 # TAB 1: TODAY'S PRIORITY BOARD
-# ------------------------------------------
-if st.session_state.active_tab == "📊 Today's Priority Board":
-    st.subheader(f"Today's Priority Board (Day & Dynamic Spin-Calibrated Matrix for {st.session_state.selected_day})")
+# ==========================================
 
-    available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
-    current_display = available_slots[:st.session_state.display_limit]
+with tab1:
+    st.header(f"📊 Today's Priority Board (Day & Dynamic Spin-Calibrated Matrix for {st.session_state.selected_day})")
 
-    table_data = []
-    for rank, item in enumerate(current_display, 1):
-        rehit = item["rehit_metrics"]
-        table_data.append({
-            "Rank": rank,
-            "Slot Family": item["family"],
-            "Slot Theme Name": item["slot"],
-            "Day-RVI Score": item["base_rvi"],
-            "Multi-Hit Rate (%)": f"{rehit['multi_hit_rate']}%",
-            "Multi-Hit Hits/Total": f"{rehit['multi_hit_count']} / {rehit['repeat_sample_size']}",
-            "Avg Attempt 2 Trigger": f"{rehit['avg_attempt2_spins']}s" if rehit['avg_attempt2_spins'] > 0 else "N/A",
-            "Avg Repeat Win": f"{rehit['avg_repeat_multiplier']}x",
-            "Dynamic Phase Breakdown": item["phase_breakdown"],
-            "Check-In Alloc ($)": f"${item['checkin_alloc']:.2f}"
-        })
+    # Filter active available slots (excluding played basket)
+    available_slots = [
+        s for s in st.session_state.slots_db 
+        if s["slot_name"] not in st.session_state.played_basket
+    ]
 
-    df_priority = pd.DataFrame(table_data)
-    st.dataframe(df_priority, use_container_width=True, hide_index=True)
+    if not available_slots:
+        st.info("No available slots remaining for today. All target slots have been moved to the Played Basket or filtered out.")
+    else:
+        # Display limit controls
+        top_n = available_slots[:st.session_state.display_limit]
+        
+        st.subheader(f"Top Recommended Targets (Showing {len(top_n)} of {len(available_slots)})")
 
-    if len(available_slots) > st.session_state.display_limit:
-        if st.button("➕ Load 15 More Slots"):
-            st.session_state.display_limit += 15
-            st.rerun()
+        for idx, slot in enumerate(top_n, 1):
+            with st.expander(f"#{idx} | {slot['slot_name']} — Priority Score: {slot.get('priority_score', 0):.2f}", expanded=(idx == 1)):
+                col1, col2, col3 = st.columns([1, 1, 1])
 
+                rehit = slot.get("rehit_metrics", {})
+                
+                # Safely extract attempt 2 spins to prevent KeyError
+                avg_attempt2 = rehit.get("avg_attempt2_spins", 0)
+                avg_attempt1 = rehit.get("avg_attempt1_spins", 0)
+                rehit_rate = rehit.get("rehit_rate", 0)
+
+                with col1:
+                    st.markdown("**Core Strategy & Bet Metrics**")
+                    st.write(f"• **Recommended Bet:** ${slot.get('recommended_bet', 0):.2f}")
+                    st.write(f"• **Min Bankroll:** ${slot.get('min_bankroll', 0):.2f}")
+                    st.write(f"• **Base Volatility:** {slot.get('volatility', 'N/A')}")
+                    st.write(f"• **Day Match:** {'✅ Yes' if slot.get('day_match') else '⚠️ Penalty Applied'}")
+
+                with col2:
+                    st.markdown("**Spin Calibration & Re-Hit Dynamics**")
+                    st.write(f"• **Avg Attempt 1 Trigger:** {f'{avg_attempt1} spins' if avg_attempt1 > 0 else 'N/A'}")
+                    st.write(f"• **Avg Attempt 2 Trigger:** {f'{avg_attempt2} spins' if avg_attempt2 > 0 else 'N/A'}")
+                    st.write(f"• **Historical Re-Hit Rate:** {rehit_rate * 100:.1f}%" if isinstance(rehit_rate, (int, float)) else "• **Historical Re-Hit Rate:** N/A")
+
+                with col3:
+                    st.markdown("**Execution Action**")
+                    if st.button(f"Mark as Played", key=f"play_{slot['slot_name']}_{idx}"):
+                        msg = mark_slot_played(slot["slot_name"])
+                        st.success(msg)
+                        st.rerun()
+
+        if len(available_slots) > st.session_state.display_limit:
+            if st.button("Load More Machines"):
+                st.session_state.display_limit += 20
+                st.rerun()
 # ------------------------------------------
 # TAB 2: PRE-PLANNED EXECUTION CARDS
 # ------------------------------------------
