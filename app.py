@@ -191,6 +191,10 @@ def parse_session_log_data(live_df, slot_name, family_name):
 
     return matched
 
+# ==========================================
+# CALCULATION ENGINE HELPERS (REHIT UPDATE)
+# ==========================================
+
 def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     default_res = {
         "repeat_sample_size": 0,
@@ -208,8 +212,8 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
 
     total_logs = len(parsed_df)
     
-    # Attempt >= 2 or Hit >= 2 logs
-    repeat_entries = parsed_df[(parsed_df["_attempt"] >= 2) | (parsed_df["_hit"] >= 2)]
+    # Strict 2nd feature match: Attempt Number == 2 AND Hit Number == 2
+    repeat_entries = parsed_df[(parsed_df["_attempt"] == 2) & (parsed_df["_hit"] == 2)]
     repeat_count = len(repeat_entries)
 
     if total_logs == 0:
@@ -217,13 +221,12 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
 
     multi_hit_rate = round((repeat_count / total_logs) * 100.0, 1)
     
-    # Multiplier stats on hits
-    hit_repeats = repeat_entries[repeat_entries["_hit"] > 0]
-    avg_repeat_mult = round(hit_repeats["_mult"].mean(), 1) if not hit_repeats.empty else 0.0
-    max_repeat_mult = round(hit_repeats["_mult"].max(), 1) if not hit_repeats.empty else 0.0
+    # Multiplier stats on 2nd feature hits
+    avg_repeat_mult = round(repeat_entries["_mult"].mean(), 1) if not repeat_entries.empty else 0.0
+    max_repeat_mult = round(repeat_entries["_mult"].max(), 1) if not repeat_entries.empty else 0.0
 
-    # Calculate average spins to hit on Attempt 2
-    att2_hits = parsed_df[(parsed_df["_attempt"] == 2) & (parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
+    # Average spins to trigger 2nd feature (Attempt == 2 AND Hit == 2)
+    att2_hits = repeat_entries[(repeat_entries["_spins"] > 0) & (~repeat_entries["_is_censored"])]
     avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
 
     if multi_hit_rate >= 40.0:
@@ -233,7 +236,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     elif repeat_count > 0:
         recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Single hit machine. Lock profits and exit."
     else:
-        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No multi-attempt/hit data recorded yet."
+        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No second feature (Attempt 2 & Hit 2) logged yet."
 
     return {
         "repeat_sample_size": total_logs,
@@ -614,9 +617,10 @@ st.title("Casino Slot Optimization & Execution Agent")
 st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day Context: **{st.session_state.selected_day}** | Strict Mode: **{'ON' if st.session_state.strict_day_penalty else 'OFF'}**")
 st.markdown("---")
 
-# ------------------------------------------
+# ==========================================
 # TAB 1: TODAY'S PRIORITY BOARD
-# ------------------------------------------
+# ==========================================
+
 if st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader(f"Today's Priority Board (Day & Dynamic Spin-Calibrated Matrix for {st.session_state.selected_day})")
 
@@ -626,19 +630,19 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
     table_data = []
     for rank, item in enumerate(current_display, 1):
         rehit = item.get("rehit_metrics", {})
-        avg_att2 = rehit.get("avg_attempt2_spins", 0)
+        avg_att2 = rehit.get("avg_attempt2_spins", 0.0)
         
         table_data.append({
             "Rank": rank,
             "Slot Family": item.get("family", "N/A"),
             "Slot Theme Name": item.get("slot", "N/A"),
-            "Day-RVI Score": item.get("base_rvi", 0),
-            "Multi-Hit Rate (%)": f"{rehit.get('multi_hit_rate', 0)}%",
+            "Day-RVI Score": item.get("base_rvi", 0.0),
+            "Multi-Hit Rate (%)": f"{rehit.get('multi_hit_rate', 0.0)}%",
             "Multi-Hit Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {rehit.get('repeat_sample_size', 0)}",
-            "Avg Attempt 2 Trigger": f"{avg_att2}s" if avg_att2 > 0 else "N/A",
-            "Avg Repeat Win": f"{rehit.get('avg_repeat_multiplier', 0)}x",
+            "Avg Attempt 2 Trigger": f"{avg_att2:.1f}s" if avg_att2 > 0 else "N/A",
+            "Avg Repeat Win": f"{rehit.get('avg_repeat_multiplier', 0.0)}x",
             "Dynamic Phase Breakdown": item.get("phase_breakdown", "N/A"),
-            "Check-In Alloc ($)": f"${item.get('checkin_alloc', 0):.2f}"
+            "Check-In Alloc ($)": f"${item.get('checkin_alloc', 0.0):.2f}"
         })
 
     df_priority = pd.DataFrame(table_data)
