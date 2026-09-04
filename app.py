@@ -614,62 +614,41 @@ st.title("Casino Slot Optimization & Execution Agent")
 st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day Context: **{st.session_state.selected_day}** | Strict Mode: **{'ON' if st.session_state.strict_day_penalty else 'OFF'}**")
 st.markdown("---")
 
-# ==========================================
+# ------------------------------------------
 # TAB 1: TODAY'S PRIORITY BOARD
-# ==========================================
+# ------------------------------------------
+if st.session_state.active_tab == "📊 Today's Priority Board":
+    st.subheader(f"Today's Priority Board (Day & Dynamic Spin-Calibrated Matrix for {st.session_state.selected_day})")
 
-with tab1:
-    st.header(f"📊 Today's Priority Board (Day & Dynamic Spin-Calibrated Matrix for {st.session_state.selected_day})")
+    available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+    current_display = available_slots[:st.session_state.display_limit]
 
-    # Filter active available slots (excluding played basket)
-    available_slots = [
-        s for s in st.session_state.slots_db 
-        if s["slot_name"] not in st.session_state.played_basket
-    ]
-
-    if not available_slots:
-        st.info("No available slots remaining for today. All target slots have been moved to the Played Basket or filtered out.")
-    else:
-        # Display limit controls
-        top_n = available_slots[:st.session_state.display_limit]
+    table_data = []
+    for rank, item in enumerate(current_display, 1):
+        rehit = item.get("rehit_metrics", {})
+        avg_att2 = rehit.get("avg_attempt2_spins", 0)
         
-        st.subheader(f"Top Recommended Targets (Showing {len(top_n)} of {len(available_slots)})")
+        table_data.append({
+            "Rank": rank,
+            "Slot Family": item.get("family", "N/A"),
+            "Slot Theme Name": item.get("slot", "N/A"),
+            "Day-RVI Score": item.get("base_rvi", 0),
+            "Multi-Hit Rate (%)": f"{rehit.get('multi_hit_rate', 0)}%",
+            "Multi-Hit Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {rehit.get('repeat_sample_size', 0)}",
+            "Avg Attempt 2 Trigger": f"{avg_att2}s" if avg_att2 > 0 else "N/A",
+            "Avg Repeat Win": f"{rehit.get('avg_repeat_multiplier', 0)}x",
+            "Dynamic Phase Breakdown": item.get("phase_breakdown", "N/A"),
+            "Check-In Alloc ($)": f"${item.get('checkin_alloc', 0):.2f}"
+        })
 
-        for idx, slot in enumerate(top_n, 1):
-            with st.expander(f"#{idx} | {slot['slot_name']} — Priority Score: {slot.get('priority_score', 0):.2f}", expanded=(idx == 1)):
-                col1, col2, col3 = st.columns([1, 1, 1])
+    df_priority = pd.DataFrame(table_data)
+    st.dataframe(df_priority, use_container_width=True, hide_index=True)
 
-                rehit = slot.get("rehit_metrics", {})
-                
-                # Safely extract attempt 2 spins to prevent KeyError
-                avg_attempt2 = rehit.get("avg_attempt2_spins", 0)
-                avg_attempt1 = rehit.get("avg_attempt1_spins", 0)
-                rehit_rate = rehit.get("rehit_rate", 0)
+    if len(available_slots) > st.session_state.display_limit:
+        if st.button("➕ Load 15 More Slots"):
+            st.session_state.display_limit += 15
+            st.rerun()
 
-                with col1:
-                    st.markdown("**Core Strategy & Bet Metrics**")
-                    st.write(f"• **Recommended Bet:** ${slot.get('recommended_bet', 0):.2f}")
-                    st.write(f"• **Min Bankroll:** ${slot.get('min_bankroll', 0):.2f}")
-                    st.write(f"• **Base Volatility:** {slot.get('volatility', 'N/A')}")
-                    st.write(f"• **Day Match:** {'✅ Yes' if slot.get('day_match') else '⚠️ Penalty Applied'}")
-
-                with col2:
-                    st.markdown("**Spin Calibration & Re-Hit Dynamics**")
-                    st.write(f"• **Avg Attempt 1 Trigger:** {f'{avg_attempt1} spins' if avg_attempt1 > 0 else 'N/A'}")
-                    st.write(f"• **Avg Attempt 2 Trigger:** {f'{avg_attempt2} spins' if avg_attempt2 > 0 else 'N/A'}")
-                    st.write(f"• **Historical Re-Hit Rate:** {rehit_rate * 100:.1f}%" if isinstance(rehit_rate, (int, float)) else "• **Historical Re-Hit Rate:** N/A")
-
-                with col3:
-                    st.markdown("**Execution Action**")
-                    if st.button(f"Mark as Played", key=f"play_{slot['slot_name']}_{idx}"):
-                        msg = mark_slot_played(slot["slot_name"])
-                        st.success(msg)
-                        st.rerun()
-
-        if len(available_slots) > st.session_state.display_limit:
-            if st.button("Load More Machines"):
-                st.session_state.display_limit += 20
-                st.rerun()
 # ------------------------------------------
 # TAB 2: PRE-PLANNED EXECUTION CARDS
 # ------------------------------------------
@@ -685,46 +664,49 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
     if card_slot:
         slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot and s["family"] == card_family), None)
         if slot_data:
-            rehit = slot_data["rehit_metrics"]
+            rehit = slot_data.get("rehit_metrics", {})
+            avg_att2 = rehit.get("avg_attempt2_spins", 0)
+            multi_rate = rehit.get("multi_hit_rate", 0)
+
             st.markdown("---")
-            st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
+            st.markdown(f"### 🎰 Execution Card: **{slot_data.get('slot', 'N/A')}** ({slot_data.get('family', 'N/A')})")
             
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Dynamic Evaluation Window", f"{slot_data['total_spins']} Spins", delta=f"Check-In: ${slot_data['checkin_alloc']:.2f}")
-            col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data['base_rvi']}", delta=f"Day Weighting: {slot_data['day_factor']}x")
-            col_m3.metric("Sheet Multi-Hit Frequency", f"{rehit['multi_hit_rate']}%", delta=f"Avg Attempt 2 Trigger: {rehit['avg_attempt2_spins']}s" if rehit['avg_attempt2_spins'] > 0 else "N/A")
+            col_m1.metric("Dynamic Evaluation Window", f"{slot_data.get('total_spins', 0)} Spins", delta=f"Check-In: ${slot_data.get('checkin_alloc', 0):.2f}")
+            col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data.get('base_rvi', 0)}", delta=f"Day Weighting: {slot_data.get('day_factor', 1.0)}x")
+            col_m3.metric("Sheet Multi-Hit Frequency", f"{multi_rate}%", delta=f"Avg Attempt 2 Trigger: {avg_att2}s" if avg_att2 > 0 else "N/A")
 
-            st.caption(f"**Data Proof:** {slot_data['source_proof']} | **Repeat Logs Analyzed (Attempt/Hit ≥ 2):** {rehit['multi_hit_count']} of {rehit['repeat_sample_size']}")
+            st.caption(f"**Data Proof:** {slot_data.get('source_proof', 'N/A')} | **Repeat Logs Analyzed (Attempt/Hit ≥ 2):** {rehit.get('multi_hit_count', 0)} of {rehit.get('repeat_sample_size', 0)}")
 
             st.markdown("#### 🔄 Dynamically Calibrated Phase Plan (Derived from Sheet Hit Concentrations)")
-            for idx, phase in enumerate(slot_data["phases"], 1):
-                st.write(f"**Phase {idx}:** **{phase['spins']} Spins** @ **${phase['bet']:.2f}/spin** — *{phase['note']}*")
+            for idx, phase in enumerate(slot_data.get("phases", []), 1):
+                st.write(f"**Phase {idx}:** **{phase.get('spins', 0)} Spins** @ **${phase.get('bet', 0):.2f}/spin** — *{phase.get('note', '')}*")
 
             st.markdown("---")
 
             st.markdown("#### 🎯 Post-Hit Repeat Execution Protocol (Attempt 2 Calibration)")
-            st.info(f"📋 **Live Sheet Recommendation:** {rehit['repeat_recommendation']}")
+            st.info(f"📋 **Live Sheet Recommendation:** {rehit.get('repeat_recommendation', 'No data available.')}")
 
             col_h1, col_h2 = st.columns(2)
-            p1_bet = slot_data["phases"][0]["bet"]
+            p1_bet = slot_data["phases"][0]["bet"] if slot_data.get("phases") else 0.0
             
             with col_h1:
                 st.markdown("##### 📊 Historical Sheet Stats (Attempt ≥ 2 / Hit ≥ 2)")
-                st.write(f"- **Multi-Hit Occurrences:** {rehit['multi_hit_count']} times")
-                st.write(f"- **Attempt 2 Avg Trigger Spin:** {rehit['avg_attempt2_spins']} spins" if rehit['avg_attempt2_spins'] > 0 else "- **Attempt 2 Avg Trigger Spin:** No Attempt 2 hits logged")
-                st.write(f"- **Highest Recorded Repeat Multiplier:** {rehit['max_repeat_multiplier']}x")
-                st.write(f"- **Average Repeat Multiplier:** {rehit['avg_repeat_multiplier']}x")
+                st.write(f"- **Multi-Hit Occurrences:** {rehit.get('multi_hit_count', 0)} times")
+                st.write(f"- **Attempt 2 Avg Trigger Spin:** {avg_att2} spins" if avg_att2 > 0 else "- **Attempt 2 Avg Trigger Spin:** No Attempt 2 hits logged")
+                st.write(f"- **Highest Recorded Repeat Multiplier:** {rehit.get('max_repeat_multiplier', 0)}x")
+                st.write(f"- **Average Repeat Multiplier:** {rehit.get('avg_repeat_multiplier', 0)}x")
 
             with col_h2:
                 st.markdown("##### ⚙️ Action Protocol on Feature Trigger")
-                if rehit["multi_hit_rate"] >= 30.0:
+                if multi_rate >= 30.0:
                     st.success("🟢 **ACTION: RESET & RE-PROBE**")
-                    st.write(f"- **Execution:** Reset immediately back to **Phase 1 ({slot_data['phases'][0]['spins']} Spins @ ${p1_bet:.2f})**.")
-                    st.write(f"- **Reason:** Historical data shows a strong {rehit['multi_hit_rate']}% probability of multi-hit feature clustering on this slot.")
+                    st.write(f"- **Execution:** Reset immediately back to **Phase 1 ({slot_data['phases'][0]['spins'] if slot_data.get('phases') else 0} Spins @ ${p1_bet:.2f})**.")
+                    st.write(f"- **Reason:** Historical data shows a strong {multi_rate}% probability of multi-hit feature clustering on this slot.")
                 else:
                     st.warning("🟡 **ACTION: FINISH CURRENT PHASE OR EXIT**")
                     st.write(f"- **Execution:** Finish only remaining spins in current phase, lock profits, and move to Played Basket.")
-                    st.write(f"- **Reason:** Low multi-hit rate ({rehit['multi_hit_rate']}%) in historical logs suggests poor repeat efficiency.")
+                    st.write(f"- **Reason:** Low multi-hit rate ({multi_rate}%) in historical logs suggests poor repeat efficiency.")
 
             st.markdown("---")
             if st.button(f"✅ Mark '{slot_data['slot']}' as Played (Move to Basket)"):
