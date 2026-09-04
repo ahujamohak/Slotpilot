@@ -64,12 +64,10 @@ SLOT_MASTER_LIST = {
     "All Aboard The Lucky Link": ["Go West", "Shinobi"],
     "Balloon Link": ["Australian Outback", "Skull Island"],
     "Bau Zhu Zhao Fu": ["Blue Festival", "Red Festival"],
-    "Bull Blitz": ["Golden Empress", "Maximus Money", "Roses & Riches"],
-    "Bull Rush": ["Fire Mountain", "Golden Empress"],
-    "Bull Rush Blitz": ["Golden Empress", "Maximus Money", "Wild Outback", "Yarr Matey"],
+    "Bull Rush Blitz": ["Golden Empress", "Wild Outback", "Yarr Matey"],
     "Bull Rush Blitz 2 Multi": ["Maximus Money", "New York Nights", "Roses & Riches"],
     "Bull Rush Blitz 3 Multi": ["El Metador"],
-    "Bull Rush Stampede": ["Fire Mountain", "Maximus Money", "Minotaur’s Treasure"],
+    "Bull Rush Stampede": ["Fire Mountain", "Minotaur’s Treasure"],
     "Cash Horns": ["Cleopatra’s Kingdom", "Grand Toro", "Master Warrior", "Ragnar the Great"],
     "Cash Spark": ["Royal Spark"],
     "Choy's Kingdom": ["Lunar Festival"],
@@ -78,7 +76,6 @@ SLOT_MASTER_LIST = {
     "Dragon Link": ["Autumn Moon", "Genghis Khan", "Golden Century", "Golden Gong", "Happy & Prosperous", "Panda Magic", "Peace & Long Life", "Peacock Princess", "Silk Road", "Spring Festival"],
     "Dragon Rush": ["Battle Drum", "Shadow Clan", "Shaolin Style"],
     "Dragon Train": ["Chillin Wins", "Forever Emperor", "Khutulun Battle Princess", "Sun Shots"],
-    "Dragon Train Link": ["Forever Emperor", "Sun Shots"],
     "Eureka n more blastin": ["Eureka n more blastin"],
     "Fabulous Hold & Spin Jackpot": ["Cash Champ", "Come one, Come all", "Glitter & Glitz", "Magic Touch"],
     "Fireball": ["Sea Queen Express", "Shogun Express"],
@@ -87,7 +84,7 @@ SLOT_MASTER_LIST = {
     "Golden Strike": ["Viking Vallhala"],
     "Grand Legends": ["Great King", "Magic Warrior", "Royal Emperor", "Sun Queen"],
     "Heaven & Earth": ["Lucky Pig", "Shaolin Ways", "Terracotta Emperor"],
-    "Huff 'N' Even More Puff": ["Huff n Even More Puff"],
+    "Huff n Even More Puff": ["Huff n Even More Puff"],
     "Huff n More Puff": ["Huff n More Puff"],
     "Jewel of the Dragon": ["Red Phoenix"],
     "Lightning Link": ["Dragon's Riches", "Fire Idol", "Heart Throb", "High Stakes", "Magic Pearl", "Magic Totem", "Mine Mine Mine", "Moon Race", "Raging Bull", "Sahara Gold"],
@@ -99,7 +96,6 @@ SLOT_MASTER_LIST = {
     "Portal Link": ["Wild Whale"],
     "Power Panther": ["Aztec Thunder", "Power Panther", "Tiki Tiki", "Wild Kingdom"],
     "Shenlong Unleashed": ["Fortune Town"],
-    "Thunder": ["Fire Legend", "Inca Diamonds"],
     "Thunder Empire": ["Amazon Hearts", "Inca Diamonds", "King Samurai", "Magic Emperor"],
     "Ultra Shot Link": ["Sapphire Eyes"],
     "Where's the Gold": ["Where's the Gold"],
@@ -141,9 +137,24 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
 
     matched = live_df.copy()
-    if slot_col and slot_col in matched.columns:
+    
+    # Dual filter on Family AND Slot Name to avoid cross-contamination
+    has_slot = slot_col and slot_col in matched.columns
+    has_fam = fam_col and fam_col in matched.columns
+
+    if has_slot and has_fam:
+        dual_matched = matched[
+            (matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()) &
+            (matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower())
+        ]
+        if not dual_matched.empty:
+            matched = dual_matched
+        else:
+            # Fallback to slot-only match if family string mismatch occurs
+            matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
+    elif has_slot:
         matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-    elif fam_col and fam_col in matched.columns:
+    elif has_fam:
         matched = matched[matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
 
     if matched.empty:
@@ -198,15 +209,24 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     win_amt_col = cols.get("win amount") or cols.get("win ($)")
 
     matched_rows = live_df.copy()
+    
+    # 1. First, attempt exact Slot Name filter
     if slot_col and slot_col in matched_rows.columns:
-        matched_rows = matched_rows[matched_rows[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-
-    if fam_col and fam_col in matched_rows.columns and not matched_rows.empty:
-        fam_matched = matched_rows[matched_rows[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
-        if not fam_matched.empty:
-            matched_rows = fam_matched
+        slot_matched = matched_rows[matched_rows[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
+        
+        # 2. If slot matches exist, refine using Family filter to prevent cross-contamination
+        if not slot_matched.empty:
+            if fam_col and fam_col in slot_matched.columns:
+                fam_matched = slot_matched[slot_matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
+                if not fam_matched.empty:
+                    matched_rows = fam_matched
+                else:
+                    # FIX: Prevent silent data loss. Fall back to slot-only match rather than empty df
+                    matched_rows = slot_matched
+            else:
+                matched_rows = slot_matched
         else:
-            return baseline_score, "25% Baseline / 0 Logs for Family", target_day, 1.0, 0, 0
+            matched_rows = pd.DataFrame()
 
     if matched_rows.empty:
         return baseline_score, "25% Baseline / 0 Logs", target_day, 1.0, 0, 0
@@ -251,13 +271,11 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
         final_rvi = round(baseline_score * day_factor, 2)
         return final_rvi, f"Day-Weighted Hybrid ({day_log_count} {target_day} hits)", target_day, day_factor, day_log_count, total_logs
 
-    # --- RVI CALCULATION BUG FIX: SEPARATING HIT RATE FROM WIN MAGNITUDE ---
-    # Filter only positive win events (> 0 multiplier) to derive actual win magnitude given a hit
     actual_hits = [m for m in empirical_multipliers if m > 0]
     
     # 1. Hit Rate Signal (Frequency of feature trigger)
     hit_rate = len(actual_hits) / total_logs if total_logs > 0 else 0.0
-    hit_rate_score = min(10.0, max(1.0, hit_rate * 10.0))  # Scale 0-100% hit rate into 1.0 - 10.0 score
+    hit_rate_score = min(10.0, max(1.0, hit_rate * 10.0))
 
     # 2. Win Magnitude Signal (Average payout when feature hits)
     if len(actual_hits) > 0:
@@ -375,7 +393,7 @@ def restore_slot(slot_name):
         st.session_state.played_basket.remove(slot_name)
         return f"Restored '{slot_name}' to active status."
     return f"'{slot_name}' was not found in played basket."
-    
+
 # ==========================================
 # 3. GEMINI 3.6 LIVE AGENT ENGINE & TOOLS
 # ==========================================
