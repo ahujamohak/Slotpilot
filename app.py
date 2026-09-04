@@ -38,12 +38,27 @@ def reset_all_state():
     st.session_state.active_tab = "📊 Today's Priority Board"
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
+    st.session_state.selected_day = datetime.now().strftime("%A")
 
 if "strict_day_penalty" not in st.session_state:
     st.session_state.strict_day_penalty = True
 
+if "selected_day" not in st.session_state:
+    st.session_state.selected_day = datetime.now().strftime("%A")
+
 if "played_basket" not in st.session_state:
     reset_all_state()
+
+# Helper Functions for Basket Management
+def mark_slot_played(slot_name: str) -> str:
+    if slot_name not in st.session_state.played_basket:
+        st.session_state.played_basket.append(slot_name)
+        return f"Successfully marked '{slot_name}' as played."
+    return f"'{slot_name}' is already in the played basket."
+
+def restore_slot(slot_name: str):
+    if slot_name in st.session_state.played_basket:
+        st.session_state.played_basket.remove(slot_name)
 
 # ==========================================
 # 1. MASTER LIST & MULTI-PHASE CONFIG
@@ -534,6 +549,19 @@ def run_gemini_agent(user_prompt: str):
     except Exception as e:
         return f"Error communicating with Gemini Agent: {e}"
 
+# ==========================================
+# LOAD DATA & INITIALIZE STATE DATASET
+# ==========================================
+
+live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
+
+if "slots_db" not in st.session_state or not st.session_state.slots_db:
+    st.session_state.slots_db = build_priority_dataset(
+        live_sheet_df, 
+        st.session_state.selected_day, 
+        st.session_state.strict_day_penalty
+    )
+    
 # ==========================================
 # 4. SIDEBAR & NAVIGATION
 # ==========================================
