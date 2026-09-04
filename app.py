@@ -117,24 +117,23 @@ def load_and_inspect_sheet():
     except Exception:
         return pd.DataFrame(), []
 
-def compute_slot_rehit_metrics(slot_name, family_name, live_df):
-    default_res = {
-        "repeat_sample_size": 0,
-        "multi_hit_count": 0,
-        "multi_hit_rate": 0.0,
-        "avg_repeat_multiplier": 0.0,
-        "max_repeat_multiplier": 0.0,
-        "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)"
-    }
+def parse_session_log_data(live_df, slot_name, family_name):
+    """
+    Parses live sheet logs for a specific slot/family to clean spins,
+    distinguish exact hits from censored exit entries (32+), and extract win metrics.
+    """
     if live_df.empty:
-        return default_res
+        return pd.DataFrame()
 
     cols = {str(c).lower(): c for c in live_df.columns}
     slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
     fam_col = cols.get("family") or cols.get("slot family")
+    spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
     attempt_col = cols.get("attempt number") or cols.get("attempt")
     hit_num_col = cols.get("hit number") or cols.get("hit")
     mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
+    win_amt_col = cols.get("win amount") or cols.get("win ($)")
+    day_col = cols.get("day") or cols.get("day of week")
 
     matched = live_df.copy()
     
@@ -150,7 +149,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         if not dual_matched.empty:
             matched = dual_matched
         else:
-            # Fallback to slot-only match if family string mismatch occurs
             matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
     elif has_slot:
         matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
@@ -158,25 +156,63 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         matched = matched[matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
 
     if matched.empty:
-        return default_res
+        return pd.DataFrame()
 
+    # Extract raw string spin
+    spin_raw = matched[spin_col].astype(str).str.strip() if spin_col else pd.Series(["0"] * len(matched))
+    
+    # 1. Flag censored data ('32+' means no feature hit, exited after those spins)
+    matched["_is_censored"] = spin_raw.str.contains(r'\+', regex=True)
+    
+    # 2. Clean numeric spin count
+    matched["_spins"] = pd.to_numeric(spin_raw.str.extract(r'(\d+)')[0], errors='coerce').fillna(0)
+    
+    # 3. Clean numeric attempt, hit number, multiplier, and win amount
     matched["_attempt"] = pd.to_numeric(matched[attempt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1) if attempt_col else 1
     matched["_hit"] = pd.to_numeric(matched[hit_num_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if hit_num_col else 0
     matched["_mult"] = pd.to_numeric(matched[mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if mult_col else 0
+    matched["_win_amt"] = pd.to_numeric(matched[win_amt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if win_amt_col else 0
+    matched["_day"] = matched[day_col].astype(str).str.strip() if day_col else ""
 
-    repeat_entries = matched[(matched["_attempt"] >= 2) | (matched["_hit"] >= 2)]
-    total_logs = len(matched)
+    return matched
+
+def compute_slot_rehit_metrics(slot_name, family_name, live_df):
+    default_res = {
+        "repeat_sample_size": 0,
+        "multi_hit_count": 0,
+        "multi_hit_rate": 0.0,
+        "avg_repeat_multiplier": 0.0,
+        "max_repeat_multiplier": 0.0,
+        "avg_attempt2_spins": 0.0,
+        "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)"
+    }
+    
+    parsed_df = parse_session_log_data(live_df, slot_name, family_name)
+    if parsed_df.empty:
+        return default_res
+
+    total_logs = len(parsed_df)
+    
+    # Attempt >= 2 or Hit >= 2 logs
+    repeat_entries = parsed_df[(parsed_df["_attempt"] >= 2) | (parsed_df["_hit"] >= 2)]
     repeat_count = len(repeat_entries)
 
     if total_logs == 0:
         return default_res
 
     multi_hit_rate = round((repeat_count / total_logs) * 100.0, 1)
-    avg_repeat_mult = round(repeat_entries["_mult"].mean(), 1) if not repeat_entries.empty else 0.0
-    max_repeat_mult = round(repeat_entries["_mult"].max(), 1) if not repeat_entries.empty else 0.0
+    
+    # Multiplier stats on hits
+    hit_repeats = repeat_entries[repeat_entries["_hit"] > 0]
+    avg_repeat_mult = round(hit_repeats["_mult"].mean(), 1) if not hit_repeats.empty else 0.0
+    max_repeat_mult = round(hit_repeats["_mult"].max(), 1) if not hit_repeats.empty else 0.0
+
+    # Calculate average spins to hit on Attempt 2
+    att2_hits = parsed_df[(parsed_df["_attempt"] == 2) & (parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
+    avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
 
     if multi_hit_rate >= 40.0:
-        recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Reset to Phase 1 immediately after feature hit."
+        recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Reset to Phase 1 immediately after feature hit. (Attempt 2 avg trigger: {avg_att2_spins if avg_att2_spins > 0 else 'N/A'} spins)."
     elif multi_hit_rate >= 20.0:
         recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}% Multi-Hit Rate): Finish current phase; re-probe if win > 20x."
     elif repeat_count > 0:
@@ -190,6 +226,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "multi_hit_rate": multi_hit_rate,
         "avg_repeat_multiplier": avg_repeat_mult,
         "max_repeat_multiplier": max_repeat_mult,
+        "avg_attempt2_spins": avg_att2_spins,
         "repeat_recommendation": recommendation
     }
 
@@ -198,45 +235,16 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     if target_day is None:
         target_day = datetime.now().strftime("%A")
 
-    if live_df.empty:
-        return baseline_score, "100% Baseline (No Data)", target_day, 1.0, 0, 0
-
-    cols = {str(c).lower(): c for c in live_df.columns}
-    slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
-    fam_col = cols.get("family") or cols.get("slot family") or cols.get("family name")
-    day_col = cols.get("day") or cols.get("day of week")
-    win_mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
-    win_amt_col = cols.get("win amount") or cols.get("win ($)")
-
-    matched_rows = live_df.copy()
-    
-    # 1. First, attempt exact Slot Name filter
-    if slot_col and slot_col in matched_rows.columns:
-        slot_matched = matched_rows[matched_rows[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-        
-        # 2. If slot matches exist, refine using Family filter to prevent cross-contamination
-        if not slot_matched.empty:
-            if fam_col and fam_col in slot_matched.columns:
-                fam_matched = slot_matched[slot_matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
-                if not fam_matched.empty:
-                    matched_rows = fam_matched
-                else:
-                    # FIX: Prevent silent data loss. Fall back to slot-only match rather than empty df
-                    matched_rows = slot_matched
-            else:
-                matched_rows = slot_matched
-        else:
-            matched_rows = pd.DataFrame()
-
-    if matched_rows.empty:
+    parsed_df = parse_session_log_data(live_df, slot_name, family_name)
+    if parsed_df.empty:
         return baseline_score, "25% Baseline / 0 Logs", target_day, 1.0, 0, 0
 
-    total_logs = len(matched_rows)
+    total_logs = len(parsed_df)
     day_log_count = 0
     day_factor = 1.0
 
-    if day_col and day_col in matched_rows.columns:
-        day_matches = matched_rows[matched_rows[day_col].astype(str).str.strip().str.lower() == str(target_day).strip().lower()]
+    if "_day" in parsed_df.columns:
+        day_matches = parsed_df[parsed_df["_day"].str.lower() == str(target_day).strip().lower()]
         day_log_count = len(day_matches)
 
         if total_logs > 0:
@@ -261,63 +269,116 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
                 else:
                     day_factor = 0.90
 
-    empirical_multipliers = []
-    if win_mult_col and win_mult_col in matched_rows.columns:
-        empirical_multipliers = pd.to_numeric(matched_rows[win_mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0).tolist()
-    elif win_amt_col and win_amt_col in matched_rows.columns:
-        empirical_multipliers = pd.to_numeric(matched_rows[win_amt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0).tolist()
-
-    if not empirical_multipliers:
-        final_rvi = round(baseline_score * day_factor, 2)
-        return final_rvi, f"Day-Weighted Hybrid ({day_log_count} {target_day} hits)", target_day, day_factor, day_log_count, total_logs
-
-    actual_hits = [m for m in empirical_multipliers if m > 0]
+    # Filter for exact hits (excluding censored non-hits)
+    actual_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
+    hit_count = len(actual_hits)
     
-    # 1. Hit Rate Signal (Frequency of feature trigger)
-    hit_rate = len(actual_hits) / total_logs if total_logs > 0 else 0.0
+    if hit_count == 0:
+        final_rvi = round(baseline_score * day_factor, 2)
+        return final_rvi, f"Day-Weighted Hybrid (0 hits, {day_log_count} {target_day} logs)", target_day, day_factor, day_log_count, total_logs
+
+    hit_rate = hit_count / total_logs
     hit_rate_score = min(10.0, max(1.0, hit_rate * 10.0))
 
-    # 2. Win Magnitude Signal (Average payout when feature hits)
-    if len(actual_hits) > 0:
-        avg_win_when_hit = np.mean(actual_hits)
-        win_magnitude_score = min(10.0, max(1.0, (avg_win_when_hit / 15.0) + 5.0))
-    else:
-        win_magnitude_score = 1.0
+    avg_win_mult = actual_hits["_mult"].mean()
+    win_magnitude_score = min(10.0, max(1.0, (avg_win_mult / 15.0) + 5.0))
 
-    # Combine signals independently: 40% Hit Frequency, 60% Win Magnitude
     sheet_rvi = (0.40 * hit_rate_score) + (0.60 * win_magnitude_score)
-    
-    # Final 75/25 Hybrid Blending with baseline & Day Factor
     weighted_rvi = (0.75 * sheet_rvi) + (0.25 * baseline_score)
     final_rvi = round(min(10.0, max(1.0, weighted_rvi * day_factor)), 2)
-    proof_str = f"75% Live Sheet ({len(actual_hits)}/{total_logs} hits, {day_log_count} on {target_day}s)"
+    proof_str = f"75% Live Sheet ({hit_count}/{total_logs} hits, {day_log_count} on {target_day}s)"
     
     return final_rvi, proof_str, target_day, day_factor, day_log_count, total_logs
 
-def get_multi_phase_execution(slot_name, rvi_score):
+def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
+    """
+    Dynamically generates phase spin boundaries and bet sizing based on:
+    1. Exact feature hit spin distribution vs Censored (32+) exit thresholds.
+    2. Multiplier strength (high multiplier = scale up bet sizing).
+    3. Concentrated hit windows (e.g. 1-15, 16-30, 31-45, 46+ spins).
+    """
     if slot_name in CUSTOM_HIT_ZONES:
         phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
+        total_spins = sum(p["spins"] for p in phases)
+        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+        checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
+        return phases, total_spins, checkin_alloc
+
+    parsed_df = parse_session_log_data(live_df, slot_name, family_name)
+    
+    # Exact hits dataframe
+    exact_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])] if not parsed_df.empty else pd.DataFrame()
+    censored_entries = parsed_df[parsed_df["_is_censored"]] if not parsed_df.empty else pd.DataFrame()
+
+    # Determine Base Bet Scaling according to Volatility / Multipliers
+    avg_mult = exact_hits["_mult"].mean() if not exact_hits.empty else 20.0
+    if avg_mult >= 80.0:
+        base_bet, high_bet, low_bet = 5.00, 10.00, 3.75
+    elif avg_mult >= 40.0:
+        base_bet, high_bet, low_bet = 3.75, 7.50, 2.50
+    elif avg_mult >= 20.0:
+        base_bet, high_bet, low_bet = 2.50, 5.00, 1.25
     else:
-        if rvi_score >= 8.5:
-            phases = [
-                {"spins": 15, "bet": 7.50, "note": "Initial Probe"},
-                {"spins": 15, "bet": 10.00, "note": "High Hit Zone"},
-                {"spins": 15, "bet": 5.00, "note": "Mid Checkpoint"},
-                {"spins": 15, "bet": 7.50, "note": "Late Expansion"}
-            ]
-        elif rvi_score >= 7.0:
-            phases = [
-                {"spins": 10, "bet": 3.75, "note": "Probe Phase"},
-                {"spins": 15, "bet": 5.00, "note": "Target Zone"},
-                {"spins": 15, "bet": 2.50, "note": "Step Down"},
-                {"spins": 10, "bet": 3.75, "note": "Final Check"}
-            ]
-        else:
-            phases = [
-                {"spins": 10, "bet": 2.50, "note": "Probe Phase"},
-                {"spins": 15, "bet": 3.75, "note": "Evaluation"},
-                {"spins": 10, "bet": 1.25, "note": "Exit Check"}
-            ]
+        base_bet, high_bet, low_bet = 1.25, 2.50, 0.75
+
+    # If no hit data available, fall back to RVI-driven default generic bands
+    if exact_hits.empty:
+        max_boundary = int(censored_entries["_spins"].max()) if not censored_entries.empty else 45
+        max_boundary = max(max_boundary, 35)
+        
+        step = math.ceil(max_boundary / 3)
+        phases = [
+            {"spins": step, "bet": low_bet, "note": "Initial Probe Phase"},
+            {"spins": step, "bet": base_bet, "note": "Target Evaluation Zone"},
+            {"spins": max_boundary - (step * 2), "bet": low_bet, "note": f"Late Checkpoint (Exit Threshold ~{max_boundary}s)"}
+        ]
+    else:
+        # Determine maximum target spin threshold from high hits or censored exits
+        max_hit_spin = exact_hits["_spins"].max()
+        max_censored_spin = censored_entries["_spins"].max() if not censored_entries.empty else 0
+        target_max_spin = int(max(max_hit_spin, max_censored_spin, 30))
+
+        # Check win concentration across 4 potential spin windows
+        hit_spins = exact_hits["_spins"]
+        w1_hits = len(hit_spins[hit_spins <= 15])
+        w2_hits = len(hit_spins[(hit_spins > 15) & (hit_spins <= 30)])
+        w3_hits = len(hit_spins[(hit_spins > 30) & (hit_spins <= 45)])
+        w4_hits = len(hit_spins[hit_spins > 45])
+
+        total_exact = len(exact_hits)
+        
+        # Build dynamic 3-to-4 phase breakdown based on concentration
+        phases = []
+        
+        # Window 1 (1–15 Spins)
+        w1_spins = min(15, target_max_spin)
+        w1_bet = high_bet if (w1_hits / total_exact) >= 0.40 else low_bet
+        w1_note = "🔥 High-Hit Concentration Zone" if w1_bet == high_bet else "Initial Probe Zone"
+        phases.append({"spins": w1_spins, "bet": w1_bet, "note": w1_note})
+
+        # Window 2 (16–30 Spins)
+        if target_max_spin > 15:
+            w2_spins = min(15, target_max_spin - 15)
+            w2_bet = high_bet if (w2_hits / total_exact) >= 0.30 else base_bet
+            w2_note = "🔥 Peak Hit Concentration Zone" if w2_bet == high_bet else "Mid-Cycle Transition"
+            phases.append({"spins": w2_spins, "bet": w2_bet, "note": w2_note})
+
+        # Window 3 (31–45 Spins)
+        if target_max_spin > 30:
+            w3_spins = min(15, target_max_spin - 30)
+            w3_bet = high_bet if (w3_hits / total_exact) >= 0.30 else low_bet
+            w3_note = "🔥 Late Hit Concentration Zone" if w3_bet == high_bet else "Late Checkpoint (Exit Prep)"
+            phases.append({"spins": w3_spins, "bet": w3_bet, "note": w3_note})
+
+        # Window 4 (46+ Spins, if high spin threshold exists)
+        if target_max_spin > 45:
+            w4_spins = target_max_spin - 45
+            w4_bet = high_bet if (w4_hits / total_exact) >= 0.25 else low_bet
+            w4_note = "Extended Deep Trigger Zone" if w4_bet == high_bet else "Final Exit Checkpoint"
+            phases.append({"spins": w4_spins, "bet": w4_bet, "note": w4_note})
+
+    # Clean zero or negative spin phases
+    phases = [p for p in phases if p["spins"] > 0]
 
     total_spins = sum(p["spins"] for p in phases)
     raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
@@ -354,7 +415,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
         slot = item["slot"]
         rvi_score = item["rvi"]
 
-        phases, total_spins, checkin_alloc = get_multi_phase_execution(slot, rvi_score)
+        phases, total_spins, checkin_alloc = get_multi_phase_execution(slot, fam, rvi_score, live_df)
         phase_breakdown_str = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(phases)])
 
         records.append({
@@ -374,26 +435,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             "rehit_metrics": item["rehit_metrics"]
         })
     return sorted(records, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
-
-live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
-
-if "selected_day" not in st.session_state:
-    st.session_state.selected_day = datetime.now().strftime("%A")
-
-st.session_state.slots_db = build_priority_dataset(live_sheet_df, st.session_state.selected_day, st.session_state.strict_day_penalty)
-
-def mark_slot_played(slot_name):
-    if slot_name not in st.session_state.played_basket:
-        st.session_state.played_basket.append(slot_name)
-        return f"Successfully marked '{slot_name}' as played."
-    return f"'{slot_name}' is already in the played basket."
-
-def restore_slot(slot_name):
-    if slot_name in st.session_state.played_basket:
-        st.session_state.played_basket.remove(slot_name)
-        return f"Restored '{slot_name}' to active status."
-    return f"'{slot_name}' was not found in played basket."
-
+    
 # ==========================================
 # 3. GEMINI 3.6 LIVE AGENT ENGINE & TOOLS
 # ==========================================
@@ -548,7 +590,7 @@ st.markdown("---")
 # TAB 1: TODAY'S PRIORITY BOARD
 # ------------------------------------------
 if st.session_state.active_tab == "📊 Today's Priority Board":
-    st.subheader(f"Today's Priority Board (Day & Repeat-Hit Weighted Matrix for {st.session_state.selected_day})")
+    st.subheader(f"Today's Priority Board (Day & Dynamic Spin-Calibrated Matrix for {st.session_state.selected_day})")
 
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     current_display = available_slots[:st.session_state.display_limit]
@@ -563,9 +605,9 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
             "Day-RVI Score": item["base_rvi"],
             "Multi-Hit Rate (%)": f"{rehit['multi_hit_rate']}%",
             "Multi-Hit Hits/Total": f"{rehit['multi_hit_count']} / {rehit['repeat_sample_size']}",
+            "Avg Attempt 2 Trigger": f"{rehit['avg_attempt2_spins']}s" if rehit['avg_attempt2_spins'] > 0 else "N/A",
             "Avg Repeat Win": f"{rehit['avg_repeat_multiplier']}x",
-            "Day Factor": f"{item['day_factor']}x",
-            "Proof & History": item["source_proof"],
+            "Dynamic Phase Breakdown": item["phase_breakdown"],
             "Check-In Alloc ($)": f"${item['checkin_alloc']:.2f}"
         })
 
@@ -597,19 +639,19 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
             st.markdown(f"### 🎰 Execution Card: **{slot_data['slot']}** ({slot_data['family']})")
             
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Probe Evaluation Window", f"{slot_data['total_spins']} Spins", delta=f"Check-In: ${slot_data['checkin_alloc']:.2f}")
+            col_m1.metric("Dynamic Evaluation Window", f"{slot_data['total_spins']} Spins", delta=f"Check-In: ${slot_data['checkin_alloc']:.2f}")
             col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data['base_rvi']}", delta=f"Day Weighting: {slot_data['day_factor']}x")
-            col_m3.metric("Sheet Multi-Hit Frequency", f"{rehit['multi_hit_rate']}%", delta=f"Avg Repeat Win: {rehit['avg_repeat_multiplier']}x")
+            col_m3.metric("Sheet Multi-Hit Frequency", f"{rehit['multi_hit_rate']}%", delta=f"Avg Attempt 2 Trigger: {rehit['avg_attempt2_spins']}s" if rehit['avg_attempt2_spins'] > 0 else "N/A")
 
             st.caption(f"**Data Proof:** {slot_data['source_proof']} | **Repeat Logs Analyzed (Attempt/Hit ≥ 2):** {rehit['multi_hit_count']} of {rehit['repeat_sample_size']}")
 
-            st.markdown("#### 🔄 Dynamic Initial Probe Plan (Attempt 1 / Hit 0)")
+            st.markdown("#### 🔄 Dynamically Calibrated Phase Plan (Derived from Sheet Hit Concentrations)")
             for idx, phase in enumerate(slot_data["phases"], 1):
                 st.write(f"**Phase {idx}:** **{phase['spins']} Spins** @ **${phase['bet']:.2f}/spin** — *{phase['note']}*")
 
             st.markdown("---")
 
-            st.markdown("#### 🎯 Post-Hit Repeat Execution Protocol (Driven by Sheet History)")
+            st.markdown("#### 🎯 Post-Hit Repeat Execution Protocol (Attempt 2 Calibration)")
             st.info(f"📋 **Live Sheet Recommendation:** {rehit['repeat_recommendation']}")
 
             col_h1, col_h2 = st.columns(2)
@@ -618,6 +660,7 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
             with col_h1:
                 st.markdown("##### 📊 Historical Sheet Stats (Attempt ≥ 2 / Hit ≥ 2)")
                 st.write(f"- **Multi-Hit Occurrences:** {rehit['multi_hit_count']} times")
+                st.write(f"- **Attempt 2 Avg Trigger Spin:** {rehit['avg_attempt2_spins']} spins" if rehit['avg_attempt2_spins'] > 0 else "- **Attempt 2 Avg Trigger Spin:** No Attempt 2 hits logged")
                 st.write(f"- **Highest Recorded Repeat Multiplier:** {rehit['max_repeat_multiplier']}x")
                 st.write(f"- **Average Repeat Multiplier:** {rehit['avg_repeat_multiplier']}x")
 
