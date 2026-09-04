@@ -201,6 +201,201 @@ SLOT_MASTER_LIST = {
     "Wild Rumble": ["Shen Shan"]
 }
 
+@st.cache_data(ttl=15)
+def load_and_inspect_sheet():
+    try:
+        df = conn.read(worksheet=SESSION_LOG_WORKSHEET, ttl="0")
+        if df.empty:
+            return pd.DataFrame(), []
+        df.columns = [str(c).strip() for c in df.columns]
+        return df, list(df.columns)
+    except Exception:
+        return pd.DataFrame(), []
+
+def parse_session_log_data(live_df, slot_name, family_name):
+    """
+    Parses live sheet logs for a specific slot/family to clean spins,
+    distinguish exact hits from censored exit entries (32+), and extract win metrics.
+    """
+    if live_df.empty:
+        return pd.DataFrame()
+
+    cols = {str(c).lower(): c for c in live_df.columns}
+    slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
+    fam_col = cols.get("family") or cols.get("slot family")
+    spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
+    attempt_col = cols.get("attempt number") or cols.get("attempt")
+    hit_num_col = cols.get("hit number") or cols.get("hit")
+    win_amt_col = cols.get("win amount") or cols.get("win amount ($)") or cols.get("win")
+    mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
+
+    if not slot_col or not fam_col or not spin_col:
+        return pd.DataFrame()
+
+    df = live_df.copy()
+    df = df[(df[slot_col] == slot_name) & (df[fam_col] == family_name)]
+
+    if df.empty:
+        return pd.DataFrame()
+
+    def _parse_spin(raw):
+        if pd.isna(raw):
+            return np.nan, False
+        s = str(raw).strip()
+        if s.endswith("+"):
+            try:
+                return float(s[:-1]), True
+            except ValueError:
+                return np.nan, True
+        try:
+            return float(s), False
+        except ValueError:
+            return np.nan, False
+
+    parsed_spins = df[spin_col].apply(_parse_spin)
+    df["_spins"] = parsed_spins.apply(lambda x: x[0])
+    df["_is_censored"] = parsed_spins.apply(lambda x: x[1])
+
+    df["_attempt"] = df[attempt_col] if attempt_col else 1
+    df["_hit"] = df[hit_num_col] if hit_num_col else 1
+    df["_win"] = df[win_amt_col] if win_amt_col else 0.0
+    df["_mult"] = df[mult_col] if mult_col else 0.0
+
+    return df
+
+def compute_slot_spin_ceiling(parsed_df):
+    """
+    Dynamic spin ceiling per slot based on actual hit concentration,
+    with outliers removed.
+
+    - Uses exact hits (non-censored) as primary signal.
+    - Uses censored exits only to avoid underestimating ceiling.
+    - Removes extreme outliers via IQR.
+    - Returns a ceiling that reflects where most wins cluster.
+    """
+    if parsed_df.empty:
+        return 60  # conservative default
+
+    exact_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
+    if exact_hits.empty:
+        return 60
+
+    spins = exact_hits["_spins"].dropna()
+    if len(spins) < 5:
+        return int(max(30, spins.max())) if len(spins) > 0 else 60
+
+    q1 = spins.quantile(0.25)
+    q3 = spins.quantile(0.75)
+    iqr = q3 - q1
+    upper_bound = q3 + 1.5 * iqr
+
+    filtered = spins[spins <= upper_bound]
+    if len(filtered) < 3:
+        filtered = spins
+
+    ceiling_90 = int(filtered.quantile(0.90))
+    ceiling_max = int(filtered.max())
+
+    # Use 90th percentile but never exceed max of filtered hits by more than 10 spins
+    ceiling = min(ceiling_90, ceiling_max + 10)
+
+    # Global safety clamp
+    return max(20, min(ceiling, 120))
+
+def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
+    """
+    Dynamically generates phase spin boundaries and bet sizing based on:
+    1. Exact feature hit spin distribution vs censored (32+) exit thresholds.
+    2. Multiplier strength (high multiplier = scale up bet sizing).
+    3. Concentrated hit windows (e.g. 1-15, 16-30, 31-45, 46+ spins).
+
+    NOTE: This returns BASE phase sizing driven only by the slot's own
+    history. Bankroll-aware scaling is applied separately at render time
+    via scale_phases_for_bankroll(), so this function stays reusable
+    regardless of live bankroll.
+    """
+    if slot_name in CUSTOM_HIT_ZONES:
+        phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
+        total_spins = sum(p["spins"] for p in phases)
+        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+        checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
+        return phases, total_spins, checkin_alloc
+
+    parsed_df = parse_session_log_data(live_df, slot_name, family_name)
+    if parsed_df.empty:
+        # Fallback generic 4-phase plan
+        base_bet = 2.50
+        phases = [
+            {"spins": 15, "bet": base_bet, "note": "Initial Probe Zone"},
+            {"spins": 15, "bet": base_bet * 2, "note": "Peak Hit Concentration Zone"},
+            {"spins": 15, "bet": base_bet, "note": "Late Checkpoint (Exit Prep)"},
+            {"spins": 30, "bet": base_bet * 2, "note": "Extended Deep Trigger Zone"},
+        ]
+        total_spins = sum(p["spins"] for p in phases)
+        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+        checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
+        return phases, total_spins, checkin_alloc
+
+    exact_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
+    censored_entries = parsed_df[parsed_df["_is_censored"]]
+
+    # Dynamic ceiling from sheet (ignores outliers like rare 100+ or 110+ spins)
+    dynamic_ceiling = compute_slot_spin_ceiling(parsed_df)
+
+    # Use censored exits only to avoid underestimating ceiling
+    max_censored_spin = censored_entries["_spins"].max() if not censored_entries.empty else 0
+    target_max_spin = int(max(dynamic_ceiling, max_censored_spin, 30))
+
+    # Bet sizing baseline from multipliers
+    avg_mult = exact_hits["_mult"].mean() if not exact_hits.empty else 0.0
+    high_bet = 5.00 if avg_mult >= 40.0 else 2.50
+    low_bet = 2.50 if avg_mult >= 40.0 else 1.25
+
+    hit_spins = exact_hits["_spins"]
+    total_exact = len(exact_hits) if not exact_hits.empty else 1  # avoid div/0
+
+    w1_hits = len(hit_spins[hit_spins <= 15])
+    w2_hits = len(hit_spins[(hit_spins > 15) & (hit_spins <= 30)])
+    w3_hits = len(hit_spins[(hit_spins > 30) & (hit_spins <= 45)])
+    w4_hits = len(hit_spins[(hit_spins > 45) & (hit_spins <= target_max_spin)])
+
+    phases = []
+
+    # Window 1 (1–15 Spins)
+    w1_spins = min(15, target_max_spin)
+    w1_bet = high_bet if (w1_hits / total_exact) >= 0.40 else low_bet
+    w1_note = "🔥 High-Hit Concentration Zone" if w1_bet == high_bet else "Initial Probe Zone"
+    phases.append({"spins": w1_spins, "bet": w1_bet, "note": w1_note})
+
+    # Window 2 (16–30 Spins)
+    if target_max_spin > 15:
+        w2_spins = min(15, max(0, target_max_spin - w1_spins))
+        w2_bet = high_bet if (w2_hits / total_exact) >= 0.30 else low_bet
+        w2_note = "Peak Hit Concentration Zone" if w2_bet == high_bet else "Mid-Cycle Probe Zone"
+        phases.append({"spins": w2_spins, "bet": w2_bet, "note": w2_note})
+
+    # Window 3 (31–45 Spins)
+    if target_max_spin > 30:
+        w3_spins = min(15, max(0, target_max_spin - (w1_spins + (phases[1]["spins"] if len(phases) > 1 else 0))))
+        w3_bet = high_bet if (w3_hits / total_exact) >= 0.25 else low_bet
+        w3_note = "Late Trigger Zone" if w3_bet == high_bet else "Late Checkpoint (Exit Prep)"
+        phases.append({"spins": w3_spins, "bet": w3_bet, "note": w3_note})
+
+    # Window 4 (46+ Spins) — only if ceiling actually extends beyond 45
+    if target_max_spin > 45:
+        remaining_spins = max(0, target_max_spin - sum(p["spins"] for p in phases))
+        if remaining_spins > 0:
+            # If most hits are <= dynamic_ceiling, treat deep window as low-bet bleed protection
+            deep_hit_ratio = w4_hits / total_exact
+            w4_bet = high_bet if deep_hit_ratio >= 0.20 else low_bet
+            w4_note = "Extended Deep Trigger Zone" if w4_bet == high_bet else "Deep Exit Protection Zone"
+            phases.append({"spins": remaining_spins, "bet": w4_bet, "note": w4_note})
+
+    total_spins = sum(p["spins"] for p in phases)
+    raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+    checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
+
+    return phases, total_spins, checkin_alloc
 # ==========================================
 # 2. SHEET DATA INSPECTION & CALCULATION ENGINE
 # ==========================================
