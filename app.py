@@ -142,6 +142,12 @@ def restore_slot(slot_name: str):
 # 1. MASTER LIST & MULTI-PHASE CONFIG
 # ==========================================
 
+VALID_SLOT_BETS = [1.00, 1.25, 1.50, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
+
+def snap_to_valid_bet(bet: float) -> float:
+"""Snaps any arbitrary calculated bet to the nearest valid slot bet denomination."""
+return min(VALID_SLOT_BETS, key=lambda x: abs(x - bet))
+
 CUSTOM_HIT_ZONES = {
     "New York Nights": {
         "phases": [
@@ -438,6 +444,11 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
     else:
         base_bet, high_bet, low_bet = 1.25, 2.50, 0.75
 
+    # Enforce snapping on base tiers to keep dynamic phase calculations on valid bet sizes
+    base_bet = snap_to_valid_bet(base_bet)
+    high_bet = snap_to_valid_bet(high_bet)
+    low_bet = snap_to_valid_bet(low_bet)
+    
     # If no hit data available, fall back to RVI-driven default generic bands
     if exact_hits.empty:
         max_boundary = int(censored_entries["_spins"].max()) if not censored_entries.empty else 45
@@ -587,19 +598,21 @@ def scale_phases_for_bankroll(phases, checkin_alloc):
     max_risk_pct = st.session_state.get("max_risk_pct", 20) / 100.0
     risk_cap = current * max_risk_pct
 
-    scaled_phases = [dict(p, bet=round(p["bet"] * scale, 2)) for p in phases]
+    # Change 1: Snap bets after scaling by bankroll posture
+    scaled_phases = [dict(p, bet=snap_to_valid_bet(p["bet"] * scale)) for p in phases]
     raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
 
     cap_note = None
     if risk_cap > 0 and raw_alloc > risk_cap:
         cap_ratio = risk_cap / raw_alloc
-        scaled_phases = [dict(p, bet=round(p["bet"] * cap_ratio, 2)) for p in scaled_phases]
+        # Change 2: Snap bets again if risk cap forces a reduction
+        scaled_phases = [dict(p, bet=snap_to_valid_bet(p["bet"] * cap_ratio)) for p in scaled_phases]
         raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
         cap_note = f"Capped to {max_risk_pct*100:.0f}% of current bankroll (${risk_cap:.2f})."
 
     new_checkin = float(math.ceil(raw_alloc / 25.0) * 25) if raw_alloc > 0 else 0.0
     return scaled_phases, new_checkin, posture_note, cap_note
-
+    
 # ==========================================
 # 3. AI AGENT ENGINE & TOOLS (Gemini primary, Groq fallback)
 # ==========================================
