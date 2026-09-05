@@ -1092,9 +1092,6 @@ with st.sidebar.form("quick_mark_played_form"):
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day: **{st.session_state.selected_day}**")
-st.markdown("---")
-
 # ==========================================
 # TAB 1: TODAY'S PRIORITY BOARD
 # ==========================================
