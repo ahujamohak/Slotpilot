@@ -68,7 +68,6 @@ def persist_session_state():
             "Target Bankroll": st.session_state.session_target,
             "Selected Day": st.session_state.selected_day,
             "Strict Day Penalty": st.session_state.strict_day_penalty,
-            "Max Risk Pct": st.session_state.get("max_risk_pct", 20),
             "Played Basket": "|".join(st.session_state.played_basket),
         }
         conn.update(worksheet=SESSION_STATE_WORKSHEET, data=pd.DataFrame([record]))
@@ -86,7 +85,6 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
     st.session_state.selected_day = datetime.now().strftime("%A")
-    st.session_state.max_risk_pct = 20
     st.session_state.last_saved_ts = None
     st.session_state.last_save_error = None
     if wipe_persisted:
@@ -107,10 +105,6 @@ if "played_basket" not in st.session_state:
         st.session_state.strict_day_penalty = str(strict_raw).strip().lower() in ("true", "1", "yes")
         st.session_state.chat_messages = []
         st.session_state.selected_day = str(restored.get("Selected Day") or datetime.now().strftime("%A"))
-        try:
-            st.session_state.max_risk_pct = int(float(restored.get("Max Risk Pct", 20) or 20))
-        except (ValueError, TypeError):
-            st.session_state.max_risk_pct = 20
         st.session_state.last_saved_ts = restored.get("Timestamp")
         st.session_state.last_save_error = None
         st.session_state.session_was_restored = True
@@ -122,8 +116,6 @@ if "strict_day_penalty" not in st.session_state:
     st.session_state.strict_day_penalty = True
 if "selected_day" not in st.session_state:
     st.session_state.selected_day = datetime.now().strftime("%A")
-if "max_risk_pct" not in st.session_state:
-    st.session_state.max_risk_pct = 20
 
 # Helper Functions for Basket Management
 def mark_slot_played(slot_name: str) -> str:
@@ -704,7 +696,33 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
     phases = [p for p in phases if p["spins"] > 0]
 
     total_spins = sum(p["spins"] for p in phases)
+
+    # Stretch toward 150–175 spin evaluation window while preserving
+    # relative concentration weights. Prefer ~160 as the sweet spot.
+    TARGET_SPINS = 160
+    if total_spins > 0 and total_spins < 140:
+        scale_factor = TARGET_SPINS / total_spins
+        for p in phases:
+            p["spins"] = max(5, int(round(p["spins"] * scale_factor)))
+        total_spins = sum(p["spins"] for p in phases)
+    elif total_spins == 0:
+        # Absolute fallback
+        phases = [
+            {"spins": 40, "bet": low_bet, "note": "Initial Probe Zone"},
+            {"spins": 40, "bet": base_bet, "note": "Mid-Cycle Transition"},
+            {"spins": 40, "bet": low_bet, "note": "Late Checkpoint"},
+            {"spins": 40, "bet": low_bet, "note": "Extended Deep Zone"},
+        ]
+        total_spins = 160
+
+    # Soft preference for check-in under $300 (hard ceiling applied later in scale_phases)
     raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+    if raw_alloc > 360:  # internal headroom before final display clamp
+        shrink = 300 / raw_alloc
+        for p in phases:
+            p["bet"] = snap_to_valid_bet(p["bet"] * shrink)
+        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+
     checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
     return phases, total_spins, checkin_alloc
 
@@ -766,43 +784,43 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
 # history (get_multi_phase_execution) and stay fixed regardless of
 # bankroll. Bet SIZE within those windows is scaled here, at render
 # time, against where the live session actually stands — so the same
-# slot recommends smaller bets when the bankroll is down and caps any
-# single check-in at a configurable % of current bankroll.
+# slot recommends smaller bets when the bankroll is down.
+# Hard ceiling: displayed check-in never exceeds $400 (prefer many under $300).
 
 def compute_bankroll_scale():
     start = max(st.session_state.session_start_bankroll, 0.0)
     current = max(st.session_state.current_bankroll, 0.0)
     if start <= 0:
-        return 1.0, "Normal staking — no drawdown adjustment active."
+        return 1.0
 
     bankroll_ratio = current / start
     if bankroll_ratio <= 0.5:
-        return 0.5, "🛑 Bankroll down 50%+ from session start — bets scaled to 50% to preserve capital."
+        return 0.5
     elif bankroll_ratio <= 0.75:
-        return 0.75, "⚠️ Bankroll down 25%+ from session start — bets scaled to 75%."
+        return 0.75
     else:
-        return 1.0, "Normal staking — no drawdown adjustment active."
+        return 1.0
 
 def scale_phases_for_bankroll(phases, checkin_alloc):
-    scale, posture_note = compute_bankroll_scale()
-    current = max(st.session_state.current_bankroll, 0.0)
-    max_risk_pct = st.session_state.get("max_risk_pct", 20) / 100.0
-    risk_cap = current * max_risk_pct
+    scale = compute_bankroll_scale()
 
     scaled_phases = [dict(p, bet=snap_to_valid_bet(p["bet"] * scale)) for p in phases]
     raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
 
-    cap_note = None
-    if risk_cap > 0 and raw_alloc > risk_cap:
-        cap_ratio = risk_cap / raw_alloc
+    # Hard display ceiling of $400
+    MAX_CHECKIN = 400.0
+    if raw_alloc > MAX_CHECKIN:
+        cap_ratio = MAX_CHECKIN / raw_alloc
         scaled_phases = [
             dict(p, bet=snap_to_valid_bet(p["bet"] * cap_ratio)) for p in scaled_phases
         ]
         raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
-        cap_note = f"Capped to {max_risk_pct*100:.0f}% of current bankroll (${risk_cap:.2f})."
 
     new_checkin = float(math.ceil(raw_alloc / 25.0) * 25) if raw_alloc > 0 else 0.0
-    return scaled_phases, new_checkin, posture_note, cap_note
+    # Final safety clamp
+    if new_checkin > MAX_CHECKIN:
+        new_checkin = MAX_CHECKIN
+    return scaled_phases, new_checkin
     
 # ==========================================
 # 3. AI AGENT ENGINE & TOOLS (Gemini primary, Groq fallback)
@@ -847,7 +865,7 @@ def build_agent_context():
 
     slot_context_summary = []
     for s in available_slots[:20]:
-        scaled_phases, scaled_checkin, _, cap_note = scale_phases_for_bankroll(s["phases"], s["checkin_alloc"])
+        scaled_phases, scaled_checkin = scale_phases_for_bankroll(s["phases"], s["checkin_alloc"])
         scaled_breakdown = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(scaled_phases)])
         slot_context_summary.append({
             "slot": s["slot"],
@@ -861,7 +879,6 @@ def build_agent_context():
             "recommendation_protocol": s['rehit_metrics']['repeat_recommendation']
         })
 
-    scale, posture_note = compute_bankroll_scale()
     system_instruction = f"""
     You are an expert AI Casino Slot Optimization & Execution Agent.
 
@@ -870,9 +887,6 @@ def build_agent_context():
     - Current Active Bankroll: ${st.session_state.current_bankroll:.2f}
     - Starting Bankroll: ${st.session_state.session_start_bankroll:.2f}
     - Target Bankroll: ${st.session_state.session_target:.2f}
-    - Staking Posture: {posture_note}
-    - Max Risk Per Check-In: {st.session_state.get('max_risk_pct', 20)}% of current bankroll
-    - Strict Day Penalty Mode: {'ON' if st.session_state.strict_day_penalty else 'OFF'}
     - Played Basket (Played Today): {st.session_state.played_basket}
 
     AVAILABLE TOP-RANKED SLOTS DATASET (Ranked by 75/25 Hybrid Day-RVI & Multi-Hit Rate).
@@ -1051,26 +1065,34 @@ with st.sidebar.form("bankroll_form"):
     new_start = st.number_input("Starting Bankroll ($)", value=float(st.session_state.session_start_bankroll), step=50.0)
     new_current = st.number_input("Current Bankroll ($)", value=float(st.session_state.current_bankroll), step=25.0)
     new_target = st.number_input("Target Bankroll ($)", value=float(st.session_state.session_target), step=100.0)
-    new_risk_pct = st.slider("Max Risk per Check-In (% of current bankroll)", min_value=5, max_value=50, value=int(st.session_state.max_risk_pct), step=5)
     bankroll_submit = st.form_submit_button("💾 Update & Save")
 
     if bankroll_submit:
         st.session_state.session_start_bankroll = new_start
         st.session_state.current_bankroll = new_current
         st.session_state.session_target = new_target
-        st.session_state.max_risk_pct = new_risk_pct
         persist_session_state()
         st.rerun()
 
-_scale, _posture = compute_bankroll_scale()
-st.sidebar.caption(f"Staking posture: {_posture}")
+# ==========================================
+# SIDEBAR: QUICK MARK SLOT AS PLAYED
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.subheader("✅ Quick Mark Played")
+with st.sidebar.form("quick_mark_played_form"):
+    qm_family = st.selectbox("Family:", options=list(SLOT_MASTER_LIST.keys()), key="qm_fam")
+    qm_slot = st.selectbox("Slot:", options=SLOT_MASTER_LIST[qm_family], key="qm_slot")
+    qm_submit = st.form_submit_button("Mark as Played", use_container_width=True)
+    if qm_submit:
+        res = mark_slot_played(qm_slot)
+        st.sidebar.success(res)
+        st.rerun()
 
 # ==========================================
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-st.title("Casino Slot Optimization & Execution Agent")
-st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day Context: **{st.session_state.selected_day}** | Strict Mode: **{'ON' if st.session_state.strict_day_penalty else 'OFF'}**")
+st.caption(f"Active View: **{st.session_state.active_tab}** | Target Day: **{st.session_state.selected_day}**")
 st.markdown("---")
 
 # ==========================================
@@ -1078,13 +1100,7 @@ st.markdown("---")
 # ==========================================
 
 if st.session_state.active_tab == "📊 Today's Priority Board":
-    st.subheader(f"Today's Priority Board (Day & Dynamic Spin-Calibrated Matrix for {st.session_state.selected_day})")
-
-    scale, posture_note = compute_bankroll_scale()
-    if scale < 1.0:
-        st.warning(f"**Staking posture active:** {posture_note} Bet sizes below already reflect this.")
-    else:
-        st.info(f"**Staking posture:** {posture_note}")
+    st.subheader("Today's Priority Board")
 
     available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
     current_display = available_slots[:st.session_state.display_limit]
@@ -1092,8 +1108,7 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
     table_data = []
     for rank, item in enumerate(current_display, 1):
         rehit = item.get("rehit_metrics", {})
-        avg_att2 = rehit.get("avg_attempt2_spins", 0.0)
-        scaled_phases, scaled_checkin, _, cap_note = scale_phases_for_bankroll(item.get("phases", []), item.get("checkin_alloc", 0.0))
+        scaled_phases, scaled_checkin = scale_phases_for_bankroll(item.get("phases", []), item.get("checkin_alloc", 0.0))
         scaled_breakdown = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(scaled_phases)])
 
         att2_pop = rehit.get("attempt2_population", 0)
@@ -1101,13 +1116,10 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
             "Rank": rank,
             "Slot Family": item.get("family", "N/A"),
             "Slot Theme Name": item.get("slot", "N/A"),
-            "Day-RVI Score": item.get("base_rvi", 0.0),
             "Repeat-Hit Rate (of 2nd attempts)": f"{rehit.get('multi_hit_rate', 0.0)}%",
             "2nd-Attempt Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
-            "Avg Attempt 2 Trigger": f"{avg_att2:.1f}s" if avg_att2 > 0 else "N/A",
-            "Avg Repeat Win": f"{rehit.get('avg_repeat_multiplier', 0.0)}x",
-            "Bankroll-Scaled Phase Plan": scaled_breakdown,
-            "Check-In Alloc ($, bankroll-scaled)": f"${scaled_checkin:.2f}" + (" ⚠️ capped" if cap_note else "")
+            "Phase Plan": scaled_breakdown,
+            "Check-In": f"${scaled_checkin:.0f}"
         })
 
     df_priority = pd.DataFrame(table_data)
@@ -1138,16 +1150,15 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
             multi_rate = rehit.get("multi_hit_rate", 0)
             att2_pop = rehit.get("attempt2_population", 0)
 
-            scaled_phases, scaled_checkin, posture_note, cap_note = scale_phases_for_bankroll(
+            scaled_phases, scaled_checkin = scale_phases_for_bankroll(
                 slot_data.get("phases", []), slot_data.get("checkin_alloc", 0.0)
             )
 
             st.markdown("---")
             st.markdown(f"### 🎰 Execution Card: **{slot_data.get('slot', 'N/A')}** ({slot_data.get('family', 'N/A')})")
-            st.caption(f"Staking posture: {posture_note}" + (f" {cap_note}" if cap_note else ""))
 
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Dynamic Evaluation Window", f"{slot_data.get('total_spins', 0)} Spins", delta=f"Check-In: ${scaled_checkin:.2f}")
+            col_m1.metric("Dynamic Evaluation Window", f"{slot_data.get('total_spins', 0)} Spins", delta=f"Check-In: ${scaled_checkin:.0f}")
             col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data.get('base_rvi', 0)}", delta=f"Day Weighting: {slot_data.get('day_factor', 1.0)}x")
             col_m3.metric("Sheet Repeat-Hit Rate", f"{multi_rate}%", delta=f"of {att2_pop} 2nd attempts")
 
@@ -1276,7 +1287,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
 # TAB 4: INTERACTIVE AI AGENT
 # ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive AI Agent":
-    st.subheader("🤖 Live Strategy AI Agent (Gemini primary, Groq fallback)")
+    st.subheader("Slotpilot AI Chat")
 
     # Display prior chat history
     for message in st.session_state.chat_messages:
@@ -1284,14 +1295,12 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.markdown(message["content"])
 
     # Quick action prompt chips
-    col_q1, col_q2, col_q3 = st.columns(3)
+    col_q1, col_q2 = st.columns(2)
     prompt_to_submit = None
 
     if col_q1.button("🎯 Top 3 Best Slots Today"):
         prompt_to_submit = f"What are the top 3 best slots to play today ({st.session_state.selected_day}) based on our Day-RVI matrix?"
-    if col_q2.button("💰 Check Session Bankroll Status"):
-        prompt_to_submit = f"Assess my session status. Starting bankroll was ${st.session_state.session_start_bankroll}, current is ${st.session_state.current_bankroll}, and target is ${st.session_state.session_target}."
-    if col_q3.button("🔄 Check High Multi-Hit Machines"):
+    if col_q2.button("🔄 Check High Multi-Hit Machines"):
         prompt_to_submit = "Which slots currently have the highest repeat-hit rate (>30% of 2nd attempts) and should be re-probed immediately after a feature win?"
 
     user_input = st.chat_input("Ask your AI Execution Agent anything about today's session strategy...")
