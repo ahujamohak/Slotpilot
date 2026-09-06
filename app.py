@@ -1324,30 +1324,9 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
 
             st.markdown("---")
 
-            st.markdown("#### 🎯 Post-Hit Repeat Execution Protocol (Attempt 2 Calibration)")
-            st.info(f"📋 **Live Sheet Recommendation:** {rehit.get('repeat_recommendation', 'No data available.')}")
-
-            col_h1, col_h2 = st.columns(2)
-            p1_bet = scaled_phases[0]["bet"] if scaled_phases else 0.0
-
-            with col_h1:
-                st.markdown("##### 📊 Historical Sheet Stats (Attempt 2 population)")
-                st.write(f"- **2nd Attempts Logged:** {att2_pop}")
-                st.write(f"- **Multi-Hit Occurrences:** {rehit.get('multi_hit_count', 0)} times")
-                st.write(f"- **Attempt 2 Avg Trigger Spin:** {avg_att2} spins" if avg_att2 > 0 else "- **Attempt 2 Avg Trigger Spin:** No Attempt 2 hits logged")
-                st.write(f"- **Highest Recorded Repeat Multiplier:** {rehit.get('max_repeat_multiplier', 0)}x")
-                st.write(f"- **Average Repeat Multiplier:** {rehit.get('avg_repeat_multiplier', 0)}x")
-
-            with col_h2:
-                st.markdown("##### ⚙️ Action Protocol on Feature Trigger")
-                if multi_rate >= 30.0:
-                    st.success("🟢 **ACTION: RESET & RE-PROBE**")
-                    st.write(f"- **Execution:** Reset immediately back to **Phase 1 ({scaled_phases[0]['spins'] if scaled_phases else 0} Spins @ ${p1_bet:.2f})**.")
-                    st.write(f"- **Reason:** Of {att2_pop} logged 2nd attempts, {multi_rate}% hit again.")
-                else:
-                    st.warning("🟡 **ACTION: FINISH CURRENT PHASE OR EXIT**")
-                    st.write(f"- **Execution:** Finish only remaining spins in current phase, lock profits, and move to Played Basket.")
-                    st.write(f"- **Reason:** Of {att2_pop} logged 2nd attempts, only {multi_rate}% hit again.")
+            st.markdown("#### 🔄 Bankroll-Scaled Phase Plan (Attempt 2 / Re-probe)")
+            for idx, phase in enumerate(scaled_phases, 1):
+                st.write(f"**Phase {idx}:** **{phase.get('spins', 0)} Spins** @ **${phase.get('bet', 0):.2f}/spin** — *{phase.get('note', '')}*")
 
             st.markdown("---")
             if st.button(f"✅ Mark '{slot_data['slot']}' as Played (Move to Basket)"):
