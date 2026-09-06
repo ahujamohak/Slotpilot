@@ -549,7 +549,11 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "max_repeat_multiplier": 0.0,
         "avg_attempt2_spins": 0.0,
         "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)",
-        "repeat_spin_bins": "No 2nd-feature data"
+        "repeat_spin_bins": "No 2nd-feature data",
+        # 1st-feature stats
+        "first_hit_count": 0,
+        "first_hit_total": 0,
+        "avg_first_multiplier": 0.0,
     }
 
     parsed_df = parse_session_log_data(live_df, slot_name, family_name)
@@ -558,25 +562,46 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
 
     total_logs = len(parsed_df)
 
-    # Population that could produce a 2nd feature: rows where Attempt == 2
-    # or where Feature Win Number == 2 (more reliable when both columns exist)
-    if "_feature_num" in parsed_df.columns:
-        # Prefer Feature Win Number == 2 as the definition of a 2nd feature hit
+    # ---------- 1st feature ----------
+    # Prefer Feature Win Number == 1.
+    # Fallback: Hit Number == 1 AND Attempt Number == 1 (both required).
+    if "_feature_num" in parsed_df.columns and (parsed_df["_feature_num"] == 1).any():
+        first_hits = parsed_df[
+            (parsed_df["_feature_num"] == 1) &
+            (~parsed_df["_is_censored"]) &
+            (parsed_df["_spins"].notna())
+        ]
+    else:
+        first_hits = parsed_df[
+            (parsed_df["_hit"] == 1) &
+            (parsed_df["_attempt"] == 1) &
+            (~parsed_df["_is_censored"]) &
+            (parsed_df["_spins"].notna())
+        ]
+    first_hit_count = len(first_hits)
+    avg_first_mult = round(first_hits["_mult"].mean(), 1) if not first_hits.empty else 0.0
+
+    # ---------- 2nd feature ----------
+    # Prefer Feature Win Number == 2.
+    # Fallback: Hit Number == 2 AND Attempt Number == 2 (both required).
+    if "_feature_num" in parsed_df.columns and (parsed_df["_feature_num"] == 2).any():
         repeat_entries = parsed_df[
             (parsed_df["_feature_num"] == 2) &
             (~parsed_df["_is_censored"])
         ]
-        # For population we still use Attempt == 2 when available
         attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
         if attempt2_rows.empty:
-            # Fallback: treat every Feature Win Number == 2 as both hit and population
             attempt2_population = len(repeat_entries)
         else:
             attempt2_population = len(attempt2_rows)
     else:
         attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
         attempt2_population = len(attempt2_rows)
-        repeat_entries = parsed_df[(parsed_df["_attempt"] == 2) & (parsed_df["_hit"] == 2)]
+        repeat_entries = parsed_df[
+            (parsed_df["_hit"] == 2) &
+            (parsed_df["_attempt"] == 2) &
+            (~parsed_df["_is_censored"])
+        ]
 
     repeat_count = len(repeat_entries)
 
@@ -594,7 +619,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     att2_hits = repeat_entries[(repeat_entries["_spins"] > 0) & (~repeat_entries["_is_censored"])]
     avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
 
-    # Dynamic bin distribution string (never hardcoded)
     repeat_spin_bins = compute_repeat_spin_bins(parsed_df)
 
     if attempt2_population == 0 and repeat_count == 0:
@@ -617,7 +641,10 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "max_repeat_multiplier": max_repeat_mult,
         "avg_attempt2_spins": avg_att2_spins,
         "repeat_recommendation": recommendation,
-        "repeat_spin_bins": repeat_spin_bins
+        "repeat_spin_bins": repeat_spin_bins,
+        "first_hit_count": first_hit_count,
+        "first_hit_total": total_logs,
+        "avg_first_multiplier": avg_first_mult,
     }
 
 def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_mode=True):
@@ -1190,21 +1217,63 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
     for rank, item in enumerate(current_display, 1):
         rehit = item.get("rehit_metrics", {})
         scaled_phases, scaled_checkin = scale_phases_for_bankroll(item.get("phases", []), item.get("checkin_alloc", 0.0))
-        scaled_breakdown = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(scaled_phases)])
+        plan_1st = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(scaled_phases)])
+
+        # Mini phase plan for 2nd hit / re-probe
+        multi_rate = rehit.get("multi_hit_rate", 0.0)
+        avg_att2 = rehit.get("avg_attempt2_spins", 0.0)
+        p1_spins = scaled_phases[0]["spins"] if scaled_phases else 20
+        p1_bet = scaled_phases[0]["bet"] if scaled_phases else 2.50
+        if multi_rate >= 30.0:
+            # Strong repeat → full reset to Phase 1 style
+            plan_2nd = f"P1: {p1_spins}s @ ${p1_bet:.2f} (reset)"
+        elif multi_rate >= 15.0 and avg_att2 > 0:
+            # Moderate → shorter re-probe around historical avg
+            reprobe_spins = max(10, min(30, int(round(avg_att2))))
+            plan_2nd = f"P1: {reprobe_spins}s @ ${p1_bet:.2f} (re-probe)"
+        else:
+            # Low / no data → short exit probe only
+            plan_2nd = f"P1: 15s @ ${p1_bet:.2f} (exit after)"
 
         att2_pop = rehit.get("attempt2_population", 0)
+        first_hits = rehit.get("first_hit_count", 0)
+        first_total = rehit.get("first_hit_total", 0)
+        avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
+        avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0)
+
         table_data.append({
             "Rank": rank,
-            "Slot Family": item.get("family", "N/A"),
-            "Slot Theme Name": item.get("slot", "N/A"),
-            "2nd-Feature Spin Distribution": rehit.get("repeat_spin_bins", "No 2nd-feature data"),
-            "2nd-Attempt Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
-            "Phase Plan": scaled_breakdown,
-            "Check-In": f"${scaled_checkin:.0f}"
+            "Family": item.get("family", "N/A"),
+            "Slot": item.get("slot", "N/A"),
+            "Check-In": f"${scaled_checkin:.0f}",
+            "Plan for 1st hit": plan_1st,
+            "1st Attempt hits / Total": f"{first_hits} / {first_total}",
+            "Avg 1st Win Mult": f"{avg_1st_mult}x" if avg_1st_mult > 0 else "N/A",
+            "Plan for 2nd hit": plan_2nd,
+            "2nd Attempt hits / Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
+            "Avg 2nd Win Mult": f"{avg_2nd_mult}x" if avg_2nd_mult > 0 else "N/A",
         })
 
     df_priority = pd.DataFrame(table_data)
-    st.dataframe(df_priority, use_container_width=True, hide_index=True)
+
+    # Force full-width + allow text wrapping so long phase strings don't force endless horizontal drag
+    st.dataframe(
+        df_priority,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Rank": st.column_config.NumberColumn(width="small"),
+            "Family": st.column_config.TextColumn(width="medium"),
+            "Slot": st.column_config.TextColumn(width="medium"),
+            "Check-In": st.column_config.TextColumn(width="small"),
+            "Plan for 1st hit": st.column_config.TextColumn(width="large"),
+            "1st Attempt hits / Total": st.column_config.TextColumn(width="small"),
+            "Avg 1st Win Mult": st.column_config.TextColumn(width="small"),
+            "Plan for 2nd hit": st.column_config.TextColumn(width="medium"),
+            "2nd Attempt hits / Total": st.column_config.TextColumn(width="small"),
+            "Avg 2nd Win Mult": st.column_config.TextColumn(width="small"),
+        }
+    )
 
     if len(available_slots) > st.session_state.display_limit:
         if st.button("➕ Load 15 More Slots"):
