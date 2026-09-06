@@ -217,6 +217,14 @@ def parse_session_log_data(live_df, slot_name, family_name):
     fam_col = cols.get("family") or cols.get("slot family")
     spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
     attempt_col = cols.get("attempt number") or cols.get("attempt")
+    # Prefer "Feature Win Number" (the sequence of the feature: 1=first, 2=first repeat, etc.)
+    # Fall back to classic "Hit Number"
+    feature_num_col = (
+        cols.get("feature win number")
+        or cols.get("feature number")
+        or cols.get("hit number")
+        or cols.get("hit")
+    )
     hit_num_col = cols.get("hit number") or cols.get("hit")
     win_amt_col = cols.get("win amount") or cols.get("win amount ($)") or cols.get("win")
     mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
@@ -225,7 +233,11 @@ def parse_session_log_data(live_df, slot_name, family_name):
         return pd.DataFrame()
 
     df = live_df.copy()
-    df = df[(df[slot_col] == slot_name) & (df[fam_col] == family_name)]
+    # Case-insensitive exact match on slot + family
+    df = df[
+        (df[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()) &
+        (df[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower())
+    ]
 
     if df.empty:
         return pd.DataFrame()
@@ -244,14 +256,23 @@ def parse_session_log_data(live_df, slot_name, family_name):
         except ValueError:
             return np.nan, False
 
+    def _to_num(series):
+        return pd.to_numeric(series.astype(str).str.extract(r"(\d+\.?\d*)")[0], errors="coerce")
+
     parsed_spins = df[spin_col].apply(_parse_spin)
     df["_spins"] = parsed_spins.apply(lambda x: x[0])
     df["_is_censored"] = parsed_spins.apply(lambda x: x[1])
 
-    df["_attempt"] = df[attempt_col] if attempt_col else 1
-    df["_hit"] = df[hit_num_col] if hit_num_col else 1
-    df["_win"] = df[win_amt_col] if win_amt_col else 0.0
-    df["_mult"] = df[mult_col] if mult_col else 0.0
+    df["_attempt"] = _to_num(df[attempt_col]) if attempt_col else 1
+    # Primary feature sequence number (1 = first feature, 2 = first repeat, ...)
+    if feature_num_col:
+        df["_feature_num"] = _to_num(df[feature_num_col]).fillna(0).astype(int)
+    else:
+        df["_feature_num"] = 0
+    # Keep legacy _hit for backward compatibility
+    df["_hit"] = _to_num(df[hit_num_col]).fillna(0) if hit_num_col else df["_feature_num"]
+    df["_win"] = _to_num(df[win_amt_col]) if win_amt_col else 0.0
+    df["_mult"] = _to_num(df[mult_col]) if mult_col else 0.0
 
     return df
 
@@ -466,6 +487,58 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
 # CALCULATION ENGINE HELPERS (REHIT UPDATE)
 # ==========================================
 
+def compute_repeat_spin_bins(parsed_df):
+    """
+    For exact 2nd-feature hits (Feature Win Number / _feature_num == 2, non-censored),
+    compute % of those spins that fall into each 10-spin bin.
+    Returns a compact one-line string:
+        1-10 (xx%), 11-20 (yy%), ... 91-100 (zz%)
+    All values are computed dynamically from the live data — nothing is hardcoded.
+    """
+    if parsed_df is None or parsed_df.empty:
+        return "No 2nd-feature data"
+
+    # Prefer the dedicated feature sequence column; fall back to legacy _hit
+    if "_feature_num" in parsed_df.columns:
+        second_hits = parsed_df[
+            (parsed_df["_feature_num"] == 2) &
+            (~parsed_df["_is_censored"]) &
+            (parsed_df["_spins"].notna())
+        ]
+    else:
+        second_hits = parsed_df[
+            (parsed_df["_hit"] == 2) &
+            (~parsed_df["_is_censored"]) &
+            (parsed_df["_spins"].notna())
+        ]
+
+    if second_hits.empty:
+        return "No 2nd-feature data"
+
+    spins = second_hits["_spins"].astype(float)
+    total = len(spins)
+    if total == 0:
+        return "No 2nd-feature data"
+
+    bins = [
+        (1, 10), (11, 20), (21, 30), (31, 40), (41, 50),
+        (51, 60), (61, 70), (71, 80), (81, 90), (91, 100)
+    ]
+    parts = []
+    for lo, hi in bins:
+        cnt = ((spins >= lo) & (spins <= hi)).sum()
+        pct = round((cnt / total) * 100.0, 1)
+        parts.append(f"{lo}-{hi} ({pct}%)")
+
+    # Optional: show >100 if any exist
+    over = (spins > 100).sum()
+    if over > 0:
+        pct_over = round((over / total) * 100.0, 1)
+        parts.append(f">100 ({pct_over}%)")
+
+    return ", ".join(parts)
+
+
 def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     default_res = {
         "repeat_sample_size": 0,
@@ -475,7 +548,8 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "avg_repeat_multiplier": 0.0,
         "max_repeat_multiplier": 0.0,
         "avg_attempt2_spins": 0.0,
-        "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)"
+        "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)",
+        "repeat_spin_bins": "No 2nd-feature data"
     }
 
     parsed_df = parse_session_log_data(live_df, slot_name, family_name)
@@ -484,38 +558,47 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
 
     total_logs = len(parsed_df)
 
-    # The population that COULD have produced a repeat hit is every row
-    # where a second attempt was actually made (Attempt Number == 2),
-    # regardless of whether that second attempt hit or not.
-    attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
-    attempt2_population = len(attempt2_rows)
+    # Population that could produce a 2nd feature: rows where Attempt == 2
+    # or where Feature Win Number == 2 (more reliable when both columns exist)
+    if "_feature_num" in parsed_df.columns:
+        # Prefer Feature Win Number == 2 as the definition of a 2nd feature hit
+        repeat_entries = parsed_df[
+            (parsed_df["_feature_num"] == 2) &
+            (~parsed_df["_is_censored"])
+        ]
+        # For population we still use Attempt == 2 when available
+        attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
+        if attempt2_rows.empty:
+            # Fallback: treat every Feature Win Number == 2 as both hit and population
+            attempt2_population = len(repeat_entries)
+        else:
+            attempt2_population = len(attempt2_rows)
+    else:
+        attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
+        attempt2_population = len(attempt2_rows)
+        repeat_entries = parsed_df[(parsed_df["_attempt"] == 2) & (parsed_df["_hit"] == 2)]
 
-    # Strict 2nd feature match: Attempt Number == 2 AND Hit Number == 2
-    repeat_entries = parsed_df[(parsed_df["_attempt"] == 2) & (parsed_df["_hit"] == 2)]
     repeat_count = len(repeat_entries)
 
     if total_logs == 0:
         return default_res
 
-    # multi_hit_rate = P(2nd attempt hits | a 2nd attempt was made).
-    # Denominator is attempt2_population, NOT total_logs — total_logs
-    # includes every first-attempt-only row that never had a chance to
-    # repeat, which previously diluted this rate and understated it.
     if attempt2_population > 0:
         multi_hit_rate = round((repeat_count / attempt2_population) * 100.0, 1)
     else:
         multi_hit_rate = 0.0
 
-    # Multiplier stats on 2nd feature hits
     avg_repeat_mult = round(repeat_entries["_mult"].mean(), 1) if not repeat_entries.empty else 0.0
     max_repeat_mult = round(repeat_entries["_mult"].max(), 1) if not repeat_entries.empty else 0.0
 
-    # Average spins to trigger 2nd feature (Attempt == 2 AND Hit == 2)
     att2_hits = repeat_entries[(repeat_entries["_spins"] > 0) & (~repeat_entries["_is_censored"])]
     avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
 
-    if attempt2_population == 0:
-        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No second attempt (Attempt 2) logged yet."
+    # Dynamic bin distribution string (never hardcoded)
+    repeat_spin_bins = compute_repeat_spin_bins(parsed_df)
+
+    if attempt2_population == 0 and repeat_count == 0:
+        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No second feature logged yet."
     elif multi_hit_rate >= 40.0:
         recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}% of {attempt2_population} 2nd attempts hit): Reset to Phase 1 immediately after feature hit. (Attempt 2 avg trigger: {avg_att2_spins if avg_att2_spins > 0 else 'N/A'} spins)."
     elif multi_hit_rate >= 20.0:
@@ -533,7 +616,8 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "avg_repeat_multiplier": avg_repeat_mult,
         "max_repeat_multiplier": max_repeat_mult,
         "avg_attempt2_spins": avg_att2_spins,
-        "repeat_recommendation": recommendation
+        "repeat_recommendation": recommendation,
+        "repeat_spin_bins": repeat_spin_bins
     }
 
 def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_mode=True):
@@ -1113,7 +1197,7 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
             "Rank": rank,
             "Slot Family": item.get("family", "N/A"),
             "Slot Theme Name": item.get("slot", "N/A"),
-            "Repeat-Hit Rate (of 2nd attempts)": f"{rehit.get('multi_hit_rate', 0.0)}%",
+            "2nd-Feature Spin Distribution": rehit.get("repeat_spin_bins", "No 2nd-feature data"),
             "2nd-Attempt Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
             "Phase Plan": scaled_breakdown,
             "Check-In": f"${scaled_checkin:.0f}"
