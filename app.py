@@ -283,6 +283,13 @@ def parse_session_log_data(live_df, slot_name, family_name):
     df["_win"] = _to_num(df[win_amt_col]) if win_amt_col else 0.0
     df["_mult"] = _to_num(df[mult_col]) if mult_col else 0.0
 
+    # Day of week (for soft day matching)
+    day_col = cols.get("day") or cols.get("day of week")
+    if day_col:
+        df["_day"] = df[day_col].astype(str).str.strip()
+    else:
+        df["_day"] = ""
+
     return df
 
 def compute_slot_spin_ceiling(parsed_df):
@@ -678,9 +685,20 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     day_log_count = 0
     day_factor = 1.0
 
+    # Nearby days (soft match) — prefer same day, then adjacent, rather than distant weekdays
+    days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    target_idx = days_order.index(target_day) if target_day in days_order else 0
+    nearby_days = {
+        days_order[target_idx],
+        days_order[(target_idx - 1) % 7],
+        days_order[(target_idx + 1) % 7],
+    }
+
     if "_day" in parsed_df.columns:
         day_matches = parsed_df[parsed_df["_day"].str.lower() == str(target_day).strip().lower()]
         day_log_count = len(day_matches)
+        nearby_matches = parsed_df[parsed_df["_day"].str.strip().str.title().isin(nearby_days)]
+        nearby_count = len(nearby_matches)
 
         if total_logs > 0:
             day_ratio = day_log_count / total_logs
@@ -693,14 +711,17 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
                     day_factor = 1.10
                 else:
                     day_factor = 1.00
+            elif nearby_count > 0:
+                # Soft credit for adjacent days when exact day has zero logs
+                day_factor = 0.95 if nearby_count >= 3 else 0.85
             else:
                 if strict_mode:
                     if total_logs >= 5:
-                        day_factor = 0.40
+                        day_factor = 0.55  # less harsh than before
                     elif total_logs >= 3:
-                        day_factor = 0.55
+                        day_factor = 0.70
                     else:
-                        day_factor = 0.75
+                        day_factor = 0.80
                 else:
                     day_factor = 0.90
 
@@ -750,15 +771,16 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
     censored_entries = parsed_df[parsed_df["_is_censored"]] if not parsed_df.empty else pd.DataFrame()
 
     # Determine Base Bet Scaling according to Volatility / Multipliers
+    # Raised tiers so $5 appears more often and check-ins land in $250–$400 range.
     avg_mult = exact_hits["_mult"].mean() if not exact_hits.empty else 20.0
-    if avg_mult >= 80.0:
-        base_bet, high_bet, low_bet = 5.00, 10.00, 3.75
-    elif avg_mult >= 40.0:
-        base_bet, high_bet, low_bet = 3.75, 7.50, 2.50
-    elif avg_mult >= 20.0:
-        base_bet, high_bet, low_bet = 2.50, 5.00, 1.25
+    if avg_mult >= 60.0:
+        base_bet, high_bet, low_bet = 5.00, 7.50, 3.75
+    elif avg_mult >= 30.0:
+        base_bet, high_bet, low_bet = 3.75, 5.00, 2.50
+    elif avg_mult >= 15.0:
+        base_bet, high_bet, low_bet = 2.50, 5.00, 2.00
     else:
-        base_bet, high_bet, low_bet = 1.25, 2.50, 0.75
+        base_bet, high_bet, low_bet = 2.00, 3.75, 1.50
 
     # Enforce snapping on base tiers to keep dynamic phase calculations on valid bet sizes
     base_bet = snap_to_valid_bet(base_bet)
@@ -844,15 +866,21 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
         ]
         total_spins = 160
 
-    # Soft preference for check-in under $300 (hard ceiling applied later in scale_phases)
+    # Target check-in band $250–$400. Scale bets up if too low, soft-cap if above 400.
     raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-    if raw_alloc > 360:  # internal headroom before final display clamp
-        shrink = 300 / raw_alloc
+    if raw_alloc < 250 and raw_alloc > 0:
+        boost = 280 / raw_alloc  # aim near middle of band
+        for p in phases:
+            p["bet"] = snap_to_valid_bet(p["bet"] * boost)
+        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
+    elif raw_alloc > 420:
+        shrink = 380 / raw_alloc
         for p in phases:
             p["bet"] = snap_to_valid_bet(p["bet"] * shrink)
         raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
 
     checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
+    # Final hard ceiling still applied in scale_phases_for_bankroll (400)
     return phases, total_spins, checkin_alloc
 
 def build_priority_dataset(live_df, target_day=None, strict_mode=True):
@@ -878,7 +906,20 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 "rehit_metrics": rehit_metrics
             })
 
-    slot_scores = sorted(slot_scores, key=lambda x: (x["rvi"], x["rehit_metrics"]["multi_hit_rate"], x["day_hits"]), reverse=True)
+    # Prefer: higher RVI, higher multi-hit rate, higher total sample size (reliability),
+    # then day-specific hits. Thin samples (<5 total logs) sink in the ranking.
+    def _rank_key(x):
+        total = x.get("total_hits", 0) or 0
+        sample_bonus = min(total, 20) / 20.0  # 0–1 scale, caps at 20 logs
+        reliability = 1.0 if total >= 5 else 0.3  # hard preference for ≥5 attempts
+        return (
+            x["rvi"] * reliability,
+            x["rehit_metrics"].get("multi_hit_rate", 0),
+            sample_bonus,
+            x.get("day_hits", 0),
+        )
+
+    slot_scores = sorted(slot_scores, key=_rank_key, reverse=True)
 
     for item in slot_scores:
         fam = item["family"]
