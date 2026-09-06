@@ -134,7 +134,7 @@ def restore_slot(slot_name: str):
 # 1. MASTER LIST & MULTI-PHASE CONFIG
 # ==========================================
 
-VALID_SLOT_BETS = [1.00, 1.25, 1.50, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
+VALID_SLOT_BETS = [0.50, 1.00, 1.25, 1.50, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
 
 def snap_to_valid_bet(bet: float) -> float:
     """Snaps any arbitrary calculated bet to the nearest valid slot bet denomination."""
@@ -748,14 +748,11 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
 
 def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
     """
-    Dynamically generates phase spin boundaries and bet sizing based on:
-    1. Exact feature hit spin distribution vs Censored (32+) exit thresholds.
-    2. Multiplier strength (high multiplier = scale up bet sizing).
-    3. Concentrated hit windows (e.g. 1-15, 16-30, 31-45, 46+ spins).
-    Note: this returns BASE phase sizing driven only by the slot's own
-    history. Bankroll-aware scaling is applied separately at render time
-    via scale_phases_for_bankroll(), so this function stays reusable
-    regardless of live bankroll.
+    Phase plan focused on early hit concentration (first ~45–60 spins).
+    - Higher bets where historical 1st-feature hits cluster.
+    - After the main window, a cheap grind phase (can be $0.50).
+    - Not forced to 160 spins — main money is in the early windows.
+    Bankroll scaling applied later via scale_phases_for_bankroll().
     """
     if slot_name in CUSTOM_HIT_ZONES:
         phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
@@ -766,121 +763,126 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
 
     parsed_df = parse_session_log_data(live_df, slot_name, family_name)
 
-    # Exact hits dataframe
-    exact_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])] if not parsed_df.empty else pd.DataFrame()
-    censored_entries = parsed_df[parsed_df["_is_censored"]] if not parsed_df.empty else pd.DataFrame()
-
-    # Determine Base Bet Scaling according to Volatility / Multipliers
-    # Raised tiers so $5 appears more often and check-ins land in $250–$400 range.
-    avg_mult = exact_hits["_mult"].mean() if not exact_hits.empty else 20.0
-    if avg_mult >= 60.0:
-        base_bet, high_bet, low_bet = 5.00, 7.50, 3.75
-    elif avg_mult >= 30.0:
-        base_bet, high_bet, low_bet = 3.75, 5.00, 2.50
-    elif avg_mult >= 15.0:
-        base_bet, high_bet, low_bet = 2.50, 5.00, 2.00
+    # Prefer 1st-feature exact hits for concentration (Feature Win Number == 1 or Hit==1 & Attempt==1)
+    if not parsed_df.empty and "_feature_num" in parsed_df.columns:
+        exact_hits = parsed_df[
+            (parsed_df["_feature_num"] == 1) &
+            (~parsed_df["_is_censored"]) &
+            (parsed_df["_spins"].notna())
+        ]
+        if exact_hits.empty:
+            exact_hits = parsed_df[
+                (parsed_df["_hit"] == 1) &
+                (parsed_df["_attempt"] == 1) &
+                (~parsed_df["_is_censored"]) &
+                (parsed_df["_spins"].notna())
+            ]
+    elif not parsed_df.empty:
+        exact_hits = parsed_df[
+            (parsed_df["_hit"] > 0) &
+            (~parsed_df["_is_censored"]) &
+            (parsed_df["_spins"].notna())
+        ]
     else:
-        base_bet, high_bet, low_bet = 2.00, 3.75, 1.50
+        exact_hits = pd.DataFrame()
 
-    # Enforce snapping on base tiers to keep dynamic phase calculations on valid bet sizes
+    # Bet tiers from multiplier strength — keep $5 visible
+    avg_mult = float(exact_hits["_mult"].mean()) if not exact_hits.empty else 20.0
+    if avg_mult >= 60.0:
+        base_bet, high_bet, low_bet = 5.00, 7.50, 2.50
+    elif avg_mult >= 30.0:
+        base_bet, high_bet, low_bet = 3.75, 5.00, 2.00
+    elif avg_mult >= 15.0:
+        base_bet, high_bet, low_bet = 2.50, 5.00, 1.50
+    else:
+        base_bet, high_bet, low_bet = 2.00, 3.75, 1.25
+
     base_bet = snap_to_valid_bet(base_bet)
     high_bet = snap_to_valid_bet(high_bet)
     low_bet = snap_to_valid_bet(low_bet)
-    
-    # If no hit data available, fall back to RVI-driven default generic bands
-    if exact_hits.empty:
-        max_boundary = int(censored_entries["_spins"].max()) if not censored_entries.empty else 45
-        max_boundary = max(max_boundary, 35)
+    grind_bet = 0.50  # cheap post-window grind
 
-        step = math.ceil(max_boundary / 3)
+    phases = []
+
+    if exact_hits.empty:
+        # Generic early-focus plan when no hit data
         phases = [
-            {"spins": step, "bet": low_bet, "note": "Initial Probe Phase"},
-            {"spins": step, "bet": base_bet, "note": "Target Evaluation Zone"},
-            {"spins": max_boundary - (step * 2), "bet": low_bet, "note": f"Late Checkpoint (Exit Threshold ~{max_boundary}s)"}
+            {"spins": 15, "bet": base_bet, "note": "Initial Probe Zone"},
+            {"spins": 15, "bet": high_bet, "note": "Peak Probe Zone"},
+            {"spins": 15, "bet": low_bet, "note": "Late Checkpoint"},
+            {"spins": 30, "bet": grind_bet, "note": "Low Grind (post 45)"},
         ]
     else:
-        # Determine maximum target spin threshold from high hits or censored exits
-        max_hit_spin = exact_hits["_spins"].max()
-        max_censored_spin = censored_entries["_spins"].max() if not censored_entries.empty else 0
-        target_max_spin = int(max(max_hit_spin, max_censored_spin, 30))
+        hit_spins = exact_hits["_spins"].astype(float)
+        total_exact = max(len(hit_spins), 1)
 
-        # Check win concentration across 4 potential spin windows
-        hit_spins = exact_hits["_spins"]
-        w1_hits = len(hit_spins[hit_spins <= 15])
-        w2_hits = len(hit_spins[(hit_spins > 15) & (hit_spins <= 30)])
-        w3_hits = len(hit_spins[(hit_spins > 30) & (hit_spins <= 45)])
-        w4_hits = len(hit_spins[hit_spins > 45])
+        w1 = len(hit_spins[hit_spins <= 15]) / total_exact
+        w2 = len(hit_spins[(hit_spins > 15) & (hit_spins <= 30)]) / total_exact
+        w3 = len(hit_spins[(hit_spins > 30) & (hit_spins <= 45)]) / total_exact
+        w4 = len(hit_spins[(hit_spins > 45) & (hit_spins <= 60)]) / total_exact
 
-        total_exact = len(exact_hits)
+        # Window 1: 1–15
+        b1 = high_bet if w1 >= 0.30 else (base_bet if w1 >= 0.15 else low_bet)
+        phases.append({
+            "spins": 15,
+            "bet": b1,
+            "note": "🔥 High-Hit Concentration" if b1 == high_bet else "Initial Probe Zone"
+        })
 
-        # Build dynamic 3-to-4 phase breakdown based on concentration
-        phases = []
+        # Window 2: 16–30
+        b2 = high_bet if w2 >= 0.25 else (base_bet if w2 >= 0.15 else low_bet)
+        phases.append({
+            "spins": 15,
+            "bet": b2,
+            "note": "🔥 Peak Hit Concentration" if b2 == high_bet else "Mid-Cycle Transition"
+        })
 
-        # Window 1 (1–15 Spins)
-        w1_spins = min(15, target_max_spin)
-        w1_bet = high_bet if (w1_hits / total_exact) >= 0.40 else low_bet
-        w1_note = "🔥 High-Hit Concentration Zone" if w1_bet == high_bet else "Initial Probe Zone"
-        phases.append({"spins": w1_spins, "bet": w1_bet, "note": w1_note})
+        # Window 3: 31–45
+        b3 = high_bet if w3 >= 0.20 else (base_bet if w3 >= 0.12 else low_bet)
+        phases.append({
+            "spins": 15,
+            "bet": b3,
+            "note": "🔥 Late Hit Zone" if b3 == high_bet else "Late Checkpoint"
+        })
 
-        # Window 2 (16–30 Spins)
-        if target_max_spin > 15:
-            w2_spins = min(15, target_max_spin - 15)
-            w2_bet = high_bet if (w2_hits / total_exact) >= 0.30 else base_bet
-            w2_note = "🔥 Peak Hit Concentration Zone" if w2_bet == high_bet else "Mid-Cycle Transition"
-            phases.append({"spins": w2_spins, "bet": w2_bet, "note": w2_note})
+        # Optional Window 4: 46–60 only if meaningful concentration
+        if w4 >= 0.10:
+            b4 = base_bet if w4 >= 0.15 else low_bet
+            phases.append({
+                "spins": 15,
+                "bet": b4,
+                "note": "Extended Concentration" if b4 == base_bet else "Exit Prep"
+            })
 
-        # Window 3 (31–45 Spins)
-        if target_max_spin > 30:
-            w3_spins = min(15, target_max_spin - 30)
-            w3_bet = high_bet if (w3_hits / total_exact) >= 0.30 else low_bet
-            w3_note = "🔥 Late Hit Concentration Zone" if w3_bet == high_bet else "Late Checkpoint (Exit Prep)"
-            phases.append({"spins": w3_spins, "bet": w3_bet, "note": w3_note})
+        # Cheap grind after main window (recover later on repeats)
+        phases.append({
+            "spins": 30,
+            "bet": grind_bet,
+            "note": "Low Grind (save bankroll for repeats)"
+        })
 
-        # Window 4 (46+ Spins, if high spin threshold exists)
-        if target_max_spin > 45:
-            w4_spins = target_max_spin - 45
-            w4_bet = high_bet if (w4_hits / total_exact) >= 0.25 else low_bet
-            w4_note = "Extended Deep Trigger Zone" if w4_bet == high_bet else "Final Exit Checkpoint"
-            phases.append({"spins": w4_spins, "bet": w4_bet, "note": w4_note})
-
-    # Clean zero or negative spin phases
     phases = [p for p in phases if p["spins"] > 0]
-
     total_spins = sum(p["spins"] for p in phases)
 
-    # Stretch toward 150–175 spin evaluation window while preserving
-    # relative concentration weights. Prefer ~160 as the sweet spot.
-    TARGET_SPINS = 160
-    if total_spins > 0 and total_spins < 140:
-        scale_factor = TARGET_SPINS / total_spins
-        for p in phases:
-            p["spins"] = max(5, int(round(p["spins"] * scale_factor)))
-        total_spins = sum(p["spins"] for p in phases)
-    elif total_spins == 0:
-        # Absolute fallback
-        phases = [
-            {"spins": 40, "bet": low_bet, "note": "Initial Probe Zone"},
-            {"spins": 40, "bet": base_bet, "note": "Mid-Cycle Transition"},
-            {"spins": 40, "bet": low_bet, "note": "Late Checkpoint"},
-            {"spins": 40, "bet": low_bet, "note": "Extended Deep Zone"},
-        ]
-        total_spins = 160
-
-    # Target check-in band $250–$400. Scale bets up if too low, soft-cap if above 400.
+    # Target check-in roughly $250–$400 without distorting early high bets too much
     raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-    if raw_alloc < 250 and raw_alloc > 0:
-        boost = 280 / raw_alloc  # aim near middle of band
-        for p in phases:
-            p["bet"] = snap_to_valid_bet(p["bet"] * boost)
+    if raw_alloc < 220 and raw_alloc > 0:
+        # Prefer boosting the non-grind phases
+        boostable = [p for p in phases if p["bet"] > grind_bet]
+        if boostable:
+            deficit = 260 - raw_alloc
+            per = deficit / sum(p["spins"] for p in boostable)
+            for p in boostable:
+                p["bet"] = snap_to_valid_bet(p["bet"] + per)
         raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
     elif raw_alloc > 420:
         shrink = 380 / raw_alloc
         for p in phases:
-            p["bet"] = snap_to_valid_bet(p["bet"] * shrink)
+            if p["bet"] > grind_bet:
+                p["bet"] = snap_to_valid_bet(p["bet"] * shrink)
         raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
 
     checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
-    # Final hard ceiling still applied in scale_phases_for_bankroll (400)
     return phases, total_spins, checkin_alloc
 
 def build_priority_dataset(live_df, target_day=None, strict_mode=True):
@@ -1031,7 +1033,11 @@ def build_agent_context():
     """Shared context builder so both Gemini and the Groq fallback see
     the same live picture — including bankroll-scaled $ amounts, not
     the raw generic ones, so AI-suggested bets match what the boards show."""
-    available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+    available_slots = [
+        s for s in st.session_state.slots_db
+        if s["slot"] not in st.session_state.played_basket
+        and (s.get("total_hits") or s.get("rehit_metrics", {}).get("first_hit_total") or 0) > 5
+    ]
 
     slot_context_summary = []
     for s in available_slots[:20]:
@@ -1269,7 +1275,12 @@ with st.sidebar.form("quick_mark_played_form"):
 if st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
 
-    available_slots = [s for s in st.session_state.slots_db if s["slot"] not in st.session_state.played_basket]
+    # Only show slots with enough data (total attempts > 5)
+    available_slots = [
+        s for s in st.session_state.slots_db
+        if s["slot"] not in st.session_state.played_basket
+        and (s.get("total_hits") or s.get("rehit_metrics", {}).get("first_hit_total") or 0) > 5
+    ]
     current_display = available_slots[:st.session_state.display_limit]
 
     table_data = []
