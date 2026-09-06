@@ -821,40 +821,54 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
         w3 = len(hit_spins[(hit_spins > 30) & (hit_spins <= 45)]) / total_exact
         w4 = len(hit_spins[(hit_spins > 45) & (hit_spins <= 60)]) / total_exact
 
-        # Window 1: 1–15
-        b1 = high_bet if w1 >= 0.30 else (base_bet if w1 >= 0.15 else low_bet)
+        # Prefer practical varying sizes: high / mid / alt so consecutive differ naturally
+        # Common floor sizes: 2.50, 3.75, 5.00, 6.25, 7.50
+        mid_alt = snap_to_valid_bet((high_bet + base_bet) / 2)  # often 5 or 3.75
+        if mid_alt == high_bet:
+            mid_alt = base_bet
+
+        def _pick(strength, prefer_high=True):
+            if strength >= 0.30:
+                return high_bet if prefer_high else mid_alt
+            if strength >= 0.15:
+                return base_bet if prefer_high else mid_alt
+            return low_bet
+
+        b1 = _pick(w1, prefer_high=True)
         phases.append({
             "spins": 15,
             "bet": b1,
-            "note": "🔥 High-Hit Concentration" if b1 == high_bet else "Initial Probe Zone"
+            "note": "🔥 High-Hit Concentration" if b1 >= high_bet * 0.9 else "Initial Probe Zone"
         })
 
-        # Window 2: 16–30
-        b2 = high_bet if w2 >= 0.25 else (base_bet if w2 >= 0.15 else low_bet)
+        b2 = _pick(w2, prefer_high=False)
+        if b2 == b1:
+            b2 = high_bet if b1 != high_bet else base_bet
         phases.append({
             "spins": 15,
             "bet": b2,
-            "note": "🔥 Peak Hit Concentration" if b2 == high_bet else "Mid-Cycle Transition"
+            "note": "🔥 Peak Hit Concentration" if b2 >= high_bet * 0.9 else "Mid-Cycle Transition"
         })
 
-        # Window 3: 31–45
-        b3 = high_bet if w3 >= 0.20 else (base_bet if w3 >= 0.12 else low_bet)
+        b3 = _pick(w3, prefer_high=True)
+        if b3 == b2:
+            b3 = mid_alt if b2 != mid_alt else low_bet
         phases.append({
             "spins": 15,
             "bet": b3,
-            "note": "🔥 Late Hit Zone" if b3 == high_bet else "Late Checkpoint"
+            "note": "🔥 Late Hit Zone" if b3 >= high_bet * 0.9 else "Late Checkpoint"
         })
 
-        # Optional Window 4: 46–60 only if meaningful concentration
         if w4 >= 0.10:
             b4 = base_bet if w4 >= 0.15 else low_bet
+            if b4 == b3:
+                b4 = mid_alt if b3 != mid_alt else high_bet
             phases.append({
                 "spins": 15,
                 "bet": b4,
-                "note": "Extended Concentration" if b4 == base_bet else "Exit Prep"
+                "note": "Extended Concentration" if b4 >= base_bet else "Exit Prep"
             })
 
-        # Cheap grind after main window (recover later on repeats)
         phases.append({
             "spins": 30,
             "bet": grind_bet,
@@ -862,24 +876,55 @@ def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
         })
 
     phases = [p for p in phases if p["spins"] > 0]
+
+    # Practical bet ladder (common floor sizes) — used to break consecutive duplicates
+    BET_LADDER = [0.50, 1.00, 1.25, 1.50, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
+
+    def _nudge_away(prev_bet, desired):
+        """Pick nearest ladder bet that is not equal to prev_bet."""
+        desired = snap_to_valid_bet(desired)
+        if desired != prev_bet:
+            return desired
+        # Step up first, then down
+        try:
+            idx = BET_LADDER.index(desired)
+        except ValueError:
+            idx = 0
+        for offset in (1, -1, 2, -2, 3, -3):
+            j = idx + offset
+            if 0 <= j < len(BET_LADDER) and BET_LADDER[j] != prev_bet:
+                return BET_LADDER[j]
+        return desired
+
+    # Enforce: no two consecutive phases share the same bet
+    for i in range(1, len(phases)):
+        if phases[i]["bet"] == phases[i - 1]["bet"]:
+            phases[i]["bet"] = _nudge_away(phases[i - 1]["bet"], phases[i]["bet"])
+
     total_spins = sum(p["spins"] for p in phases)
 
     # Target check-in roughly $250–$400 without distorting early high bets too much
     raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
     if raw_alloc < 220 and raw_alloc > 0:
-        # Prefer boosting the non-grind phases
         boostable = [p for p in phases if p["bet"] > grind_bet]
         if boostable:
             deficit = 260 - raw_alloc
             per = deficit / sum(p["spins"] for p in boostable)
             for p in boostable:
                 p["bet"] = snap_to_valid_bet(p["bet"] + per)
+            # Re-enforce consecutive uniqueness after boost
+            for i in range(1, len(phases)):
+                if phases[i]["bet"] == phases[i - 1]["bet"]:
+                    phases[i]["bet"] = _nudge_away(phases[i - 1]["bet"], phases[i]["bet"])
         raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
     elif raw_alloc > 420:
         shrink = 380 / raw_alloc
         for p in phases:
             if p["bet"] > grind_bet:
                 p["bet"] = snap_to_valid_bet(p["bet"] * shrink)
+        for i in range(1, len(phases)):
+            if phases[i]["bet"] == phases[i - 1]["bet"]:
+                phases[i]["bet"] = _nudge_away(phases[i - 1]["bet"], phases[i]["bet"])
         raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
 
     checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
@@ -1312,24 +1357,44 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
 
     df_priority = pd.DataFrame(table_data)
 
-    # Force full-width + allow text wrapping so long phase strings don't force endless horizontal drag
-    st.dataframe(
-        df_priority,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Rank": st.column_config.NumberColumn(width="small"),
-            "Family": st.column_config.TextColumn(width="medium"),
-            "Slot": st.column_config.TextColumn(width="medium"),
-            "Check-In": st.column_config.TextColumn(width="small"),
-            "Plan for 1st hit": st.column_config.TextColumn(width="large"),
-            "1st Attempt hits / Total": st.column_config.TextColumn(width="small"),
-            "Avg 1st Win Mult": st.column_config.TextColumn(width="small"),
-            "Plan for 2nd hit": st.column_config.TextColumn(width="large"),
-            "2nd Attempt hits / Total": st.column_config.TextColumn(width="small"),
-            "Avg 2nd Win Mult": st.column_config.TextColumn(width="small"),
-        }
-    )
+    # HTML table with word-wrap so long phase strings don't force endless horizontal drag
+    if not df_priority.empty:
+        html = df_priority.to_html(index=False, escape=True, classes="priority-table")
+        styled = f"""
+        <style>
+        .priority-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+            table-layout: fixed;
+        }}
+        .priority-table th, .priority-table td {{
+            border: 1px solid #444;
+            padding: 6px 8px;
+            text-align: left;
+            vertical-align: top;
+            white-space: normal;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+        }}
+        .priority-table th {{
+            background: #1e1e1e;
+            position: sticky;
+            top: 0;
+        }}
+        .priority-table td:nth-child(5),
+        .priority-table td:nth-child(8) {{
+            min-width: 180px;
+            max-width: 280px;
+        }}
+        </style>
+        <div style="overflow-x:auto; max-width:100%;">
+        {html}
+        </div>
+        """
+        st.markdown(styled, unsafe_allow_html=True)
+    else:
+        st.info("No slots with more than 5 attempts available for today's filter.")
 
     if len(available_slots) > st.session_state.display_limit:
         if st.button("➕ Load 15 More Slots"):
