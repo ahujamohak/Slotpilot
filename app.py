@@ -1427,7 +1427,7 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Quick action prompt chips
+    # Quick action prompt chips (original buttons)
     col_q1, col_q2 = st.columns(2)
     prompt_to_submit = None
 
@@ -1435,6 +1435,15 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
         prompt_to_submit = f"What are the top 3 best slots to play today ({st.session_state.selected_day}) based on our Day-RVI matrix?"
     if col_q2.button("🔄 Check High Multi-Hit Machines"):
         prompt_to_submit = "Which slots currently have the highest repeat-hit rate (>30% of 2nd attempts) and should be re-probed immediately after a feature win?"
+
+    # Ready-to-copy template prompts
+    st.markdown("**Quick templates** (copy → paste into the chat box and edit numbers as needed):")
+    st.code("Suggest the next 3 unplayed machines for today given current bankroll.", language=None)
+    st.code("I just hit a feature on [SLOT] at spin [N] for [X]x — should I re-probe or lock and move on?", language=None)
+    st.code("Give me a short re-probe plan for the highest multi-hit-rate machines still available.", language=None)
+    st.code("Current bankroll is $X / start $Y / target $Z — adjust risk posture and top recommendations.", language=None)
+    st.code("Which machines have the strongest early (≤20 spin) 2nd-hit clustering today?", language=None)
+    st.code("Build me a 3-machine rotation that stays under $300 check-in each.", language=None)
 
     user_input = st.chat_input("Ask your AI Execution Agent anything about today's session strategy...")
     if user_input:
