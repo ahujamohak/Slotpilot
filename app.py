@@ -1357,44 +1357,26 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
 
     df_priority = pd.DataFrame(table_data)
 
-    # HTML table with word-wrap so long phase strings don't force endless horizontal drag
-    if not df_priority.empty:
-        html = df_priority.to_html(index=False, escape=True, classes="priority-table")
-        styled = f"""
-        <style>
-        .priority-table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.85rem;
-            table-layout: fixed;
-        }}
-        .priority-table th, .priority-table td {{
-            border: 1px solid #444;
-            padding: 6px 8px;
-            text-align: left;
-            vertical-align: top;
-            white-space: normal;
-            word-wrap: break-word;
-            overflow-wrap: break-word;
-        }}
-        .priority-table th {{
-            background: #1e1e1e;
-            position: sticky;
-            top: 0;
-        }}
-        .priority-table td:nth-child(5),
-        .priority-table td:nth-child(8) {{
-            min-width: 180px;
-            max-width: 280px;
-        }}
-        </style>
-        <div style="overflow-x:auto; max-width:100%;">
-        {html}
-        </div>
-        """
-        st.markdown(styled, unsafe_allow_html=True)
-    else:
+    if df_priority.empty:
         st.info("No slots with more than 5 attempts available for today's filter.")
+    else:
+        st.dataframe(
+            df_priority,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Rank": st.column_config.NumberColumn(width="small"),
+                "Family": st.column_config.TextColumn(width="medium"),
+                "Slot": st.column_config.TextColumn(width="medium"),
+                "Check-In": st.column_config.TextColumn(width="small"),
+                "Plan for 1st hit": st.column_config.TextColumn(width="large"),
+                "1st Attempt hits / Total": st.column_config.TextColumn(width="small"),
+                "Avg 1st Win Mult": st.column_config.TextColumn(width="small"),
+                "Plan for 2nd hit": st.column_config.TextColumn(width="large"),
+                "2nd Attempt hits / Total": st.column_config.TextColumn(width="small"),
+                "Avg 2nd Win Mult": st.column_config.TextColumn(width="small"),
+            }
+        )
 
     if len(available_slots) > st.session_state.display_limit:
         if st.button("➕ Load 15 More Slots"):
