@@ -263,14 +263,23 @@ def parse_session_log_data(live_df, slot_name, family_name):
     df["_spins"] = parsed_spins.apply(lambda x: x[0])
     df["_is_censored"] = parsed_spins.apply(lambda x: x[1])
 
-    df["_attempt"] = _to_num(df[attempt_col]) if attempt_col else 1
+    if attempt_col:
+        df["_attempt"] = _to_num(df[attempt_col]).fillna(1)
+    else:
+        df["_attempt"] = 1
+
     # Primary feature sequence number (1 = first feature, 2 = first repeat, ...)
     if feature_num_col:
-        df["_feature_num"] = _to_num(df[feature_num_col]).fillna(0).astype(int)
+        df["_feature_num"] = _to_num(df[feature_num_col]).fillna(0)
     else:
         df["_feature_num"] = 0
+
     # Keep legacy _hit for backward compatibility
-    df["_hit"] = _to_num(df[hit_num_col]).fillna(0) if hit_num_col else df["_feature_num"]
+    if hit_num_col:
+        df["_hit"] = _to_num(df[hit_num_col]).fillna(0)
+    else:
+        df["_hit"] = df["_feature_num"]
+
     df["_win"] = _to_num(df[win_amt_col]) if win_amt_col else 0.0
     df["_mult"] = _to_num(df[mult_col]) if mult_col else 0.0
 
@@ -498,16 +507,18 @@ def compute_repeat_spin_bins(parsed_df):
     if parsed_df is None or parsed_df.empty:
         return "No 2nd-feature data"
 
-    # Prefer the dedicated feature sequence column; fall back to legacy _hit
+    # Prefer Feature Win Number == 2; fallback Hit==2 AND Attempt==2
+    second_hits = pd.DataFrame()
     if "_feature_num" in parsed_df.columns:
         second_hits = parsed_df[
             (parsed_df["_feature_num"] == 2) &
             (~parsed_df["_is_censored"]) &
             (parsed_df["_spins"].notna())
         ]
-    else:
+    if second_hits.empty:
         second_hits = parsed_df[
             (parsed_df["_hit"] == 2) &
+            (parsed_df["_attempt"] == 2) &
             (~parsed_df["_is_censored"]) &
             (parsed_df["_spins"].notna())
         ]
@@ -562,16 +573,22 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
 
     total_logs = len(parsed_df)
 
+    # Ensure numeric types for reliable comparison
+    for col in ["_feature_num", "_hit", "_attempt", "_mult", "_spins"]:
+        if col in parsed_df.columns:
+            parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
+
     # ---------- 1st feature ----------
     # Prefer Feature Win Number == 1.
     # Fallback: Hit Number == 1 AND Attempt Number == 1 (both required).
-    if "_feature_num" in parsed_df.columns and (parsed_df["_feature_num"] == 1).any():
+    first_hits = pd.DataFrame()
+    if "_feature_num" in parsed_df.columns:
         first_hits = parsed_df[
             (parsed_df["_feature_num"] == 1) &
             (~parsed_df["_is_censored"]) &
             (parsed_df["_spins"].notna())
         ]
-    else:
+    if first_hits.empty:
         first_hits = parsed_df[
             (parsed_df["_hit"] == 1) &
             (parsed_df["_attempt"] == 1) &
@@ -579,29 +596,30 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
             (parsed_df["_spins"].notna())
         ]
     first_hit_count = len(first_hits)
-    avg_first_mult = round(first_hits["_mult"].mean(), 1) if not first_hits.empty else 0.0
+    avg_first_mult = round(float(first_hits["_mult"].mean()), 1) if not first_hits.empty else 0.0
 
     # ---------- 2nd feature ----------
     # Prefer Feature Win Number == 2.
     # Fallback: Hit Number == 2 AND Attempt Number == 2 (both required).
-    if "_feature_num" in parsed_df.columns and (parsed_df["_feature_num"] == 2).any():
+    repeat_entries = pd.DataFrame()
+    if "_feature_num" in parsed_df.columns:
         repeat_entries = parsed_df[
             (parsed_df["_feature_num"] == 2) &
             (~parsed_df["_is_censored"])
         ]
-        attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
-        if attempt2_rows.empty:
-            attempt2_population = len(repeat_entries)
-        else:
-            attempt2_population = len(attempt2_rows)
-    else:
-        attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
-        attempt2_population = len(attempt2_rows)
+    if repeat_entries.empty:
         repeat_entries = parsed_df[
             (parsed_df["_hit"] == 2) &
             (parsed_df["_attempt"] == 2) &
             (~parsed_df["_is_censored"])
         ]
+
+    # Population for rate = rows where a 2nd attempt was actually made
+    attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
+    if attempt2_rows.empty and not repeat_entries.empty:
+        attempt2_population = len(repeat_entries)
+    else:
+        attempt2_population = len(attempt2_rows)
 
     repeat_count = len(repeat_entries)
 
