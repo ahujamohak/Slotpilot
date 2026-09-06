@@ -1218,22 +1218,8 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
         rehit = item.get("rehit_metrics", {})
         scaled_phases, scaled_checkin = scale_phases_for_bankroll(item.get("phases", []), item.get("checkin_alloc", 0.0))
         plan_1st = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(scaled_phases)])
-
-        # Mini phase plan for 2nd hit / re-probe
-        multi_rate = rehit.get("multi_hit_rate", 0.0)
-        avg_att2 = rehit.get("avg_attempt2_spins", 0.0)
-        p1_spins = scaled_phases[0]["spins"] if scaled_phases else 20
-        p1_bet = scaled_phases[0]["bet"] if scaled_phases else 2.50
-        if multi_rate >= 30.0:
-            # Strong repeat → full reset to Phase 1 style
-            plan_2nd = f"P1: {p1_spins}s @ ${p1_bet:.2f} (reset)"
-        elif multi_rate >= 15.0 and avg_att2 > 0:
-            # Moderate → shorter re-probe around historical avg
-            reprobe_spins = max(10, min(30, int(round(avg_att2))))
-            plan_2nd = f"P1: {reprobe_spins}s @ ${p1_bet:.2f} (re-probe)"
-        else:
-            # Low / no data → short exit probe only
-            plan_2nd = f"P1: 15s @ ${p1_bet:.2f} (exit after)"
+        # Plan for 2nd hit uses the same full multi-phase structure
+        plan_2nd = plan_1st
 
         att2_pop = rehit.get("attempt2_population", 0)
         first_hits = rehit.get("first_hit_count", 0)
@@ -1269,7 +1255,7 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
             "Plan for 1st hit": st.column_config.TextColumn(width="large"),
             "1st Attempt hits / Total": st.column_config.TextColumn(width="small"),
             "Avg 1st Win Mult": st.column_config.TextColumn(width="small"),
-            "Plan for 2nd hit": st.column_config.TextColumn(width="medium"),
+            "Plan for 2nd hit": st.column_config.TextColumn(width="large"),
             "2nd Attempt hits / Total": st.column_config.TextColumn(width="small"),
             "Avg 2nd Win Mult": st.column_config.TextColumn(width="small"),
         }
