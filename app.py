@@ -691,13 +691,15 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
         if first_total > 5:
             first_hits = rehit.get("first_hit_count", 0)
             success_rate = (first_hits / first_total) if first_total > 0 else 0.0
+            avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
             
             s_copy = dict(s)
             s_copy["_calc_success_rate"] = success_rate
+            s_copy["_avg_first_multiplier"] = avg_1st_mult
             filtered_slots.append(s_copy)
 
-    # Filter 2: Sort based on success rate from highest to lowest
-    sorted_slots = sorted(filtered_slots, key=lambda x: x["_calc_success_rate"], reverse=True)
+    # Filter 2: Sort based on Average 1st Multiplier from highest to lowest
+    sorted_slots = sorted(filtered_slots, key=lambda x: x["_avg_first_multiplier"], reverse=True)
     current_display = sorted_slots[:st.session_state.display_limit]
 
     table_data = []
@@ -762,14 +764,17 @@ elif st.session_state.active_tab == "📈 Overall Performance":
             if first_total > 5:
                 first_hits = rehit.get("first_hit_count", 0)
                 success_rate = (first_hits / first_total) if first_total > 0 else 0.0
+                avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
                 overall_slots.append({
                     "family": fam,
                     "slot": slot,
                     "calc_success_rate": success_rate,
+                    "avg_first_multiplier": avg_1st_mult,
                     "rehit_metrics": rehit
                 })
 
-    sorted_overall = sorted(overall_slots, key=lambda x: x["calc_success_rate"], reverse=True)
+    # Sort based on Average 1st Multiplier from highest to lowest
+    sorted_overall = sorted(overall_slots, key=lambda x: x["avg_first_multiplier"], reverse=True)
 
     table_data_overall = []
     for rank, item in enumerate(sorted_overall, 1):
