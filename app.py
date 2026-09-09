@@ -5,7 +5,6 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit_gsheets import GSheetsConnection
 from google import genai
 from google.genai import types
@@ -24,10 +23,8 @@ st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wid
 # Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Model / worksheet constants — keep these in one place so a future
-# provider deprecation is a one-line fix instead of a code hunt.
 GEMINI_MODEL = "gemini-3.6-flash"
-GROQ_MODEL = "openai/gpt-oss-120b"  # llama-3.3-70b-versatile was retired Aug 16 2026
+GROQ_MODEL = "openai/gpt-oss-120b"
 SESSION_STATE_WORKSHEET = "Live Session"
 SESSION_LOG_WORKSHEET = "Session Log"
 
@@ -40,14 +37,8 @@ TAB_OPTIONS = [
 ]
 
 # ==========================================
-# 0B. SESSION PERSISTENCE (survives dropped mobile connections)
+# 0B. SESSION PERSISTENCE
 # ==========================================
-# Streamlit's session_state lives per-WebSocket-connection. A phone
-# screen lock / tab switch / network drop can silently reset bankroll,
-# played basket, etc. We mirror the essentials to a "Live Session"
-# worksheet so a reconnect on the SAME calendar day can restore them.
-# If that worksheet doesn't exist yet, this fails soft and the app
-# behaves exactly as before (fresh state each load).
 
 def load_persisted_state():
     try:
@@ -118,7 +109,6 @@ if "strict_day_penalty" not in st.session_state:
 if "selected_day" not in st.session_state:
     st.session_state.selected_day = datetime.now().strftime("%A")
 
-# Helper Functions for Basket Management
 def mark_slot_played(slot_name: str) -> str:
     if slot_name not in st.session_state.played_basket:
         st.session_state.played_basket.append(slot_name)
@@ -132,25 +122,19 @@ def restore_slot(slot_name: str):
         persist_session_state()
 
 # ==========================================
-# 1. MASTER LIST & MULTI-PHASE CONFIG
+# 1. MASTER LIST & STRATEGY CONSTANTS
 # ==========================================
 
-VALID_SLOT_BETS = [0.50, 1.00, 1.25, 1.50, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
+# Fixed $5 Bet across 5 Denominations ($500 Check-in Plan with Dynamic Line Win Spins)
+STRATEGY_STEPS = [
+    {"step": 1, "budget": 100, "denom": "$1.00", "bet": 5.00, "spins": "20+ (Dynamic)"},
+    {"step": 2, "budget": 100, "denom": "$0.10", "bet": 5.00, "spins": "20+ (Dynamic)"},
+    {"step": 3, "budget": 100, "denom": "$0.05", "bet": 5.00, "spins": "20+ (Dynamic)"},
+    {"step": 4, "budget": 100, "denom": "$0.02", "bet": 5.00, "spins": "20+ (Dynamic)"},
+    {"step": 5, "budget": 100, "denom": "$0.01", "bet": 5.00, "spins": "20+ (Dynamic)"},
+]
 
-def snap_to_valid_bet(bet: float) -> float:
-    """Snaps any arbitrary calculated bet to the nearest valid slot bet denomination."""
-    return min(VALID_SLOT_BETS, key=lambda x: abs(x - bet))
-
-CUSTOM_HIT_ZONES = {
-    "New York Nights": {
-        "phases": [
-            {"spins": 15, "bet": 7.50, "note": "Early Trigger Zone (Spin 15 Hit)"},
-            {"spins": 5,  "bet": 5.00, "note": "Dead Spin Filter (Stop if 0x)"},
-            {"spins": 15, "bet": 3.75, "note": "Mid-Cycle Transition"},
-            {"spins": 15, "bet": 7.50, "note": "Late Trigger Zone (Spin 48 Hit)"}
-        ]
-    }
-}
+STRATEGY_PLAN_SUMMARY = "5 Denoms ($1 → 10c → 5c → 2c → 1c) @ Fixed $5 Bet ($100 budget / denom)"
 
 SLOT_MASTER_LIST = {
     "All Aboard The Lucky Link": ["Go West", "Shinobi"],
@@ -194,6 +178,10 @@ SLOT_MASTER_LIST = {
     "Wild Rumble": ["Shen Shan"]
 }
 
+# ==========================================
+# 2. SHEET DATA INSPECTION & METRICS ENGINE
+# ==========================================
+
 @st.cache_data(ttl=15)
 def load_and_inspect_sheet():
     try:
@@ -206,10 +194,6 @@ def load_and_inspect_sheet():
         return pd.DataFrame(), []
 
 def parse_session_log_data(live_df, slot_name, family_name):
-    """
-    Parses live sheet logs for a specific slot/family to clean spins,
-    distinguish exact hits from censored exit entries (32+), and extract win metrics.
-    """
     if live_df.empty:
         return pd.DataFrame()
 
@@ -218,8 +202,6 @@ def parse_session_log_data(live_df, slot_name, family_name):
     fam_col = cols.get("family") or cols.get("slot family")
     spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
     attempt_col = cols.get("attempt number") or cols.get("attempt")
-    # Prefer "Feature Win Number" (the sequence of the feature: 1=first, 2=first repeat, etc.)
-    # Fall back to classic "Hit Number"
     feature_num_col = (
         cols.get("feature win number")
         or cols.get("feature number")
@@ -234,7 +216,6 @@ def parse_session_log_data(live_df, slot_name, family_name):
         return pd.DataFrame()
 
     df = live_df.copy()
-    # Case-insensitive exact match on slot + family
     df = df[
         (df[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()) &
         (df[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower())
@@ -264,299 +245,16 @@ def parse_session_log_data(live_df, slot_name, family_name):
     df["_spins"] = parsed_spins.apply(lambda x: x[0])
     df["_is_censored"] = parsed_spins.apply(lambda x: x[1])
 
-    if attempt_col:
-        df["_attempt"] = _to_num(df[attempt_col]).fillna(1)
-    else:
-        df["_attempt"] = 1
-
-    # Primary feature sequence number (1 = first feature, 2 = first repeat, ...)
-    if feature_num_col:
-        df["_feature_num"] = _to_num(df[feature_num_col]).fillna(0)
-    else:
-        df["_feature_num"] = 0
-
-    # Keep legacy _hit for backward compatibility
-    if hit_num_col:
-        df["_hit"] = _to_num(df[hit_num_col]).fillna(0)
-    else:
-        df["_hit"] = df["_feature_num"]
-
+    df["_attempt"] = _to_num(df[attempt_col]).fillna(1) if attempt_col else 1
+    df["_feature_num"] = _to_num(df[feature_num_col]).fillna(0) if feature_num_col else 0
+    df["_hit"] = _to_num(df[hit_num_col]).fillna(0) if hit_num_col else df["_feature_num"]
     df["_win"] = _to_num(df[win_amt_col]) if win_amt_col else 0.0
     df["_mult"] = _to_num(df[mult_col]) if mult_col else 0.0
 
-    # Day of week (for soft day matching)
     day_col = cols.get("day") or cols.get("day of week")
-    if day_col:
-        df["_day"] = df[day_col].astype(str).str.strip()
-    else:
-        df["_day"] = ""
+    df["_day"] = df[day_col].astype(str).str.strip() if day_col else ""
 
     return df
-
-def compute_slot_spin_ceiling(parsed_df):
-    """
-    Dynamic spin ceiling per slot based on actual hit concentration,
-    with outliers removed.
-
-    - Uses exact hits (non-censored) as primary signal.
-    - Uses censored exits only to avoid underestimating ceiling.
-    - Removes extreme outliers via IQR.
-    - Returns a ceiling that reflects where most wins cluster.
-    """
-    if parsed_df.empty:
-        return 60  # conservative default
-
-    exact_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
-    if exact_hits.empty:
-        return 60
-
-    spins = exact_hits["_spins"].dropna()
-    if len(spins) < 5:
-        return int(max(30, spins.max())) if len(spins) > 0 else 60
-
-    q1 = spins.quantile(0.25)
-    q3 = spins.quantile(0.75)
-    iqr = q3 - q1
-    upper_bound = q3 + 1.5 * iqr
-
-    filtered = spins[spins <= upper_bound]
-    if len(filtered) < 3:
-        filtered = spins
-
-    ceiling_90 = int(filtered.quantile(0.90))
-    ceiling_max = int(filtered.max())
-
-    # Use 90th percentile but never exceed max of filtered hits by more than 10 spins
-    ceiling = min(ceiling_90, ceiling_max + 10)
-
-    # Global safety clamp
-    return max(20, min(ceiling, 120))
-
-def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
-    """
-    Dynamically generates phase spin boundaries and bet sizing based on:
-    1. Exact feature hit spin distribution vs censored (32+) exit thresholds.
-    2. Multiplier strength (high multiplier = scale up bet sizing).
-    3. Concentrated hit windows (e.g. 1-15, 16-30, 31-45, 46+ spins).
-
-    NOTE: This returns BASE phase sizing driven only by the slot's own
-    history. Bankroll-aware scaling is applied separately at render time
-    via scale_phases_for_bankroll(), so this function stays reusable
-    regardless of live bankroll.
-    """
-    if slot_name in CUSTOM_HIT_ZONES:
-        phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
-        total_spins = sum(p["spins"] for p in phases)
-        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-        checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
-        return phases, total_spins, checkin_alloc
-
-    parsed_df = parse_session_log_data(live_df, slot_name, family_name)
-    if parsed_df.empty:
-        # Fallback generic 4-phase plan
-        base_bet = 2.50
-        phases = [
-            {"spins": 15, "bet": base_bet, "note": "Initial Probe Zone"},
-            {"spins": 15, "bet": base_bet * 2, "note": "Peak Hit Concentration Zone"},
-            {"spins": 15, "bet": base_bet, "note": "Late Checkpoint (Exit Prep)"},
-            {"spins": 30, "bet": base_bet * 2, "note": "Extended Deep Trigger Zone"},
-        ]
-        total_spins = sum(p["spins"] for p in phases)
-        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-        checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
-        return phases, total_spins, checkin_alloc
-
-    exact_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
-    censored_entries = parsed_df[parsed_df["_is_censored"]]
-
-    # Dynamic ceiling from sheet (ignores outliers like rare 100+ or 110+ spins)
-    dynamic_ceiling = compute_slot_spin_ceiling(parsed_df)
-
-    # Use censored exits only to avoid underestimating ceiling
-    max_censored_spin = censored_entries["_spins"].max() if not censored_entries.empty else 0
-    target_max_spin = int(max(dynamic_ceiling, max_censored_spin, 30))
-
-    # Bet sizing baseline from multipliers
-    avg_mult = exact_hits["_mult"].mean() if not exact_hits.empty else 0.0
-    high_bet = 5.00 if avg_mult >= 40.0 else 2.50
-    low_bet = 2.50 if avg_mult >= 40.0 else 1.25
-
-    hit_spins = exact_hits["_spins"]
-    total_exact = len(exact_hits) if not exact_hits.empty else 1  # avoid div/0
-
-    w1_hits = len(hit_spins[hit_spins <= 15])
-    w2_hits = len(hit_spins[(hit_spins > 15) & (hit_spins <= 30)])
-    w3_hits = len(hit_spins[(hit_spins > 30) & (hit_spins <= 45)])
-    w4_hits = len(hit_spins[(hit_spins > 45) & (hit_spins <= target_max_spin)])
-
-    phases = []
-
-    # Window 1 (1–15 Spins)
-    w1_spins = min(15, target_max_spin)
-    w1_bet = high_bet if (w1_hits / total_exact) >= 0.40 else low_bet
-    w1_note = "🔥 High-Hit Concentration Zone" if w1_bet == high_bet else "Initial Probe Zone"
-    phases.append({"spins": w1_spins, "bet": w1_bet, "note": w1_note})
-
-    # Window 2 (16–30 Spins)
-    if target_max_spin > 15:
-        w2_spins = min(15, max(0, target_max_spin - w1_spins))
-        w2_bet = high_bet if (w2_hits / total_exact) >= 0.30 else low_bet
-        w2_note = "Peak Hit Concentration Zone" if w2_bet == high_bet else "Mid-Cycle Probe Zone"
-        phases.append({"spins": w2_spins, "bet": w2_bet, "note": w2_note})
-
-    # Window 3 (31–45 Spins)
-    if target_max_spin > 30:
-        w3_spins = min(15, max(0, target_max_spin - (w1_spins + (phases[1]["spins"] if len(phases) > 1 else 0))))
-        w3_bet = high_bet if (w3_hits / total_exact) >= 0.25 else low_bet
-        w3_note = "Late Trigger Zone" if w3_bet == high_bet else "Late Checkpoint (Exit Prep)"
-        phases.append({"spins": w3_spins, "bet": w3_bet, "note": w3_note})
-
-    # Window 4 (46+ Spins) — only if ceiling actually extends beyond 45
-    if target_max_spin > 45:
-        remaining_spins = max(0, target_max_spin - sum(p["spins"] for p in phases))
-        if remaining_spins > 0:
-            # If most hits are <= dynamic_ceiling, treat deep window as low-bet bleed protection
-            deep_hit_ratio = w4_hits / total_exact
-            w4_bet = high_bet if deep_hit_ratio >= 0.20 else low_bet
-            w4_note = "Extended Deep Trigger Zone" if w4_bet == high_bet else "Deep Exit Protection Zone"
-            phases.append({"spins": remaining_spins, "bet": w4_bet, "note": w4_note})
-
-    total_spins = sum(p["spins"] for p in phases)
-    raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-    checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
-
-    return phases, total_spins, checkin_alloc
-# # ==========================================
-# # 2. SHEET DATA INSPECTION & CALCULATION ENGINE
-# # ==========================================
-
-# @st.cache_data(ttl=15)
-# def load_and_inspect_sheet():
-#     try:
-#         df = conn.read(worksheet=SESSION_LOG_WORKSHEET, ttl="0")
-#         if df.empty:
-#             return pd.DataFrame(), []
-#         df.columns = [str(c).strip() for c in df.columns]
-#         return df, list(df.columns)
-#     except Exception:
-#         return pd.DataFrame(), []
-
-# def parse_session_log_data(live_df, slot_name, family_name):
-#     """
-#     Parses live sheet logs for a specific slot/family to clean spins,
-#     distinguish exact hits from censored exit entries (32+), and extract win metrics.
-#     """
-#     if live_df.empty:
-#         return pd.DataFrame()
-
-#     cols = {str(c).lower(): c for c in live_df.columns}
-#     slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
-#     fam_col = cols.get("family") or cols.get("slot family")
-#     spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
-#     attempt_col = cols.get("attempt number") or cols.get("attempt")
-#     hit_num_col = cols.get("hit number") or cols.get("hit")
-#     mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
-#     win_amt_col = cols.get("win amount") or cols.get("win ($)")
-#     day_col = cols.get("day") or cols.get("day of week")
-
-#     matched = live_df.copy()
-
-#     # Dual filter on Family AND Slot Name to avoid cross-contamination
-#     has_slot = slot_col and slot_col in matched.columns
-#     has_fam = fam_col and fam_col in matched.columns
-
-#     if has_slot and has_fam:
-#         dual_matched = matched[
-#             (matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()) &
-#             (matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower())
-#         ]
-#         if not dual_matched.empty:
-#             matched = dual_matched
-#         else:
-#             matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-#     elif has_slot:
-#         matched = matched[matched[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
-#     elif has_fam:
-#         matched = matched[matched[fam_col].astype(str).str.strip().str.lower() == str(family_name).strip().lower()]
-
-#     if matched.empty:
-#         return pd.DataFrame()
-
-#     # Extract raw string spin
-#     spin_raw = matched[spin_col].astype(str).str.strip() if spin_col else pd.Series(["0"] * len(matched))
-
-#     # 1. Flag censored data ('32+' means no feature hit, exited after those spins)
-#     matched["_is_censored"] = spin_raw.str.contains(r'\+', regex=True)
-
-#     # 2. Clean numeric spin count
-#     matched["_spins"] = pd.to_numeric(spin_raw.str.extract(r'(\d+)')[0], errors='coerce').fillna(0)
-
-#     # 3. Clean numeric attempt, hit number, multiplier, and win amount
-#     matched["_attempt"] = pd.to_numeric(matched[attempt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(1) if attempt_col else 1
-#     matched["_hit"] = pd.to_numeric(matched[hit_num_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if hit_num_col else 0
-#     matched["_mult"] = pd.to_numeric(matched[mult_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if mult_col else 0
-#     matched["_win_amt"] = pd.to_numeric(matched[win_amt_col].astype(str).str.extract(r'(\d+)')[0], errors='coerce').fillna(0) if win_amt_col else 0
-#     matched["_day"] = matched[day_col].astype(str).str.strip() if day_col else ""
-
-#     return matched
-
-# ==========================================
-# CALCULATION ENGINE HELPERS (REHIT UPDATE)
-# ==========================================
-
-def compute_repeat_spin_bins(parsed_df):
-    """
-    For exact 2nd-feature hits (Feature Win Number / _feature_num == 2, non-censored),
-    compute % of those spins that fall into each 10-spin bin.
-    Returns a compact one-line string:
-        1-10 (xx%), 11-20 (yy%), ... 91-100 (zz%)
-    All values are computed dynamically from the live data — nothing is hardcoded.
-    """
-    if parsed_df is None or parsed_df.empty:
-        return "No 2nd-feature data"
-
-    # Prefer Feature Win Number == 2; fallback Hit==2 AND Attempt==2
-    second_hits = pd.DataFrame()
-    if "_feature_num" in parsed_df.columns:
-        second_hits = parsed_df[
-            (parsed_df["_feature_num"] == 2) &
-            (~parsed_df["_is_censored"]) &
-            (parsed_df["_spins"].notna())
-        ]
-    if second_hits.empty:
-        second_hits = parsed_df[
-            (parsed_df["_hit"] == 2) &
-            (parsed_df["_attempt"] == 2) &
-            (~parsed_df["_is_censored"]) &
-            (parsed_df["_spins"].notna())
-        ]
-
-    if second_hits.empty:
-        return "No 2nd-feature data"
-
-    spins = second_hits["_spins"].astype(float)
-    total = len(spins)
-    if total == 0:
-        return "No 2nd-feature data"
-
-    bins = [
-        (1, 10), (11, 20), (21, 30), (31, 40), (41, 50),
-        (51, 60), (61, 70), (71, 80), (81, 90), (91, 100)
-    ]
-    parts = []
-    for lo, hi in bins:
-        cnt = ((spins >= lo) & (spins <= hi)).sum()
-        pct = round((cnt / total) * 100.0, 1)
-        parts.append(f"{lo}-{hi} ({pct}%)")
-
-    # Optional: show >100 if any exist
-    over = (spins > 100).sum()
-    if over > 0:
-        pct_over = round((over / total) * 100.0, 1)
-        parts.append(f">100 ({pct_over}%)")
-
-    return ", ".join(parts)
-
 
 def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     default_res = {
@@ -567,9 +265,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "avg_repeat_multiplier": 0.0,
         "max_repeat_multiplier": 0.0,
         "avg_attempt2_spins": 0.0,
-        "repeat_recommendation": "No Repeat Data (Follow Baseline Probe)",
-        "repeat_spin_bins": "No 2nd-feature data",
-        # 1st-feature stats
+        "repeat_recommendation": "No Repeat Data",
         "first_hit_count": 0,
         "first_hit_total": 0,
         "avg_first_multiplier": 0.0,
@@ -581,82 +277,47 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
 
     total_logs = len(parsed_df)
 
-    # Ensure numeric types for reliable comparison
     for col in ["_feature_num", "_hit", "_attempt", "_mult", "_spins"]:
         if col in parsed_df.columns:
             parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
 
-    # ---------- 1st feature ----------
-    # Prefer Feature Win Number == 1.
-    # Fallback: Hit Number == 1 AND Attempt Number == 1 (both required).
     first_hits = pd.DataFrame()
     if "_feature_num" in parsed_df.columns:
         first_hits = parsed_df[
-            (parsed_df["_feature_num"] == 1) &
-            (~parsed_df["_is_censored"]) &
-            (parsed_df["_spins"].notna())
+            (parsed_df["_feature_num"] == 1) & (~parsed_df["_is_censored"]) & (parsed_df["_spins"].notna())
         ]
     if first_hits.empty:
         first_hits = parsed_df[
-            (parsed_df["_hit"] == 1) &
-            (parsed_df["_attempt"] == 1) &
-            (~parsed_df["_is_censored"]) &
-            (parsed_df["_spins"].notna())
+            (parsed_df["_hit"] == 1) & (parsed_df["_attempt"] == 1) & (~parsed_df["_is_censored"]) & (parsed_df["_spins"].notna())
         ]
     first_hit_count = len(first_hits)
     avg_first_mult = round(float(first_hits["_mult"].mean()), 1) if not first_hits.empty else 0.0
 
-    # ---------- 2nd feature ----------
-    # Prefer Feature Win Number == 2.
-    # Fallback: Hit Number == 2 AND Attempt Number == 2 (both required).
     repeat_entries = pd.DataFrame()
     if "_feature_num" in parsed_df.columns:
-        repeat_entries = parsed_df[
-            (parsed_df["_feature_num"] == 2) &
-            (~parsed_df["_is_censored"])
-        ]
+        repeat_entries = parsed_df[(parsed_df["_feature_num"] == 2) & (~parsed_df["_is_censored"])]
     if repeat_entries.empty:
-        repeat_entries = parsed_df[
-            (parsed_df["_hit"] == 2) &
-            (parsed_df["_attempt"] == 2) &
-            (~parsed_df["_is_censored"])
-        ]
+        repeat_entries = parsed_df[(parsed_df["_hit"] == 2) & (parsed_df["_attempt"] == 2) & (~parsed_df["_is_censored"])]
 
-    # Population for rate = rows where a 2nd attempt was actually made
     attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
-    if attempt2_rows.empty and not repeat_entries.empty:
-        attempt2_population = len(repeat_entries)
-    else:
-        attempt2_population = len(attempt2_rows)
+    attempt2_population = len(repeat_entries) if attempt2_rows.empty and not repeat_entries.empty else len(attempt2_rows)
 
     repeat_count = len(repeat_entries)
-
-    if total_logs == 0:
-        return default_res
-
-    if attempt2_population > 0:
-        multi_hit_rate = round((repeat_count / attempt2_population) * 100.0, 1)
-    else:
-        multi_hit_rate = 0.0
-
+    multi_hit_rate = round((repeat_count / attempt2_population) * 100.0, 1) if attempt2_population > 0 else 0.0
     avg_repeat_mult = round(repeat_entries["_mult"].mean(), 1) if not repeat_entries.empty else 0.0
     max_repeat_mult = round(repeat_entries["_mult"].max(), 1) if not repeat_entries.empty else 0.0
 
     att2_hits = repeat_entries[(repeat_entries["_spins"] > 0) & (~repeat_entries["_is_censored"])]
     avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
 
-    repeat_spin_bins = compute_repeat_spin_bins(parsed_df)
-
     if attempt2_population == 0 and repeat_count == 0:
         recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No second feature logged yet."
     elif multi_hit_rate >= 40.0:
-        recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}% of {attempt2_population} 2nd attempts hit): Reset to Phase 1 immediately after feature hit. (Attempt 2 avg trigger: {avg_att2_spins if avg_att2_spins > 0 else 'N/A'} spins)."
+        recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}%): Re-probe strategy immediately after win."
     elif multi_hit_rate >= 20.0:
-        recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}% of {attempt2_population} 2nd attempts hit): Finish current phase; re-probe if win > 20x."
-    elif repeat_count > 0:
-        recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}% of {attempt2_population} 2nd attempts hit): Single hit machine. Lock profits and exit."
+        recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}%): Re-probe if win > 20x."
     else:
-        recommendation = f"⚠️ NO REPEATS YET ({attempt2_population} 2nd attempts logged, 0 hit): Lock profits and exit."
+        recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}%): Single hit machine. Lock profits and exit."
 
     return {
         "repeat_sample_size": total_logs,
@@ -667,7 +328,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "max_repeat_multiplier": max_repeat_mult,
         "avg_attempt2_spins": avg_att2_spins,
         "repeat_recommendation": recommendation,
-        "repeat_spin_bins": repeat_spin_bins,
         "first_hit_count": first_hit_count,
         "first_hit_total": total_logs,
         "avg_first_multiplier": avg_first_mult,
@@ -686,14 +346,9 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     day_log_count = 0
     day_factor = 1.0
 
-    # Nearby days (soft match) — prefer same day, then adjacent, rather than distant weekdays
     days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     target_idx = days_order.index(target_day) if target_day in days_order else 0
-    nearby_days = {
-        days_order[target_idx],
-        days_order[(target_idx - 1) % 7],
-        days_order[(target_idx + 1) % 7],
-    }
+    nearby_days = {days_order[target_idx], days_order[(target_idx - 1) % 7], days_order[(target_idx + 1) % 7]}
 
     if "_day" in parsed_df.columns:
         day_matches = parsed_df[parsed_df["_day"].str.lower() == str(target_day).strip().lower()]
@@ -713,20 +368,13 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
                 else:
                     day_factor = 1.00
             elif nearby_count > 0:
-                # Soft credit for adjacent days when exact day has zero logs
                 day_factor = 0.95 if nearby_count >= 3 else 0.85
             else:
                 if strict_mode:
-                    if total_logs >= 5:
-                        day_factor = 0.55  # less harsh than before
-                    elif total_logs >= 3:
-                        day_factor = 0.70
-                    else:
-                        day_factor = 0.80
+                    day_factor = 0.55 if total_logs >= 5 else (0.70 if total_logs >= 3 else 0.80)
                 else:
                     day_factor = 0.90
 
-    # Filter for exact hits (excluding censored non-hits)
     actual_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
     hit_count = len(actual_hits)
 
@@ -746,190 +394,6 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     proof_str = f"75% Live Sheet ({hit_count}/{total_logs} hits, {day_log_count} on {target_day}s)"
 
     return final_rvi, proof_str, target_day, day_factor, day_log_count, total_logs
-
-def get_multi_phase_execution(slot_name, family_name, rvi_score, live_df):
-    """
-    Phase plan focused on early hit concentration (first ~45–60 spins).
-    - Higher bets where historical 1st-feature hits cluster.
-    - After the main window, a cheap grind phase (can be $0.50).
-    - Not forced to 160 spins — main money is in the early windows.
-    Bankroll scaling applied later via scale_phases_for_bankroll().
-    """
-    if slot_name in CUSTOM_HIT_ZONES:
-        phases = CUSTOM_HIT_ZONES[slot_name]["phases"]
-        total_spins = sum(p["spins"] for p in phases)
-        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-        checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
-        return phases, total_spins, checkin_alloc
-
-    parsed_df = parse_session_log_data(live_df, slot_name, family_name)
-
-    # Prefer 1st-feature exact hits for concentration (Feature Win Number == 1 or Hit==1 & Attempt==1)
-    if not parsed_df.empty and "_feature_num" in parsed_df.columns:
-        exact_hits = parsed_df[
-            (parsed_df["_feature_num"] == 1) &
-            (~parsed_df["_is_censored"]) &
-            (parsed_df["_spins"].notna())
-        ]
-        if exact_hits.empty:
-            exact_hits = parsed_df[
-                (parsed_df["_hit"] == 1) &
-                (parsed_df["_attempt"] == 1) &
-                (~parsed_df["_is_censored"]) &
-                (parsed_df["_spins"].notna())
-            ]
-    elif not parsed_df.empty:
-        exact_hits = parsed_df[
-            (parsed_df["_hit"] > 0) &
-            (~parsed_df["_is_censored"]) &
-            (parsed_df["_spins"].notna())
-        ]
-    else:
-        exact_hits = pd.DataFrame()
-
-    # Bet tiers from multiplier strength — keep $5 visible
-    avg_mult = float(exact_hits["_mult"].mean()) if not exact_hits.empty else 20.0
-    if avg_mult >= 60.0:
-        base_bet, high_bet, low_bet = 5.00, 7.50, 2.50
-    elif avg_mult >= 30.0:
-        base_bet, high_bet, low_bet = 3.75, 5.00, 2.00
-    elif avg_mult >= 15.0:
-        base_bet, high_bet, low_bet = 2.50, 5.00, 1.50
-    else:
-        base_bet, high_bet, low_bet = 2.00, 3.75, 1.25
-
-    base_bet = snap_to_valid_bet(base_bet)
-    high_bet = snap_to_valid_bet(high_bet)
-    low_bet = snap_to_valid_bet(low_bet)
-    grind_bet = 0.50  # cheap post-window grind
-
-    phases = []
-
-    if exact_hits.empty:
-        # Generic early-focus plan when no hit data
-        phases = [
-            {"spins": 15, "bet": base_bet, "note": "Initial Probe Zone"},
-            {"spins": 15, "bet": high_bet, "note": "Peak Probe Zone"},
-            {"spins": 15, "bet": low_bet, "note": "Late Checkpoint"},
-            {"spins": 30, "bet": grind_bet, "note": "Low Grind (post 45)"},
-        ]
-    else:
-        hit_spins = exact_hits["_spins"].astype(float)
-        total_exact = max(len(hit_spins), 1)
-
-        w1 = len(hit_spins[hit_spins <= 15]) / total_exact
-        w2 = len(hit_spins[(hit_spins > 15) & (hit_spins <= 30)]) / total_exact
-        w3 = len(hit_spins[(hit_spins > 30) & (hit_spins <= 45)]) / total_exact
-        w4 = len(hit_spins[(hit_spins > 45) & (hit_spins <= 60)]) / total_exact
-
-        # Prefer practical varying sizes: high / mid / alt so consecutive differ naturally
-        # Common floor sizes: 2.50, 3.75, 5.00, 6.25, 7.50
-        mid_alt = snap_to_valid_bet((high_bet + base_bet) / 2)  # often 5 or 3.75
-        if mid_alt == high_bet:
-            mid_alt = base_bet
-
-        def _pick(strength, prefer_high=True):
-            if strength >= 0.30:
-                return high_bet if prefer_high else mid_alt
-            if strength >= 0.15:
-                return base_bet if prefer_high else mid_alt
-            return low_bet
-
-        b1 = _pick(w1, prefer_high=True)
-        phases.append({
-            "spins": 15,
-            "bet": b1,
-            "note": "🔥 High-Hit Concentration" if b1 >= high_bet * 0.9 else "Initial Probe Zone"
-        })
-
-        b2 = _pick(w2, prefer_high=False)
-        if b2 == b1:
-            b2 = high_bet if b1 != high_bet else base_bet
-        phases.append({
-            "spins": 15,
-            "bet": b2,
-            "note": "🔥 Peak Hit Concentration" if b2 >= high_bet * 0.9 else "Mid-Cycle Transition"
-        })
-
-        b3 = _pick(w3, prefer_high=True)
-        if b3 == b2:
-            b3 = mid_alt if b2 != mid_alt else low_bet
-        phases.append({
-            "spins": 15,
-            "bet": b3,
-            "note": "🔥 Late Hit Zone" if b3 >= high_bet * 0.9 else "Late Checkpoint"
-        })
-
-        if w4 >= 0.10:
-            b4 = base_bet if w4 >= 0.15 else low_bet
-            if b4 == b3:
-                b4 = mid_alt if b3 != mid_alt else high_bet
-            phases.append({
-                "spins": 15,
-                "bet": b4,
-                "note": "Extended Concentration" if b4 >= base_bet else "Exit Prep"
-            })
-
-        phases.append({
-            "spins": 30,
-            "bet": grind_bet,
-            "note": "Low Grind (save bankroll for repeats)"
-        })
-
-    phases = [p for p in phases if p["spins"] > 0]
-
-    # Practical bet ladder (common floor sizes) — used to break consecutive duplicates
-    BET_LADDER = [0.50, 1.00, 1.25, 1.50, 2.00, 2.50, 3.00, 3.75, 5.00, 6.25, 7.50, 10.00]
-
-    def _nudge_away(prev_bet, desired):
-        """Pick nearest ladder bet that is not equal to prev_bet."""
-        desired = snap_to_valid_bet(desired)
-        if desired != prev_bet:
-            return desired
-        # Step up first, then down
-        try:
-            idx = BET_LADDER.index(desired)
-        except ValueError:
-            idx = 0
-        for offset in (1, -1, 2, -2, 3, -3):
-            j = idx + offset
-            if 0 <= j < len(BET_LADDER) and BET_LADDER[j] != prev_bet:
-                return BET_LADDER[j]
-        return desired
-
-    # Enforce: no two consecutive phases share the same bet
-    for i in range(1, len(phases)):
-        if phases[i]["bet"] == phases[i - 1]["bet"]:
-            phases[i]["bet"] = _nudge_away(phases[i - 1]["bet"], phases[i]["bet"])
-
-    total_spins = sum(p["spins"] for p in phases)
-
-    # Target check-in roughly $250–$400 without distorting early high bets too much
-    raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-    if raw_alloc < 220 and raw_alloc > 0:
-        boostable = [p for p in phases if p["bet"] > grind_bet]
-        if boostable:
-            deficit = 260 - raw_alloc
-            per = deficit / sum(p["spins"] for p in boostable)
-            for p in boostable:
-                p["bet"] = snap_to_valid_bet(p["bet"] + per)
-            # Re-enforce consecutive uniqueness after boost
-            for i in range(1, len(phases)):
-                if phases[i]["bet"] == phases[i - 1]["bet"]:
-                    phases[i]["bet"] = _nudge_away(phases[i - 1]["bet"], phases[i]["bet"])
-        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-    elif raw_alloc > 420:
-        shrink = 380 / raw_alloc
-        for p in phases:
-            if p["bet"] > grind_bet:
-                p["bet"] = snap_to_valid_bet(p["bet"] * shrink)
-        for i in range(1, len(phases)):
-            if phases[i]["bet"] == phases[i - 1]["bet"]:
-                phases[i]["bet"] = _nudge_away(phases[i - 1]["bet"], phases[i]["bet"])
-        raw_alloc = sum(p["spins"] * p["bet"] for p in phases)
-
-    checkin_alloc = float(math.ceil(raw_alloc / 25.0) * 25)
-    return phases, total_spins, checkin_alloc
 
 def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     records = []
@@ -954,12 +418,10 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 "rehit_metrics": rehit_metrics
             })
 
-    # Prefer: higher RVI, higher multi-hit rate, higher total sample size (reliability),
-    # then day-specific hits. Thin samples (<5 total logs) sink in the ranking.
     def _rank_key(x):
         total = x.get("total_hits", 0) or 0
-        sample_bonus = min(total, 20) / 20.0  # 0–1 scale, caps at 20 logs
-        reliability = 1.0 if total >= 5 else 0.3  # hard preference for ≥5 attempts
+        sample_bonus = min(total, 20) / 20.0
+        reliability = 1.0 if total >= 5 else 0.3
         return (
             x["rvi"] * reliability,
             x["rehit_metrics"].get("multi_hit_rate", 0),
@@ -970,22 +432,12 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     slot_scores = sorted(slot_scores, key=_rank_key, reverse=True)
 
     for item in slot_scores:
-        fam = item["family"]
-        slot = item["slot"]
-        rvi_score = item["rvi"]
-
-        phases, total_spins, checkin_alloc = get_multi_phase_execution(slot, fam, rvi_score, live_df)
-        phase_breakdown_str = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(phases)])
-
         records.append({
-            "family": fam,
-            "slot": slot,
-            "base_rvi": rvi_score,
-            "phases": phases,
-            "num_phases": len(phases),
-            "phase_breakdown": phase_breakdown_str,
-            "total_spins": total_spins,
-            "checkin_alloc": checkin_alloc,
+            "family": item["family"],
+            "slot": item["slot"],
+            "base_rvi": item["rvi"],
+            "checkin_alloc": 500.0,
+            "strategy_plan": STRATEGY_PLAN_SUMMARY,
             "source_proof": item["source_proof"],
             "target_day": item["target_day"],
             "day_factor": item["day_factor"],
@@ -996,52 +448,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return sorted(records, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
 
 # ==========================================
-# 2B. BANKROLL-AWARE STAKE SCALING
-# ==========================================
-# Phase spin-windows are calibrated from each slot's own hit-spin
-# history (get_multi_phase_execution) and stay fixed regardless of
-# bankroll. Bet SIZE within those windows is scaled here, at render
-# time, against where the live session actually stands — so the same
-# slot recommends smaller bets when the bankroll is down.
-# Hard ceiling: displayed check-in never exceeds $400 (prefer many under $300).
-
-def compute_bankroll_scale():
-    start = max(st.session_state.session_start_bankroll, 0.0)
-    current = max(st.session_state.current_bankroll, 0.0)
-    if start <= 0:
-        return 1.0
-
-    bankroll_ratio = current / start
-    if bankroll_ratio <= 0.5:
-        return 0.5
-    elif bankroll_ratio <= 0.75:
-        return 0.75
-    else:
-        return 1.0
-
-def scale_phases_for_bankroll(phases, checkin_alloc):
-    scale = compute_bankroll_scale()
-
-    scaled_phases = [dict(p, bet=snap_to_valid_bet(p["bet"] * scale)) for p in phases]
-    raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
-
-    # Hard display ceiling of $400
-    MAX_CHECKIN = 400.0
-    if raw_alloc > MAX_CHECKIN:
-        cap_ratio = MAX_CHECKIN / raw_alloc
-        scaled_phases = [
-            dict(p, bet=snap_to_valid_bet(p["bet"] * cap_ratio)) for p in scaled_phases
-        ]
-        raw_alloc = sum(p["spins"] * p["bet"] for p in scaled_phases)
-
-    new_checkin = float(math.ceil(raw_alloc / 25.0) * 25) if raw_alloc > 0 else 0.0
-    # Final safety clamp
-    if new_checkin > MAX_CHECKIN:
-        new_checkin = MAX_CHECKIN
-    return scaled_phases, new_checkin
-    
-# ==========================================
-# 3. AI AGENT ENGINE & TOOLS (Gemini primary, Groq fallback)
+# 3. AI AGENT ENGINE
 # ==========================================
 
 @st.cache_resource
@@ -1061,11 +468,9 @@ def get_groq_client():
     return Groq(api_key=api_key)
 
 def tool_mark_machine_played(slot_name: str) -> str:
-    """Marks a machine as played, moving it out of active recommendations and into the played basket."""
     return mark_slot_played(slot_name)
 
 def tool_update_bankroll(new_amount: float) -> str:
-    """Updates the user's current bankroll during a live casino session."""
     st.session_state.current_bankroll = float(new_amount)
     persist_session_state()
     return f"Current bankroll updated to ${new_amount:.2f}"
@@ -1076,9 +481,6 @@ AVAILABLE_TOOLS = {
 }
 
 def build_agent_context():
-    """Shared context builder so both Gemini and the Groq fallback see
-    the same live picture — including bankroll-scaled $ amounts, not
-    the raw generic ones, so AI-suggested bets match what the boards show."""
     available_slots = [
         s for s in st.session_state.slots_db
         if s["slot"] not in st.session_state.played_basket
@@ -1087,8 +489,6 @@ def build_agent_context():
 
     slot_context_summary = []
     for s in available_slots[:20]:
-        scaled_phases, scaled_checkin = scale_phases_for_bankroll(s["phases"], s["checkin_alloc"])
-        scaled_breakdown = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(scaled_phases)])
         slot_context_summary.append({
             "slot": s["slot"],
             "family": s["family"],
@@ -1096,8 +496,8 @@ def build_agent_context():
             "multi_hit_rate": f"{s['rehit_metrics']['multi_hit_rate']}%",
             "multi_hit_count": s['rehit_metrics']['multi_hit_count'],
             "attempt2_population": s['rehit_metrics'].get('attempt2_population', 0),
-            "phase_plan_bankroll_scaled": scaled_breakdown,
-            "checkin_alloc_bankroll_scaled": scaled_checkin,
+            "strategy_plan": STRATEGY_PLAN_SUMMARY,
+            "checkin_alloc": "$500",
             "recommendation_protocol": s['rehit_metrics']['repeat_recommendation']
         })
 
@@ -1111,35 +511,28 @@ def build_agent_context():
     - Target Bankroll: ${st.session_state.session_target:.2f}
     - Played Basket (Played Today): {st.session_state.played_basket}
 
-    AVAILABLE TOP-RANKED SLOTS DATASET (Ranked by 75/25 Hybrid Day-RVI & Multi-Hit Rate).
-    Bet sizes below are ALREADY bankroll-adjusted — use them as-is, do not re-scale further:
+    EXECUTION STRATEGY IN USE:
+    - Check-in: $500 per machine across 5 denoms ($100 budget per denom).
+    - Fixed Bet Denom Rotation: Always $5.00 bet per spin. Rotate through 5 denoms ($1.00, $0.10, $0.05, $0.02, $0.01).
+    - Dynamic Spin Count: Consuming $100 per denom results in 20 base spins, but line wins (small to big) re-fund play, resulting in 20 to 50+ spins per denom.
+    - Exit Criteria: Stop on a denom when its $100 allocation is consumed or shift to next denom. If feature hits, book profit at $700+ balance ($200 profit), or exit if balance drops back to $500.
+
+    AVAILABLE TOP-RANKED SLOTS DATASET:
     {slot_context_summary}
 
     OPERATIONAL INSTRUCTIONS:
-    1. Reason through user questions dynamically using the live slot dataset provided above.
-    2. When asked for N recommendations (e.g., "Suggest 3 best slots for today"), extract the top N unplayed machines from the dataset, provide their bankroll-scaled phase plans, and detail the post-hit repeat execution protocol.
-    3. Be precise with mathematical references (Day-RVI scores, Multi-Hit Rates, spin counts, and bet sizes).
-    4. You have access to tool function calls to mark machines played or update bankrolls directly if requested by the user.
+    1. Advise the user based strictly on the $500 check-in, fixed $5 bet denomination cycle ($100 allocated per denom), and line win dynamics.
+    2. Acknowledge that spin counts per denom vary (20-50+ spins) based on line wins, but the bankroll budget ($100/denom) remains fixed.
+    3. You have tool function calls to mark machines played or update bankroll directly.
     """
     return system_instruction
 
 def run_gemini_agent(user_prompt: str):
-    """Runs the primary agent via Gemini with MANUAL function-calling
-    (automatic function calling explicitly disabled) so we can:
-      (a) avoid the ambiguity of whether the SDK already auto-executed
-          the tool before we check response.function_calls, and
-      (b) send the tool's result back to the model for a proper
-          follow-up turn, instead of short-circuiting with a raw
-          string and dropping the rest of the user's question.
-    Returns (response_text, state_changed) or raises on failure so the
-    caller can fall back to Groq.
-    """
     client = get_gemini_client()
     if not client:
-        raise RuntimeError("GEMINI_API_KEY is not set in environment or Streamlit secrets.")
+        raise RuntimeError("GEMINI_API_KEY is not set.")
 
     system_instruction = build_agent_context()
-
     contents = []
     for msg in st.session_state.chat_messages:
         role = "user" if msg["role"] == "user" else "model"
@@ -1154,45 +547,30 @@ def run_gemini_agent(user_prompt: str):
     )
 
     response = client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
-
     state_changed = False
 
     if response.function_calls:
-        # Execute every requested tool call, then send the results back
-        # to the model in a follow-up turn so it can weave the action
-        # into a full natural-language answer instead of us returning
-        # a bare "Tool Action: ..." string.
         contents.append(response.candidates[0].content)
         function_response_parts = []
         for fn in response.function_calls:
             handler = AVAILABLE_TOOLS.get(fn.name)
-            if handler is None:
-                tool_result = f"Unknown tool '{fn.name}'."
-            else:
-                args = dict(fn.args) if fn.args else {}
-                tool_result = handler(**args)
-                state_changed = True
+            tool_result = handler(**(dict(fn.args) if fn.args else {})) if handler else f"Unknown tool '{fn.name}'."
+            state_changed = True
             function_response_parts.append(
                 types.Part.from_function_response(name=fn.name, response={"result": tool_result})
             )
         contents.append(types.Content(role="user", parts=function_response_parts))
-
         follow_up = client.models.generate_content(model=GEMINI_MODEL, contents=contents, config=config)
         return follow_up.text or "🤖 Action completed.", state_changed
 
     return response.text, state_changed
 
 def run_groq_agent(user_prompt: str):
-    """Text-only fallback (no tool calling yet) — used only when Gemini
-    is unavailable, rate-limited, or errors out. Clearly labelled in the
-    UI so it's obvious which provider actually answered."""
     client = get_groq_client()
     if not client:
         return "⚠️ Groq fallback unavailable: `GROQ_API_KEY` is not set."
 
-    system_instruction = build_agent_context()
-    system_instruction += "\n\nNOTE: You are running as a fallback text-only assistant. You cannot mark machines played or update the bankroll directly — tell the user to do that manually in the app if asked."
-
+    system_instruction = build_agent_context() + "\n\nNOTE: Text-only fallback mode active."
     messages = [{"role": "system", "content": system_instruction}]
     for msg in st.session_state.chat_messages:
         role = "user" if msg["role"] == "user" else "assistant"
@@ -1203,7 +581,6 @@ def run_groq_agent(user_prompt: str):
     return completion.choices[0].message.content
 
 def run_ai_agent(user_prompt: str):
-    """Primary/fallback orchestration. Returns (response_text, provider_label)."""
     try:
         text, state_changed = run_gemini_agent(user_prompt)
         if state_changed:
@@ -1212,12 +589,12 @@ def run_ai_agent(user_prompt: str):
     except Exception as gemini_err:
         try:
             text = run_groq_agent(user_prompt)
-            return f"{text}\n\n_(⚠️ Gemini was unavailable — answered via Groq fallback, no live actions taken. Gemini error: {gemini_err})_", "Groq (fallback)"
+            return f"{text}\n\n_(⚠️ Gemini fallback via Groq: {gemini_err})_", "Groq (fallback)"
         except Exception as groq_err:
-            return f"⚠️ Both AI providers failed.\n- Gemini: {gemini_err}\n- Groq: {groq_err}", "None"
+            return f"⚠️ AI providers failed:\n- Gemini: {gemini_err}\n- Groq: {groq_err}", "None"
 
 # ==========================================
-# LOAD DATA & INITIALIZE STATE DATASET
+# LOAD DATA & INITIALIZE STATE
 # ==========================================
 
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
@@ -1236,9 +613,8 @@ if "slots_db" not in st.session_state or not st.session_state.slots_db:
 st.sidebar.title("🎰 Live Session Hub")
 
 if st.session_state.get("session_was_restored"):
-    st.sidebar.info("♻️ Restored today's session (bankroll, basket, settings) from your last connection.")
+    st.sidebar.info("♻️ Restored active session data.")
 
-# ONE-BUTTON GLOBAL RESET
 if st.sidebar.button("🔄 Reset All Session Data", use_container_width=True, type="primary"):
     reset_all_state()
     st.rerun()
@@ -1249,11 +625,6 @@ if detected_sheet_cols:
     st.sidebar.success(f"🟢 GSheet Connected ({len(detected_sheet_cols)} Cols)")
 else:
     st.sidebar.warning("🟡 GSheet Off-line")
-
-if st.session_state.get("last_saved_ts"):
-    st.sidebar.caption(f"💾 Session last saved: {st.session_state.last_saved_ts}")
-if st.session_state.get("last_save_error"):
-    st.sidebar.caption(f"⚠️ Last save failed: {st.session_state.last_save_error}")
 
 st.sidebar.subheader("📅 Day-of-Week Focus")
 days_list = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -1281,8 +652,6 @@ for tab_name in TAB_OPTIONS:
 st.sidebar.markdown("---")
 st.sidebar.subheader("💰 Bankroll & Risk")
 
-# Wrapped in a form so typing/dragging on mobile doesn't fire a save
-# (and a Google Sheets write) on every keystroke — only on submit.
 with st.sidebar.form("bankroll_form"):
     new_start = st.number_input("Starting Bankroll ($)", value=float(st.session_state.session_start_bankroll), step=50.0)
     new_current = st.number_input("Current Bankroll ($)", value=float(st.session_state.current_bankroll), step=25.0)
@@ -1296,9 +665,6 @@ with st.sidebar.form("bankroll_form"):
         persist_session_state()
         st.rerun()
 
-# ==========================================
-# SIDEBAR: QUICK MARK SLOT AS PLAYED
-# ==========================================
 st.sidebar.markdown("---")
 st.sidebar.subheader("✅ Quick Mark Played")
 with st.sidebar.form("quick_mark_played_form"):
@@ -1314,14 +680,10 @@ with st.sidebar.form("quick_mark_played_form"):
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-# ==========================================
 # TAB 1: TODAY'S PRIORITY BOARD
-# ==========================================
-
 if st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
 
-    # Only show slots with enough data (total attempts > 5)
     available_slots = [
         s for s in st.session_state.slots_db
         if s["slot"] not in st.session_state.played_basket
@@ -1332,11 +694,6 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
     table_data = []
     for rank, item in enumerate(current_display, 1):
         rehit = item.get("rehit_metrics", {})
-        scaled_phases, scaled_checkin = scale_phases_for_bankroll(item.get("phases", []), item.get("checkin_alloc", 0.0))
-        plan_1st = " | ".join([f"P{i+1}: {p['spins']}s @ ${p['bet']:.2f}" for i, p in enumerate(scaled_phases)])
-        # Plan for 2nd hit uses the same full multi-phase structure
-        plan_2nd = plan_1st
-
         att2_pop = rehit.get("attempt2_population", 0)
         first_hits = rehit.get("first_hit_count", 0)
         first_total = rehit.get("first_hit_total", 0)
@@ -1345,66 +702,44 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
 
         table_data.append({
             "Rank": rank,
+            "Slot Theme": item.get("slot", "N/A"),
             "Family": item.get("family", "N/A"),
-            "Slot": item.get("slot", "N/A"),
-            "Check-In": f"${scaled_checkin:.0f}",
-            "Plan for 1st hit": plan_1st,
-            "1st Attempt hits / Total": f"{first_hits} / {first_total}",
-            "Avg 1st Win Mult": f"{avg_1st_mult}x" if avg_1st_mult > 0 else "N/A",
-            "Plan for 2nd hit": plan_2nd,
-            "2nd Attempt hits / Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
-            "Avg 2nd Win Mult": f"{avg_2nd_mult}x" if avg_2nd_mult > 0 else "N/A",
+            "Check-In": "$500",
+            "5-Denom Execution Strategy": STRATEGY_PLAN_SUMMARY,
+            "1st Hits/Total": f"{first_hits} / {first_total}",
+            "Avg 1st Mult": f"{avg_1st_mult}x" if avg_1st_mult > 0 else "N/A",
+            "2nd Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
+            "Avg 2nd Mult": f"{avg_2nd_mult}x" if avg_2nd_mult > 0 else "N/A",
         })
 
     df_priority = pd.DataFrame(table_data)
 
     if df_priority.empty:
-        st.info("No slots with more than 5 attempts available for today's filter.")
+        st.info("No slots with > 5 attempts available for today's filter.")
     else:
-        # components.html renders real HTML so long phase strings wrap
-        html_table = df_priority.to_html(index=False, escape=True, classes="prio")
-        full_html = f"""
-        <html><head><style>
-        body {{ margin:0; font-family: sans-serif; background: transparent; color: inherit; }}
-        table.prio {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-            table-layout: auto;
-        }}
-        table.prio th, table.prio td {{
-            border: 1px solid #555;
-            padding: 6px 8px;
-            text-align: left;
-            vertical-align: top;
-            white-space: normal !important;
-            word-break: break-word;
-            overflow-wrap: anywhere;
-        }}
-        table.prio th {{
-            background: #262730;
-            color: #fafafa;
-            position: sticky;
-            top: 0;
-        }}
-        table.prio tr:nth-child(even) td {{ background: rgba(255,255,255,0.03); }}
-        </style></head><body>
-        {html_table}
-        </body></html>
-        """
-        # Height scales with rows; min 400 so header stays visible
-        row_h = 56
-        height = min(900, max(400, 60 + len(df_priority) * row_h))
-        components.html(full_html, height=height, scrolling=True)
+        st.dataframe(
+            df_priority,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Rank": st.column_config.NumberColumn("Rank", width="small"),
+                "Slot Theme": st.column_config.TextColumn("Slot Theme", width="medium"),
+                "Family": st.column_config.TextColumn("Family", width="medium"),
+                "Check-In": st.column_config.TextColumn("Check-In", width="small"),
+                "5-Denom Execution Strategy": st.column_config.TextColumn("5-Denom Execution Strategy", width="large"),
+                "1st Hits/Total": st.column_config.TextColumn("1st Hits/Total", width="small"),
+                "Avg 1st Mult": st.column_config.TextColumn("Avg 1st Mult", width="small"),
+                "2nd Hits/Total": st.column_config.TextColumn("2nd Hits/Total", width="small"),
+                "Avg 2nd Mult": st.column_config.TextColumn("Avg 2nd Mult", width="small"),
+            }
+        )
 
     if len(available_slots) > st.session_state.display_limit:
         if st.button("➕ Load 15 More Slots"):
             st.session_state.display_limit += 15
             st.rerun()
 
-# ------------------------------------------
 # TAB 2: PRE-PLANNED EXECUTION CARDS
-# ------------------------------------------
 elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
     st.subheader("Pre-Planned Per-Slot Execution Cards")
 
@@ -1418,43 +753,39 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
         slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot and s["family"] == card_family), None)
         if slot_data:
             rehit = slot_data.get("rehit_metrics", {})
-            avg_att2 = rehit.get("avg_attempt2_spins", 0)
             multi_rate = rehit.get("multi_hit_rate", 0)
             att2_pop = rehit.get("attempt2_population", 0)
-
-            scaled_phases, scaled_checkin = scale_phases_for_bankroll(
-                slot_data.get("phases", []), slot_data.get("checkin_alloc", 0.0)
-            )
 
             st.markdown("---")
             st.markdown(f"### 🎰 Execution Card: **{slot_data.get('slot', 'N/A')}** ({slot_data.get('family', 'N/A')})")
 
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Dynamic Evaluation Window", f"{slot_data.get('total_spins', 0)} Spins", delta=f"Check-In: ${scaled_checkin:.0f}")
-            col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data.get('base_rvi', 0)}", delta=f"Day Weighting: {slot_data.get('day_factor', 1.0)}x")
-            col_m3.metric("Sheet Repeat-Hit Rate", f"{multi_rate}%", delta=f"of {att2_pop} 2nd attempts")
+            col_m1.metric("Check-In Budget", "$500 Total", delta="$100 / Denom @ $5 Bet")
+            col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data.get('base_rvi', 0)}", delta=f"{slot_data.get('day_factor', 1.0)}x Weight")
+            col_m3.metric("Repeat Hit Rate", f"{multi_rate}%", delta=f"of {att2_pop} 2nd attempts")
 
-            st.caption(f"**Data Proof:** {slot_data.get('source_proof', 'N/A')} | **2nd-Attempt Repeat Logs:** {rehit.get('multi_hit_count', 0)} of {att2_pop}")
+            st.markdown("#### 💵 Fixed $5 Bet Denomination Breakdown ($500 Total Budget)")
+            
+            df_steps = pd.DataFrame(STRATEGY_STEPS)[["step", "denom", "bet", "budget", "spins"]]
+            df_steps.columns = ["Step #", "Denomination", "Fixed Bet / Spin ($)", "Allocated Budget ($)", "Est. Spins (Line Wins Dynamic)"]
+            
+            st.dataframe(df_steps, use_container_width=True, hide_index=True)
 
-            st.markdown("#### 🔄 Bankroll-Scaled Phase Plan (Attempt 1 / Hit 0)")
-            for idx, phase in enumerate(scaled_phases, 1):
-                st.write(f"**Phase {idx}:** **{phase.get('spins', 0)} Spins** @ **${phase.get('bet', 0):.2f}/spin** — *{phase.get('note', '')}*")
+            st.markdown("#### 🚨 Lock-in & Profit Exit Rules")
+            st.info("""
+            * **0 Feature Hits:** Walk off after consuming the $500 total budget across all 5 denoms (spins will range from 100 up to 200+ depending on line win frequency).
+            * **Hit Feature:**
+              * **Target Hit ($700+ balance):** Cash out & book $200+ profit immediately.
+              * **Fall Back ($500 balance):** If balance drops back to $500, exit immediately (Break-Even).
+              * **In-Between ($500 - $700):** Continue probing until reaching $700 or falling back to $500.
+            """)
 
-            st.markdown("---")
-
-            st.markdown("#### 🔄 Bankroll-Scaled Phase Plan (Attempt 2 / Re-probe)")
-            for idx, phase in enumerate(scaled_phases, 1):
-                st.write(f"**Phase {idx}:** **{phase.get('spins', 0)} Spins** @ **${phase.get('bet', 0):.2f}/spin** — *{phase.get('note', '')}*")
-
-            st.markdown("---")
-            if st.button(f"✅ Mark '{slot_data['slot']}' as Played (Move to Basket)"):
+            if st.button(f"✅ Mark '{slot_data['slot']}' as Played"):
                 res = mark_slot_played(slot_data['slot'])
                 st.success(res)
                 st.rerun()
 
-# ------------------------------------------
 # TAB 3: LIVE DATA ENTRY
-# ------------------------------------------
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
 
@@ -1500,70 +831,40 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
 
             try:
                 existing_df, existing_cols = load_and_inspect_sheet()
-
-                # Duplicate-submit guard: same slot/date/spin/attempt/hit
-                # already present is very likely an accidental double-tap
-                # (common on a slow mobile connection) rather than a
-                # genuine second identical event.
-                is_duplicate = False
+                new_row_df = pd.DataFrame([new_record])
                 if not existing_df.empty:
-                    check_cols = ["Date", "Family", "Slot", "Spin of feature hit", "Hit Number", "Attempt Number"]
-                    if all(c in existing_df.columns for c in check_cols):
-                        dup_mask = pd.Series(True, index=existing_df.index)
-                        for c in check_cols:
-                            dup_mask &= existing_df[c].astype(str).str.strip() == str(new_record.get(c, "")).strip()
-                        is_duplicate = dup_mask.any()
-
-                if is_duplicate:
-                    st.warning("⚠️ This looks like a duplicate of a row already in the sheet (same date, slot, spin, hit #, attempt #). Not saved — resubmit only if this is genuinely a repeat entry you intend to add.")
+                    for col in existing_cols:
+                        if col not in new_row_df.columns:
+                            new_row_df[col] = ""
+                    updated_df = pd.concat([existing_df.astype(str), new_row_df.astype(str)], ignore_index=True)
                 else:
-                    new_row_df = pd.DataFrame([new_record])
-                    if not existing_df.empty:
-                        for col in existing_cols:
-                            if col not in new_row_df.columns:
-                                new_row_df[col] = ""
-                        updated_df = pd.concat([existing_df.astype(str), new_row_df.astype(str)], ignore_index=True)
-                    else:
-                        updated_df = new_row_df.astype(str)
+                    updated_df = new_row_df.astype(str)
 
-                    conn.update(worksheet=SESSION_LOG_WORKSHEET, data=updated_df)
-                    mark_slot_played(entry_slot)
-                    st.cache_data.clear()
-                    st.success(f"✅ Recorded '{entry_slot}' ({entry_family}) on {dynamic_day}! Matrix recalculated.")
-                    st.rerun()
+                conn.update(worksheet=SESSION_LOG_WORKSHEET, data=updated_df)
+                mark_slot_played(entry_slot)
+                st.cache_data.clear()
+                st.success(f"✅ Recorded '{entry_slot}'! Matrix recalculated.")
+                st.rerun()
             except Exception as e:
                 st.error(f"Failed to update Google Sheets: {e}")
 
-# ------------------------------------------
 # TAB 4: INTERACTIVE AI AGENT
-# ------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive AI Agent":
     st.subheader("Slotpilot AI Chat")
 
-    # Display prior chat history
     for message in st.session_state.chat_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Quick action prompt chips (original buttons)
     col_q1, col_q2 = st.columns(2)
     prompt_to_submit = None
 
     if col_q1.button("🎯 Top 3 Best Slots Today"):
         prompt_to_submit = f"What are the top 3 best slots to play today ({st.session_state.selected_day}) based on our Day-RVI matrix?"
     if col_q2.button("🔄 Check High Multi-Hit Machines"):
-        prompt_to_submit = "Which slots currently have the highest repeat-hit rate (>30% of 2nd attempts) and should be re-probed immediately after a feature win?"
+        prompt_to_submit = "Which slots currently have the highest repeat-hit rate (>30% of 2nd attempts)?"
 
-    # Ready-to-copy template prompts
-    st.markdown("**Quick templates** (copy → paste into the chat box and edit numbers as needed):")
-    st.code("Suggest the next 3 unplayed machines for today given current bankroll.", language=None)
-    st.code("I just hit a feature on [SLOT] at spin [N] for [X]x — should I re-probe or lock and move on?", language=None)
-    st.code("Give me a short re-probe plan for the highest multi-hit-rate machines still available.", language=None)
-    st.code("Current bankroll is $X / start $Y / target $Z — adjust risk posture and top recommendations.", language=None)
-    st.code("Which machines have the strongest early (≤20 spin) 2nd-hit clustering today?", language=None)
-    st.code("Build me a 3-machine rotation that stays under $300 check-in each.", language=None)
-
-    user_input = st.chat_input("Ask your AI Execution Agent anything about today's session strategy...")
+    user_input = st.chat_input("Ask your AI Execution Agent anything...")
     if user_input:
         prompt_to_submit = user_input
 
@@ -1573,8 +874,7 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.markdown(prompt_to_submit)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analyzing live matrix & generating strategic plan..."):
-                st.session_state.pending_rerun = False
+            with st.spinner("Analyzing live matrix..."):
                 response_text, provider = run_ai_agent(prompt_to_submit)
                 st.caption(f"_Answered via {provider}_")
                 st.markdown(response_text)
@@ -1584,22 +884,19 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.session_state.pending_rerun = False
             st.rerun()
 
-# ------------------------------------------
 # TAB 5: PLAYED BASKET & OVERRIDES
-# ------------------------------------------
 elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
-    st.subheader("🧺 Played Basket & Active Session Overrides")
+    st.subheader("🧺 Played Basket")
 
     if not st.session_state.played_basket:
-        st.info("No machines have been marked as played yet today.")
+        st.info("No machines marked as played yet today.")
     else:
-        st.write("The following machines are currently marked as played and excluded from top active priority lists:")
         for slot in st.session_state.played_basket:
             col_p1, col_p2 = st.columns([3, 1])
             with col_p1:
                 st.write(f"• **{slot}**")
             with col_p2:
-                if st.button("Restore to Active List", key=f"restore_{slot}"):
+                if st.button("Restore to Active", key=f"restore_{slot}"):
                     restore_slot(slot)
                     st.rerun()
 
