@@ -196,17 +196,12 @@ def parse_session_log_data(live_df, slot_name, family_name):
     if live_df.empty:
         return pd.DataFrame()
 
-    cols = {str(c).lower(): c for c in live_df.columns}
+    cols = {str(c).lower().strip(): c for c in live_df.columns}
     slot_col = cols.get("slot") or cols.get("slot theme name") or cols.get("machine")
     fam_col = cols.get("family") or cols.get("slot family")
     spin_col = cols.get("spin of feature hit") or cols.get("spin") or cols.get("spins")
     attempt_col = cols.get("attempt number") or cols.get("attempt")
-    feature_num_col = (
-        cols.get("feature win number")
-        or cols.get("feature number")
-        or cols.get("hit number")
-        or cols.get("hit")
-    )
+    feature_num_col = cols.get("feature win number") or cols.get("feature number") or cols.get("hit number")
     hit_num_col = cols.get("hit number") or cols.get("hit")
     win_amt_col = cols.get("win amount") or cols.get("win amount ($)") or cols.get("win")
     mult_col = cols.get("win multiplier") or cols.get("multiplier") or cols.get("win multiplier (x)")
@@ -227,15 +222,10 @@ def parse_session_log_data(live_df, slot_name, family_name):
         if pd.isna(raw):
             return np.nan, False
         s = str(raw).strip()
-        if s.endswith("+"):
-            try:
-                return float(s[:-1]), True
-            except ValueError:
-                return np.nan, True
-        try:
-            return float(s), False
-        except ValueError:
-            return np.nan, False
+        is_censored = s.endswith("+")
+        clean_s = s[:-1] if is_censored else s
+        val = pd.to_numeric(re.sub(r"[^\d.]", "", clean_s), errors="coerce")
+        return val, is_censored
 
     def _to_num(series):
         return pd.to_numeric(series.astype(str).str.extract(r"(\d+\.?\d*)")[0], errors="coerce")
@@ -245,8 +235,8 @@ def parse_session_log_data(live_df, slot_name, family_name):
     df["_is_censored"] = parsed_spins.apply(lambda x: x[1])
 
     df["_attempt"] = _to_num(df[attempt_col]).fillna(1) if attempt_col else 1
-    df["_feature_num"] = _to_num(df[feature_num_col]).fillna(0) if feature_num_col else 0
-    df["_hit"] = _to_num(df[hit_num_col]).fillna(0) if hit_num_col else df["_feature_num"]
+    df["_feature_win_num"] = _to_num(df[feature_num_col]).fillna(0) if feature_num_col else 0
+    df["_hit"] = _to_num(df[hit_num_col]).fillna(0) if hit_num_col else df["_feature_win_num"]
     df["_win"] = _to_num(df[win_amt_col]) if win_amt_col else 0.0
     df["_mult"] = _to_num(df[mult_col]) if mult_col else 0.0
 
@@ -277,28 +267,30 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
 
     total_logs = len(parsed_df)
 
-    for col in ["_feature_num", "_hit", "_attempt", "_mult", "_spins"]:
+    for col in ["_feature_win_num", "_hit", "_attempt", "_mult", "_spins"]:
         if col in parsed_df.columns:
             parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
 
-    first_hits = pd.DataFrame()
-    if "_feature_num" in parsed_df.columns:
-        first_hits = parsed_df[
-            (parsed_df["_feature_num"] == 1) & (~parsed_df["_is_censored"]) & (parsed_df["_spins"].notna())
-        ]
+    # Dynamic Filter for 1st Feature Hits
+    first_hits = parsed_df[
+        (parsed_df["_feature_win_num"] == 1) & (parsed_df["_spins"].notna())
+    ]
+    
     if first_hits.empty:
         first_hits = parsed_df[
-            (parsed_df["_hit"] == 1) & (parsed_df["_attempt"] == 1) & (~parsed_df["_is_censored"]) & (parsed_df["_spins"].notna())
+            (parsed_df["_hit"] == 1) & (parsed_df["_attempt"] == 1) & (parsed_df["_spins"].notna())
         ]
+
     first_hit_count = len(first_hits)
     avg_first_mult = round(float(first_hits["_mult"].mean()), 1) if not first_hits.empty else 0.0
-    avg_first_spins = round(float(first_hits["_spins"].mean()), 1) if not first_hits.empty else 0.0
+    
+    # Calculate Average Spin Count across valid 1st hits
+    valid_spins = first_hits["_spins"].dropna()
+    avg_first_spins = round(float(valid_spins.mean()), 1) if not valid_spins.empty else 0.0
 
-    repeat_entries = pd.DataFrame()
-    if "_feature_num" in parsed_df.columns:
-        repeat_entries = parsed_df[(parsed_df["_feature_num"] == 2) & (~parsed_df["_is_censored"])]
+    repeat_entries = parsed_df[(parsed_df["_feature_win_num"] == 2)]
     if repeat_entries.empty:
-        repeat_entries = parsed_df[(parsed_df["_hit"] == 2) & (parsed_df["_attempt"] == 2) & (~parsed_df["_is_censored"])]
+        repeat_entries = parsed_df[(parsed_df["_hit"] == 2) & (parsed_df["_attempt"] == 2)]
 
     attempt2_rows = parsed_df[parsed_df["_attempt"] == 2]
     attempt2_population = len(repeat_entries) if attempt2_rows.empty and not repeat_entries.empty else len(attempt2_rows)
@@ -308,7 +300,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     avg_repeat_mult = round(repeat_entries["_mult"].mean(), 1) if not repeat_entries.empty else 0.0
     max_repeat_mult = round(repeat_entries["_mult"].max(), 1) if not repeat_entries.empty else 0.0
 
-    att2_hits = repeat_entries[(repeat_entries["_spins"] > 0) & (~repeat_entries["_is_censored"])]
+    att2_hits = repeat_entries[(repeat_entries["_spins"] > 0)]
     avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
 
     if attempt2_population == 0 and repeat_count == 0:
@@ -377,7 +369,7 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
                 else:
                     day_factor = 0.90
 
-    actual_hits = parsed_df[(parsed_df["_hit"] > 0) & (~parsed_df["_is_censored"])]
+    actual_hits = parsed_df[(parsed_df["_hit"] > 0)]
     hit_count = len(actual_hits)
 
     if hit_count == 0:
@@ -829,6 +821,7 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
         with col_e3:
             entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1)
             entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
+            entry_feat_win_num = st.number_input("Feature Win Number:", min_value=0, max_value=20, value=1)
 
         submit_gs_entry = st.form_submit_button("💾 Save Record to Google Sheets")
 
@@ -843,7 +836,8 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
                 "Win amount": str(entry_win_amt),
                 "Win multiplier": str(entry_multiplier),
                 "Hit Number": str(entry_hit_num),
-                "Attempt Number": str(entry_attempt_num)
+                "Attempt Number": str(entry_attempt_num),
+                "Feature Win Number": str(entry_feat_win_num)
             }
 
             try:
