@@ -30,6 +30,7 @@ SESSION_LOG_WORKSHEET = "Session Log"
 
 TAB_OPTIONS = [
     "📊 Today's Priority Board",
+    "📈 Overall Performance",
     "📋 Pre-Planned Execution Cards",
     "📝 Live Data Entry",
     "🤖 Interactive AI Agent",
@@ -748,7 +749,73 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
             st.session_state.display_limit += 15
             st.rerun()
 
-# TAB 2: PRE-PLANNED EXECUTION CARDS
+# TAB 2: OVERALL PERFORMANCE
+elif st.session_state.active_tab == "📈 Overall Performance":
+    st.subheader("📈 Overall Performance (All Historical Logs)")
+    st.caption("Calculated across your entire dataset regardless of target day penalties or specific day filtering.")
+
+    overall_slots = []
+    for fam, slots in SLOT_MASTER_LIST.items():
+        for slot in slots:
+            rehit = compute_slot_rehit_metrics(slot, fam, live_sheet_df)
+            first_total = rehit.get("first_hit_total", 0)
+            if first_total > 5:
+                first_hits = rehit.get("first_hit_count", 0)
+                success_rate = (first_hits / first_total) if first_total > 0 else 0.0
+                overall_slots.append({
+                    "family": fam,
+                    "slot": slot,
+                    "calc_success_rate": success_rate,
+                    "rehit_metrics": rehit
+                })
+
+    sorted_overall = sorted(overall_slots, key=lambda x: x["calc_success_rate"], reverse=True)
+
+    table_data_overall = []
+    for rank, item in enumerate(sorted_overall, 1):
+        rehit = item["rehit_metrics"]
+        att2_pop = rehit.get("attempt2_population", 0)
+        first_hits = rehit.get("first_hit_count", 0)
+        first_total = rehit.get("first_hit_total", 0)
+        avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
+        avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0)
+        avg_spins = rehit.get("avg_first_spins", 0.0)
+
+        success_pct = f"{round(item['calc_success_rate'] * 100, 1)}%"
+
+        table_data_overall.append({
+            "Rank": rank,
+            "Slot Theme": item["slot"],
+            "Family": item["family"],
+            "Average Spin Count": f"{avg_spins}" if avg_spins > 0 else "N/A",
+            "1st Hits/Total": f"{first_hits} / {first_total} ({success_pct})",
+            "Avg 1st Mult": f"{avg_1st_mult}x" if avg_1st_mult > 0 else "N/A",
+            "2nd Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
+            "Avg 2nd Mult": f"{avg_2nd_mult}x" if avg_2nd_mult > 0 else "N/A",
+        })
+
+    df_overall = pd.DataFrame(table_data_overall)
+
+    if df_overall.empty:
+        st.info("No slots with > 5 total attempts found in historical logs.")
+    else:
+        st.dataframe(
+            df_overall,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Rank": st.column_config.NumberColumn("Rank", width="small"),
+                "Slot Theme": st.column_config.TextColumn("Slot Theme", width="medium"),
+                "Family": st.column_config.TextColumn("Family", width="medium"),
+                "Average Spin Count": st.column_config.TextColumn("Average Spin Count", width="small"),
+                "1st Hits/Total": st.column_config.TextColumn("1st Hits/Total", width="medium"),
+                "Avg 1st Mult": st.column_config.TextColumn("Avg 1st Mult", width="small"),
+                "2nd Hits/Total": st.column_config.TextColumn("2nd Hits/Total", width="small"),
+                "Avg 2nd Mult": st.column_config.TextColumn("Avg 2nd Mult", width="small"),
+            }
+        )
+
+# TAB 3: PRE-PLANNED EXECUTION CARDS
 elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
     st.subheader("Pre-Planned Per-Slot Execution Cards")
 
@@ -794,7 +861,7 @@ elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
                 st.success(res)
                 st.rerun()
 
-# TAB 3: LIVE DATA ENTRY
+# TAB 4: LIVE DATA ENTRY
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
 
@@ -859,23 +926,45 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             except Exception as e:
                 st.error(f"Failed to update Google Sheets: {e}")
 
-# TAB 4: INTERACTIVE AI AGENT
+# TAB 5: INTERACTIVE AI AGENT
 elif st.session_state.active_tab == "🤖 Interactive AI Agent":
-    st.subheader("Slotpilot AI Chat")
+    st.subheader("🤖 Slotpilot AI Assistant")
 
-    for message in st.session_state.chat_messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    # Header Metric Context Card
+    with st.container():
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        m_col1.metric("Active Day Focus", st.session_state.selected_day)
+        m_col2.metric("Current Bankroll", f"${st.session_state.current_bankroll:.2f}")
+        m_col3.metric("Target Goal", f"${st.session_state.session_target:.2f}")
+        m_col4.metric("Played Today", f"{len(st.session_state.played_basket)} Machines")
 
-    col_q1, col_q2 = st.columns(2)
+    st.markdown("---")
+    st.markdown("#### ⚡ Quick Actions & Session Insights")
+
     prompt_to_submit = None
 
-    if col_q1.button("🎯 Top 3 Best Slots Today"):
-        prompt_to_submit = f"What are the top 3 best slots to play today ({st.session_state.selected_day}) based on our Day-RVI matrix?"
-    if col_q2.button("🔄 Check High Multi-Hit Machines"):
-        prompt_to_submit = "Which slots currently have the highest repeat-hit rate (>30% of 2nd attempts)?"
+    # Card Grid layout for quick questions
+    q_col1, q_col2, q_col3 = st.columns(3)
+    with q_col1:
+        if st.button("🏆 **Top Priority Recommendation**\n\nShow me the top 3 best slots for today.", use_container_width=True):
+            prompt_to_submit = f"What are the top 3 best slots to play today ({st.session_state.selected_day}) based on our Day-RVI matrix?"
+    with q_col2:
+        if st.button("🔥 **High Repeat Multipliers**\n\nFind slots with repeat-hit rates >30%.", use_container_width=True):
+            prompt_to_submit = "Which slots currently have the highest repeat-hit rate (>30% of 2nd attempts)?"
+    with q_col3:
+        if st.button("💵 **Bankroll Strategy Check**\n\nHow should I budget my active bankroll?", use_container_width=True):
+            prompt_to_submit = f"Given my current bankroll of ${st.session_state.current_bankroll:.2f}, guide my next play sequence."
 
-    user_input = st.chat_input("Ask your AI Execution Agent anything...")
+    st.markdown("---")
+
+    # Chat history display container
+    chat_container = st.container()
+    with chat_container:
+        for message in st.session_state.chat_messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+    user_input = st.chat_input("Ask your Slotpilot AI Execution Agent anything...")
     if user_input:
         prompt_to_submit = user_input
 
@@ -885,9 +974,9 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.markdown(prompt_to_submit)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analyzing live matrix..."):
+            with st.spinner("Analyzing live session matrix..."):
                 response_text, provider = run_ai_agent(prompt_to_submit)
-                st.caption(f"_Answered via {provider}_")
+                st.caption(f"_Source: Slotpilot Engine ({provider})_")
                 st.markdown(response_text)
                 st.session_state.chat_messages.append({"role": "assistant", "content": response_text})
 
@@ -895,7 +984,7 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.session_state.pending_rerun = False
             st.rerun()
 
-# TAB 5: PLAYED BASKET & OVERRIDES
+# TAB 6: PLAYED BASKET & OVERRIDES
 elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
     st.subheader("🧺 Played Basket")
 
