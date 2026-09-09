@@ -125,7 +125,6 @@ def restore_slot(slot_name: str):
 # 1. MASTER LIST & STRATEGY CONSTANTS
 # ==========================================
 
-# Fixed $5 Bet across 5 Denominations ($500 Check-in Plan with Dynamic Line Win Spins)
 STRATEGY_STEPS = [
     {"step": 1, "budget": 100, "denom": "$1.00", "bet": 5.00, "spins": "20+ (Dynamic)"},
     {"step": 2, "budget": 100, "denom": "$0.10", "bet": 5.00, "spins": "20+ (Dynamic)"},
@@ -269,6 +268,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "first_hit_count": 0,
         "first_hit_total": 0,
         "avg_first_multiplier": 0.0,
+        "avg_first_spins": 0.0,
     }
 
     parsed_df = parse_session_log_data(live_df, slot_name, family_name)
@@ -292,6 +292,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         ]
     first_hit_count = len(first_hits)
     avg_first_mult = round(float(first_hits["_mult"].mean()), 1) if not first_hits.empty else 0.0
+    avg_first_spins = round(float(first_hits["_spins"].mean()), 1) if not first_hits.empty else 0.0
 
     repeat_entries = pd.DataFrame()
     if "_feature_num" in parsed_df.columns:
@@ -331,6 +332,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "first_hit_count": first_hit_count,
         "first_hit_total": total_logs,
         "avg_first_multiplier": avg_first_mult,
+        "avg_first_spins": avg_first_spins,
     }
 
 def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_mode=True):
@@ -484,7 +486,7 @@ def build_agent_context():
     available_slots = [
         s for s in st.session_state.slots_db
         if s["slot"] not in st.session_state.played_basket
-        and (s.get("total_hits") or s.get("rehit_metrics", {}).get("first_hit_total") or 0) > 5
+        and (s.get("rehit_metrics", {}).get("first_hit_total", 0)) > 5
     ]
 
     slot_context_summary = []
@@ -684,12 +686,26 @@ with st.sidebar.form("quick_mark_played_form"):
 if st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
 
-    available_slots = [
-        s for s in st.session_state.slots_db
-        if s["slot"] not in st.session_state.played_basket
-        and (s.get("total_hits") or s.get("rehit_metrics", {}).get("first_hit_total") or 0) > 5
-    ]
-    current_display = available_slots[:st.session_state.display_limit]
+    filtered_slots = []
+    for s in st.session_state.slots_db:
+        if s["slot"] in st.session_state.played_basket:
+            continue
+
+        rehit = s.get("rehit_metrics", {})
+        first_total = rehit.get("first_hit_total", 0)
+
+        # Filter 1: Total attempts in the first hit must be > 5
+        if first_total > 5:
+            first_hits = rehit.get("first_hit_count", 0)
+            success_rate = (first_hits / first_total) if first_total > 0 else 0.0
+            
+            s_copy = dict(s)
+            s_copy["_calc_success_rate"] = success_rate
+            filtered_slots.append(s_copy)
+
+    # Filter 2: Sort based on success rate from highest to lowest
+    sorted_slots = sorted(filtered_slots, key=lambda x: x["_calc_success_rate"], reverse=True)
+    current_display = sorted_slots[:st.session_state.display_limit]
 
     table_data = []
     for rank, item in enumerate(current_display, 1):
@@ -699,14 +715,16 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
         first_total = rehit.get("first_hit_total", 0)
         avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
         avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0)
+        avg_spins = rehit.get("avg_first_spins", 0.0)
+
+        success_pct = f"{round(item['_calc_success_rate'] * 100, 1)}%"
 
         table_data.append({
             "Rank": rank,
             "Slot Theme": item.get("slot", "N/A"),
             "Family": item.get("family", "N/A"),
-            "Check-In": "$500",
-            "5-Denom Execution Strategy": STRATEGY_PLAN_SUMMARY,
-            "1st Hits/Total": f"{first_hits} / {first_total}",
+            "Average Spin Count": f"{avg_spins}" if avg_spins > 0 else "N/A",
+            "1st Hits/Total": f"{first_hits} / {first_total} ({success_pct})",
             "Avg 1st Mult": f"{avg_1st_mult}x" if avg_1st_mult > 0 else "N/A",
             "2nd Hits/Total": f"{rehit.get('multi_hit_count', 0)} / {att2_pop}",
             "Avg 2nd Mult": f"{avg_2nd_mult}x" if avg_2nd_mult > 0 else "N/A",
@@ -715,7 +733,7 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
     df_priority = pd.DataFrame(table_data)
 
     if df_priority.empty:
-        st.info("No slots with > 5 attempts available for today's filter.")
+        st.info("No slots with > 5 total attempts available for today's filter.")
     else:
         st.dataframe(
             df_priority,
@@ -725,16 +743,15 @@ if st.session_state.active_tab == "📊 Today's Priority Board":
                 "Rank": st.column_config.NumberColumn("Rank", width="small"),
                 "Slot Theme": st.column_config.TextColumn("Slot Theme", width="medium"),
                 "Family": st.column_config.TextColumn("Family", width="medium"),
-                "Check-In": st.column_config.TextColumn("Check-In", width="small"),
-                "5-Denom Execution Strategy": st.column_config.TextColumn("5-Denom Execution Strategy", width="large"),
-                "1st Hits/Total": st.column_config.TextColumn("1st Hits/Total", width="small"),
+                "Average Spin Count": st.column_config.TextColumn("Average Spin Count", width="small"),
+                "1st Hits/Total": st.column_config.TextColumn("1st Hits/Total", width="medium"),
                 "Avg 1st Mult": st.column_config.TextColumn("Avg 1st Mult", width="small"),
                 "2nd Hits/Total": st.column_config.TextColumn("2nd Hits/Total", width="small"),
                 "Avg 2nd Mult": st.column_config.TextColumn("Avg 2nd Mult", width="small"),
             }
         )
 
-    if len(available_slots) > st.session_state.display_limit:
+    if len(sorted_slots) > st.session_state.display_limit:
         if st.button("➕ Load 15 More Slots"):
             st.session_state.display_limit += 15
             st.rerun()
