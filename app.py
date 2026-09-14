@@ -221,11 +221,6 @@ def parse_spin_value(raw):
         return None
 
 def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=85):
-    """
-    Dynamically calculate the spin count that covers ~85% of historical hits
-    for a specific Hit Number (1 = first feature, 2 = second feature).
-    Fully data-driven – updates automatically when Session Log changes.
-    """
     if live_df.empty:
         return None
 
@@ -247,7 +242,6 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
     if df.empty:
         return None
 
-    # Prefer Hit Number column, fall back to Feature Win Number
     if hit_col:
         df["_hit"] = pd.to_numeric(df[hit_col], errors="coerce")
         hits = df[df["_hit"] == hit_number]
@@ -415,39 +409,98 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     slot_scores = []
     if target_day is None:
         target_day = datetime.now().strftime("%A")
+
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
             rvi_score, source_proof, active_day, day_factor, day_hits, total_hits = compute_75_25_rvi(slot, fam, live_df, target_day, strict_mode)
-            rehit_metrics = compute_slot_rehit_metrics(slot, fam, live_df)
-            
-            # Dynamic spin calculations
+            rehit = compute_slot_rehit_metrics(slot, fam, live_df)
+
             spin_1st = get_spins_for_hit(slot, fam, live_df, hit_number=1, percentile=85)
             spin_2nd = get_spins_for_hit(slot, fam, live_df, hit_number=2, percentile=85)
-            
+
+            # ---------- NEW COMPOSITE SCORE ----------
+            first_total = rehit.get("first_hit_total", 0) or 0
+            first_hits = rehit.get("first_hit_count", 0) or 0
+            avg_mult = rehit.get("avg_first_multiplier", 0.0) or 0.0
+            multi_rate = rehit.get("multi_hit_rate", 0.0) or 0.0
+
+            if first_total < 3:
+                composite = 0.0
+            else:
+                # 1. Success rate (0-10)
+                success_rate = first_hits / first_total if first_total > 0 else 0
+                success_score = success_rate * 10
+
+                # 2. Multiplier strength (0-10)
+                mult_score = min(10.0, avg_mult / 8.0)
+
+                # 3. Spin efficiency (heavily penalise high spins)
+                if spin_1st is None:
+                    spin_score = 3.0
+                elif spin_1st <= 35:
+                    spin_score = 10.0
+                elif spin_1st <= 50:
+                    spin_score = 8.0
+                elif spin_1st <= 65:
+                    spin_score = 5.5
+                elif spin_1st <= 80:
+                    spin_score = 2.5
+                else:
+                    spin_score = 0.5          # heavy penalty for 80+
+
+                # 4. Second-hit bonus
+                second_bonus = min(2.5, multi_rate / 20.0)
+
+                # Weighted composite
+                composite = (
+                    0.32 * success_score +
+                    0.28 * mult_score +
+                    0.30 * spin_score +
+                    0.10 * second_bonus
+                )
+
+                # Small sample size reliability factor
+                if first_total < 6:
+                    composite *= 0.75
+                elif first_total < 10:
+                    composite *= 0.90
+
             slot_scores.append({
-                "family": fam, "slot": slot, "rvi": rvi_score, "source_proof": source_proof,
-                "target_day": active_day, "day_factor": day_factor, "day_hits": day_hits,
-                "total_hits": total_hits, "rehit_metrics": rehit_metrics,
+                "family": fam,
+                "slot": slot,
+                "rvi": rvi_score,
+                "composite": round(composite, 3),
+                "source_proof": source_proof,
+                "target_day": active_day,
+                "day_factor": day_factor,
+                "day_hits": day_hits,
+                "total_hits": total_hits,
+                "rehit_metrics": rehit,
                 "spin_1st": spin_1st,
                 "spin_2nd": spin_2nd
             })
-    def _rank_key(x):
-        total = x.get("total_hits", 0) or 0
-        sample_bonus = min(total, 20) / 20.0
-        reliability = 1.0 if total >= 5 else 0.3
-        return (x["rvi"] * reliability, x["rehit_metrics"].get("multi_hit_rate", 0), sample_bonus, x.get("day_hits", 0))
-    slot_scores = sorted(slot_scores, key=_rank_key, reverse=True)
+
+    # Sort by the new composite score
+    slot_scores = sorted(slot_scores, key=lambda x: x["composite"], reverse=True)
+
     for item in slot_scores:
         records.append({
-            "family": item["family"], "slot": item["slot"], "base_rvi": item["rvi"],
-            "checkin_alloc": 500.0, "strategy_plan": STRATEGY_PLAN_SUMMARY,
-            "source_proof": item["source_proof"], "target_day": item["target_day"],
-            "day_factor": item["day_factor"], "day_hits": item["day_hits"],
-            "total_hits": item["total_hits"], "rehit_metrics": item["rehit_metrics"],
+            "family": item["family"],
+            "slot": item["slot"],
+            "base_rvi": item["rvi"],
+            "composite": item["composite"],
+            "checkin_alloc": 500.0,
+            "strategy_plan": STRATEGY_PLAN_SUMMARY,
+            "source_proof": item["source_proof"],
+            "target_day": item["target_day"],
+            "day_factor": item["day_factor"],
+            "day_hits": item["day_hits"],
+            "total_hits": item["total_hits"],
+            "rehit_metrics": item["rehit_metrics"],
             "spin_1st": item["spin_1st"],
             "spin_2nd": item["spin_2nd"]
         })
-    return sorted(records, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
+    return records
 
 # ==========================================
 # 2B. GAMBLE DATA ENGINE
@@ -811,7 +864,8 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 # -------------------------------------------------
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    
+    st.caption("Ranked by real-world usefulness: hit rate + size + spin efficiency + second-hit potential")
+
     filtered_slots = []
     for s in st.session_state.slots_db:
         if s["slot"] in st.session_state.played_basket:
@@ -821,8 +875,8 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
         if first_total > 5:
             filtered_slots.append(s)
 
-    sorted_slots = sorted(filtered_slots, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
-    current_display = sorted_slots[:st.session_state.display_limit]
+    # Already sorted by composite score in build_priority_dataset
+    current_display = filtered_slots[:st.session_state.display_limit]
 
     table_data = []
     for rank, item in enumerate(current_display, 1):
@@ -846,12 +900,12 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "Rank": st.column_config.NumberColumn("Rank", width="small"),
                 "Family": st.column_config.TextColumn("Family", width="medium"),
                 "Slot": st.column_config.TextColumn("Slot", width="medium"),
-                "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium", help="85th percentile of historical 1st-hit spins"),
-                "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium", help="85th percentile of historical 2nd-hit spins"),
+                "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium"),
+                "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium"),
             }
         )
 
-    if len(sorted_slots) > st.session_state.display_limit:
+    if len(filtered_slots) > st.session_state.display_limit:
         if st.button("➕ Load 15 More Slots"):
             st.session_state.display_limit += 15
             st.rerun()
