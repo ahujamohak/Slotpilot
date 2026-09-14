@@ -32,7 +32,7 @@ TAB_OPTIONS = [
     "🃏 Gamble Analyzer",
     "📊 Today's Priority Board",
     "📈 Overall Performance",
-    "📝 Live Data Entry",
+    # "📝 Live Data Entry",          # temporarily disabled
     "🤖 Interactive AI Agent",
     "🧺 Played Basket & Overrides"
 ]
@@ -41,6 +41,9 @@ SUITS = ["Hearts", "Diamonds", "Clubs", "Spades"]
 SUIT_EMOJI = {"Hearts": "♥", "Diamonds": "♦", "Clubs": "♣", "Spades": "♠"}
 SUIT_COLOR = {"Hearts": "Red", "Diamonds": "Red", "Clubs": "Black", "Spades": "Black"}
 COLOR_EMOJI = {"Red": "🔴", "Black": "⚫"}
+
+RED_SUITS = ["Hearts", "Diamonds"]
+BLACK_SUITS = ["Clubs", "Spades"]
 
 def suit_html(suit: str, size: str = "22px") -> str:
     color = "red" if SUIT_COLOR[suit] == "Red" else "#222"
@@ -427,14 +430,10 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             if first_total < 3:
                 composite = 0.0
             else:
-                # 1. Success rate (0-10)
                 success_rate = first_hits / first_total if first_total > 0 else 0
                 success_score = success_rate * 10
-
-                # 2. Multiplier strength (0-10)
                 mult_score = min(10.0, avg_mult / 8.0)
 
-                # 3. Spin efficiency (heavily penalise high spins)
                 if spin_1st is None:
                     spin_score = 3.0
                 elif spin_1st <= 35:
@@ -446,12 +445,10 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 elif spin_1st <= 80:
                     spin_score = 2.5
                 else:
-                    spin_score = 0.5          # heavy penalty for 80+
+                    spin_score = 0.5
 
-                # 4. Second-hit bonus
                 second_bonus = min(2.5, multi_rate / 20.0)
 
-                # Weighted composite
                 composite = (
                     0.32 * success_score +
                     0.28 * mult_score +
@@ -459,7 +456,6 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                     0.10 * second_bonus
                 )
 
-                # Small sample size reliability factor
                 if first_total < 6:
                     composite *= 0.75
                 elif first_total < 10:
@@ -480,7 +476,6 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 "spin_2nd": spin_2nd
             })
 
-    # Sort by the new composite score
     slot_scores = sorted(slot_scores, key=lambda x: x["composite"], reverse=True)
 
     for item in slot_scores:
@@ -503,7 +498,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE
+# 2B. GAMBLE DATA ENGINE  (FIXED)
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -538,6 +533,11 @@ def append_gamble_record(record: dict):
         return False
 
 def get_gamble_suggestion(sequence: list):
+    """
+    Returns a colour + suit that are always consistent:
+    Red  → Hearts or Diamonds
+    Black → Clubs or Spades
+    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts"}
@@ -548,16 +548,19 @@ def get_gamble_suggestion(sequence: list):
     if df.empty:
         return {"color": "Red", "suit": "Hearts"}
 
-    def most_common(counter, default="Hearts"):
+    def most_common(counter, default=None):
         if not counter:
             return default
         return counter.most_common(1)[0][0]
 
-    global_suits = Counter(df["Actual_Next"])
+    # Global colour preference
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
-    g_suit = most_common(global_suits)
-    g_color = most_common(global_colors, "Red")
+    preferred_color = most_common(global_colors, "Red")
 
+    # Restrict suits to the preferred colour
+    allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
+
+    # Try sequence matching first (exact → shorter)
     def seq_str(cards):
         return "-".join(cards)
 
@@ -569,14 +572,17 @@ def get_gamble_suggestion(sequence: list):
             continue
         matches = df[df["Sequence"].astype(str).str.endswith(key)]
         if len(matches) >= 2:
-            suits = Counter(matches["Actual_Next"])
-            colors = Counter([SUIT_COLOR[s] for s in matches["Actual_Next"]])
-            return {
-                "color": most_common(colors, "Red"),
-                "suit": most_common(suits)
-            }
+            # Only count suits that match the preferred colour
+            valid_suits = [s for s in matches["Actual_Next"] if s in allowed_suits]
+            if valid_suits:
+                suit_counter = Counter(valid_suits)
+                best_suit = most_common(suit_counter)
+                return {"color": preferred_color, "suit": best_suit}
 
-    return {"color": g_color, "suit": g_suit}
+    # Fallback: global frequency among allowed suits
+    global_suits = Counter([s for s in df["Actual_Next"] if s in allowed_suits])
+    best_suit = most_common(global_suits, allowed_suits[0])
+    return {"color": preferred_color, "suit": best_suit}
 
 # ==========================================
 # 3. AI AGENT ENGINE
@@ -875,7 +881,6 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
         if first_total > 5:
             filtered_slots.append(s)
 
-    # Already sorted by composite score in build_priority_dataset
     current_display = filtered_slots[:st.session_state.display_limit]
 
     table_data = []
@@ -959,63 +964,63 @@ elif st.session_state.active_tab == "📈 Overall Performance":
         st.dataframe(df_overall, use_container_width=True, hide_index=True)
 
 # -------------------------------------------------
-# TAB 3: LIVE DATA ENTRY
+# TAB 3: LIVE DATA ENTRY  (TEMPORARILY COMMENTED OUT)
 # -------------------------------------------------
-elif st.session_state.active_tab == "📝 Live Data Entry":
-    st.subheader("📝 Live Session Data Entry")
-    chosen_date = st.date_input("Select Date:", value=datetime.now().date(), key="live_date_picker")
-    dynamic_day = chosen_date.strftime("%A")
-    formatted_date_str = f"{chosen_date.month}/{chosen_date.day}/{chosen_date.year}"
-    st.info(f"📆 Selected Date: **{formatted_date_str}** | Day: **{dynamic_day}**")
-    col_f1, col_f2 = st.columns(2)
-    with col_f1:
-        entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()), key="live_fam_select")
-    with col_f2:
-        entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family], key="live_slot_select")
-    with st.form("dynamic_gs_entry_form", clear_on_submit=True):
-        col_e1, col_e2, col_e3 = st.columns(3)
-        with col_e1:
-            entry_spin_hit_raw = st.text_input("Spin of Feature Hit:", value="15")
-            entry_feat_type = st.selectbox("Feature Type:", ["orb", "scatter", "scatter+orb", "na"])
-        with col_e2:
-            entry_win_amt = st.number_input("Win Amount ($):", min_value=0, value=916, step=10)
-            entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=183.0, step=0.5, format="%.1f")
-        with col_e3:
-            entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1)
-            entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
-            entry_feat_win_num = st.number_input("Feature Win Number:", min_value=0, max_value=20, value=1)
-        submit_gs_entry = st.form_submit_button("💾 Save Record to Google Sheets")
-        if submit_gs_entry:
-            new_record = {
-                "Date": str(formatted_date_str),
-                "Day": str(dynamic_day),
-                "Family": str(entry_family),
-                "Slot": str(entry_slot),
-                "Spin of feature hit": str(entry_spin_hit_raw.strip()),
-                "Feature type": str(entry_feat_type),
-                "Win amount": str(entry_win_amt),
-                "Win multiplier": str(entry_multiplier),
-                "Hit Number": str(entry_hit_num),
-                "Attempt Number": str(entry_attempt_num),
-                "Feature Win Number": str(entry_feat_win_num)
-            }
-            try:
-                existing_df, existing_cols = load_and_inspect_sheet()
-                new_row_df = pd.DataFrame([new_record])
-                if not existing_df.empty:
-                    for col in existing_cols:
-                        if col not in new_row_df.columns:
-                            new_row_df[col] = ""
-                    updated_df = pd.concat([existing_df.astype(str), new_row_df.astype(str)], ignore_index=True)
-                else:
-                    updated_df = new_row_df.astype(str)
-                conn.update(worksheet=SESSION_LOG_WORKSHEET, data=updated_df)
-                mark_slot_played(entry_slot)
-                st.cache_data.clear()
-                st.success(f"✅ Recorded '{entry_slot}'!")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to update Google Sheets: {e}")
+# elif st.session_state.active_tab == "📝 Live Data Entry":
+#     st.subheader("📝 Live Session Data Entry")
+#     chosen_date = st.date_input("Select Date:", value=datetime.now().date(), key="live_date_picker")
+#     dynamic_day = chosen_date.strftime("%A")
+#     formatted_date_str = f"{chosen_date.month}/{chosen_date.day}/{chosen_date.year}"
+#     st.info(f"📆 Selected Date: **{formatted_date_str}** | Day: **{dynamic_day}**")
+#     col_f1, col_f2 = st.columns(2)
+#     with col_f1:
+#         entry_family = st.selectbox("Slot Family:", list(SLOT_MASTER_LIST.keys()), key="live_fam_select")
+#     with col_f2:
+#         entry_slot = st.selectbox("Slot Theme Name:", SLOT_MASTER_LIST[entry_family], key="live_slot_select")
+#     with st.form("dynamic_gs_entry_form", clear_on_submit=True):
+#         col_e1, col_e2, col_e3 = st.columns(3)
+#         with col_e1:
+#             entry_spin_hit_raw = st.text_input("Spin of Feature Hit:", value="15")
+#             entry_feat_type = st.selectbox("Feature Type:", ["orb", "scatter", "scatter+orb", "na"])
+#         with col_e2:
+#             entry_win_amt = st.number_input("Win Amount ($):", min_value=0, value=916, step=10)
+#             entry_multiplier = st.number_input("Win Multiplier (x):", min_value=0.0, value=183.0, step=0.5, format="%.1f")
+#         with col_e3:
+#             entry_hit_num = st.number_input("Hit Number:", min_value=0, max_value=20, value=1)
+#             entry_attempt_num = st.number_input("Attempt Number:", min_value=1, max_value=20, value=1)
+#             entry_feat_win_num = st.number_input("Feature Win Number:", min_value=0, max_value=20, value=1)
+#         submit_gs_entry = st.form_submit_button("💾 Save Record to Google Sheets")
+#         if submit_gs_entry:
+#             new_record = {
+#                 "Date": str(formatted_date_str),
+#                 "Day": str(dynamic_day),
+#                 "Family": str(entry_family),
+#                 "Slot": str(entry_slot),
+#                 "Spin of feature hit": str(entry_spin_hit_raw.strip()),
+#                 "Feature type": str(entry_feat_type),
+#                 "Win amount": str(entry_win_amt),
+#                 "Win multiplier": str(entry_multiplier),
+#                 "Hit Number": str(entry_hit_num),
+#                 "Attempt Number": str(entry_attempt_num),
+#                 "Feature Win Number": str(entry_feat_win_num)
+#             }
+#             try:
+#                 existing_df, existing_cols = load_and_inspect_sheet()
+#                 new_row_df = pd.DataFrame([new_record])
+#                 if not existing_df.empty:
+#                     for col in existing_cols:
+#                         if col not in new_row_df.columns:
+#                             new_row_df[col] = ""
+#                     updated_df = pd.concat([existing_df.astype(str), new_row_df.astype(str)], ignore_index=True)
+#                 else:
+#                     updated_df = new_row_df.astype(str)
+#                 conn.update(worksheet=SESSION_LOG_WORKSHEET, data=updated_df)
+#                 mark_slot_played(entry_slot)
+#                 st.cache_data.clear()
+#                 st.success(f"✅ Recorded '{entry_slot}'!")
+#                 st.rerun()
+#             except Exception as e:
+#                 st.error(f"Failed to update Google Sheets: {e}")
 
 # -------------------------------------------------
 # TAB 4: INTERACTIVE AI AGENT
