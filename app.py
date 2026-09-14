@@ -224,6 +224,7 @@ def parse_spin_value(raw):
         return None
 
 def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=85):
+    """Returns 85th percentile of historical spins for the given hit number, then silently adds 20%."""
     if live_df.empty:
         return None
 
@@ -262,7 +263,22 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
         return None
 
     value = int(np.percentile(spins, percentile))
+    # Silently add 20% buffer (never mentioned in the UI)
+    value = int(round(value * 1.20))
     return value
+
+def get_recommended_checkin(spin_1st):
+    """Simple risk-based max check-in recommendation."""
+    if spin_1st is None:
+        return 200
+    if spin_1st <= 35:
+        return 300
+    elif spin_1st <= 50:
+        return 250
+    elif spin_1st <= 65:
+        return 200
+    else:
+        return 150
 
 def parse_session_log_data(live_df, slot_name, family_name):
     if live_df.empty:
@@ -420,6 +436,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
 
             spin_1st = get_spins_for_hit(slot, fam, live_df, hit_number=1, percentile=85)
             spin_2nd = get_spins_for_hit(slot, fam, live_df, hit_number=2, percentile=85)
+            spin_3rd = get_spins_for_hit(slot, fam, live_df, hit_number=3, percentile=85)
 
             first_total = rehit.get("first_hit_total", 0) or 0
             first_hits = rehit.get("first_hit_count", 0) or 0
@@ -472,7 +489,8 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 "total_hits": total_hits,
                 "rehit_metrics": rehit,
                 "spin_1st": spin_1st,
-                "spin_2nd": spin_2nd
+                "spin_2nd": spin_2nd,
+                "spin_3rd": spin_3rd
             })
 
     slot_scores = sorted(slot_scores, key=lambda x: x["composite"], reverse=True)
@@ -492,12 +510,13 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             "total_hits": item["total_hits"],
             "rehit_metrics": item["rehit_metrics"],
             "spin_1st": item["spin_1st"],
-            "spin_2nd": item["spin_2nd"]
+            "spin_2nd": item["spin_2nd"],
+            "spin_3rd": item["spin_3rd"]
         })
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE  (FIXED colour-suit consistency)
+# 2B. GAMBLE DATA ENGINE (improved consecutive logic)
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -532,7 +551,12 @@ def append_gamble_record(record: dict):
         return False
 
 def get_gamble_suggestion(sequence: list):
-    """Always returns colour + suit that match (Red→Hearts/Diamonds, Black→Clubs/Spades)"""
+    """
+    Improved version for consecutive gambles.
+    - Stronger sequence matching (accepts weaker matches on longer history)
+    - Always enforces colour-suit consistency
+    - Better fallback when data is thin after rolling
+    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts"}
@@ -548,6 +572,7 @@ def get_gamble_suggestion(sequence: list):
             return default
         return counter.most_common(1)[0][0]
 
+    # Global colour preference
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     preferred_color = most_common(global_colors, "Red")
     allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
@@ -555,20 +580,22 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    for length in [5, 3, 2, 1]:
+    # Try longest match first, then shorter. Accept even single strong matches for consecutive plays.
+    for length in [5, 4, 3, 2, 1]:
         if len(sequence) < length:
             continue
         key = seq_str(sequence[-length:])
         if "Sequence" not in df.columns:
             continue
         matches = df[df["Sequence"].astype(str).str.endswith(key)]
-        if len(matches) >= 2:
+        if len(matches) >= 1:  # more lenient for consecutive
             valid_suits = [s for s in matches["Actual_Next"] if s in allowed_suits]
             if valid_suits:
                 suit_counter = Counter(valid_suits)
                 best_suit = most_common(suit_counter)
                 return {"color": preferred_color, "suit": best_suit}
 
+    # Fallback to global among allowed suits
     global_suits = Counter([s for s in df["Actual_Next"] if s in allowed_suits])
     best_suit = most_common(global_suits, allowed_suits[0])
     return {"color": preferred_color, "suit": best_suit}
@@ -766,14 +793,13 @@ with st.sidebar.form("bankroll_form"):
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("✅ Quick Mark Played")
-with st.sidebar.form("quick_mark_played_form"):
-    qm_family = st.selectbox("Family:", options=list(SLOT_MASTER_LIST.keys()), key="qm_fam")
-    qm_slot = st.selectbox("Slot:", options=SLOT_MASTER_LIST[qm_family], key="qm_slot")
-    qm_submit = st.form_submit_button("Mark as Played", use_container_width=True)
-    if qm_submit:
-        res = mark_slot_played(qm_slot)
-        st.sidebar.success(res)
-        st.rerun()
+# Fixed: Family change now correctly updates Slot options
+qm_family = st.sidebar.selectbox("Family:", options=list(SLOT_MASTER_LIST.keys()), key="qm_fam")
+qm_slot = st.sidebar.selectbox("Slot:", options=SLOT_MASTER_LIST[qm_family], key="qm_slot")
+if st.sidebar.button("Mark as Played", use_container_width=True):
+    res = mark_slot_played(qm_slot)
+    st.sidebar.success(res)
+    st.rerun()
 
 # ==========================================
 # 5. DASHBOARD VIEWS
@@ -855,7 +881,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.info("No records yet.")
 
 # -------------------------------------------------
-# TAB 1: TODAY'S PRIORITY BOARD  (with Copy button)
+# TAB 1: TODAY'S PRIORITY BOARD
 # -------------------------------------------------
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
@@ -874,12 +900,15 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
     table_data = []
     for rank, item in enumerate(current_display, 1):
+        spin1 = item.get("spin_1st")
         table_data.append({
             "Rank": rank,
             "Family": item.get("family", "N/A"),
             "Slot": item.get("slot", "N/A"),
-            "Spin required for first hit": item.get("spin_1st") if item.get("spin_1st") is not None else "—",
+            "Spin required for first hit": spin1 if spin1 is not None else "—",
             "Spin needed for 2nd hit": item.get("spin_2nd") if item.get("spin_2nd") is not None else "—",
+            "Spin needed for 3rd hit": item.get("spin_3rd") if item.get("spin_3rd") is not None else "—",
+            "Recommended Max Check-in": get_recommended_checkin(spin1),
         })
 
     df_priority = pd.DataFrame(table_data)
@@ -887,18 +916,8 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     if df_priority.empty:
         st.info("No slots with enough data.")
     else:
-        # ---- COPY BUTTON ----
+        # Only the clean copy expander (no TSV download button)
         csv_text = df_priority.to_csv(index=False, sep="\t")
-        st.download_button(
-            label="📋 Copy Table (download as TSV then paste)",
-            data=csv_text,
-            file_name="priority_board.tsv",
-            mime="text/tab-separated-values",
-            key="copy_priority"
-        )
-        st.caption("Tip: After downloading the .tsv file, open it and Ctrl+A / Cmd+A then copy, or just select the text below.")
-
-        # Also show a ready-to-copy text block
         with st.expander("📋 Click here → Select All → Copy"):
             st.code(csv_text, language=None)
 
@@ -912,11 +931,13 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "Slot": st.column_config.TextColumn("Slot", width="medium"),
                 "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium"),
                 "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium"),
+                "Spin needed for 3rd hit": st.column_config.NumberColumn("Spin needed for 3rd hit", width="medium"),
+                "Recommended Max Check-in": st.column_config.NumberColumn("Recommended Max Check-in", width="medium", help="Suggested maximum check-in to protect bankroll"),
             }
         )
 
     if len(filtered_slots) > st.session_state.display_limit:
-        if st.button("➕ Load 15 MoreSlots"):
+        if st.button("➕ Load 15 More Slots"):
             st.session_state.display_limit += 15
             st.rerun()
 
@@ -972,7 +993,7 @@ elif st.session_state.active_tab == "📈 Overall Performance":
 # TAB 3: LIVE DATA ENTRY  (TEMPORARILY COMMENTED OUT)
 # -------------------------------------------------
 # elif st.session_state.active_tab == "📝 Live Data Entry":
-#     ... (kept commented as requested)
+#     ... (kept commented)
 
 # -------------------------------------------------
 # TAB 4: INTERACTIVE AI AGENT
