@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from collections import Counter, defaultdict
+from collections import Counter
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from google import genai
@@ -19,7 +19,6 @@ except ImportError:
 # ==========================================
 st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
 
-# Google Sheets Connection
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 GEMINI_MODEL = "gemini-3.6-flash"
@@ -27,10 +26,10 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 
 SESSION_STATE_WORKSHEET = "Live Session"
 SESSION_LOG_WORKSHEET = "Session Log"
-GAMBLE_WORKSHEET = "Gamble Log"          # ← NEW TAB
+GAMBLE_WORKSHEET = "Gamble Log"
 
 TAB_OPTIONS = [
-    "🃏 Gamble Analyzer",                 # ← NEW DEFAULT
+    "🃏 Gamble Analyzer",
     "📊 Today's Priority Board",
     "📈 Overall Performance",
     "📋 Pre-Planned Execution Cards",
@@ -39,11 +38,19 @@ TAB_OPTIONS = [
     "🧺 Played Basket & Overrides"
 ]
 
-# Suit helpers
 SUITS = ["Hearts", "Diamonds", "Clubs", "Spades"]
 SUIT_EMOJI = {"Hearts": "♥", "Diamonds": "♦", "Clubs": "♣", "Spades": "♠"}
 SUIT_COLOR = {"Hearts": "Red", "Diamonds": "Red", "Clubs": "Black", "Spades": "Black"}
 COLOR_EMOJI = {"Red": "🔴", "Black": "⚫"}
+
+def suit_html(suit: str, size: str = "22px") -> str:
+    """Return coloured HTML for a suit."""
+    color = "red" if SUIT_COLOR[suit] == "Red" else "#222"
+    return f'<span style="color:{color}; font-size:{size}; font-weight:600;">{SUIT_EMOJI[suit]} {suit}</span>'
+
+def color_html(color: str, size: str = "22px") -> str:
+    col = "red" if color == "Red" else "#222"
+    return f'<span style="color:{col}; font-size:{size}; font-weight:600;">{COLOR_EMOJI[color]} {color}</span>'
 
 # ==========================================
 # 0B. SESSION PERSISTENCE
@@ -81,13 +88,12 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.session_start_bankroll = 1000.0
     st.session_state.current_bankroll = 1000.0
     st.session_state.session_target = 1800.0
-    st.session_state.active_tab = "🃏 Gamble Analyzer"          # ← DEFAULT
+    st.session_state.active_tab = "🃏 Gamble Analyzer"
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
     st.session_state.selected_day = datetime.now().strftime("%A")
     st.session_state.last_saved_ts = None
     st.session_state.last_save_error = None
-    # Gamble-specific
     st.session_state.gamble_sequence = []
     st.session_state.gamble_suggestion = None
     if wipe_persisted:
@@ -103,7 +109,7 @@ if "played_basket" not in st.session_state:
         st.session_state.session_start_bankroll = float(restored.get("Starting Bankroll", 1000.0) or 1000.0)
         st.session_state.current_bankroll = float(restored.get("Current Bankroll", 1000.0) or 1000.0)
         st.session_state.session_target = float(restored.get("Target Bankroll", 1800.0) or 1800.0)
-        st.session_state.active_tab = "🃏 Gamble Analyzer"      # ← DEFAULT
+        st.session_state.active_tab = "🃏 Gamble Analyzer"
         strict_raw = restored.get("Strict Day Penalty", True)
         st.session_state.strict_day_penalty = str(strict_raw).strip().lower() in ("true", "1", "yes")
         st.session_state.chat_messages = []
@@ -251,18 +257,10 @@ def parse_session_log_data(live_df, slot_name, family_name):
 
 def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     default_res = {
-        "repeat_sample_size": 0,
-        "attempt2_population": 0,
-        "multi_hit_count": 0,
-        "multi_hit_rate": 0.0,
-        "avg_repeat_multiplier": 0.0,
-        "max_repeat_multiplier": 0.0,
-        "avg_attempt2_spins": 0.0,
-        "repeat_recommendation": "No Repeat Data",
-        "first_hit_count": 0,
-        "first_hit_total": 0,
-        "avg_first_multiplier": 0.0,
-        "avg_first_spins": 0.0,
+        "repeat_sample_size": 0, "attempt2_population": 0, "multi_hit_count": 0,
+        "multi_hit_rate": 0.0, "avg_repeat_multiplier": 0.0, "max_repeat_multiplier": 0.0,
+        "avg_attempt2_spins": 0.0, "repeat_recommendation": "No Repeat Data",
+        "first_hit_count": 0, "first_hit_total": 0, "avg_first_multiplier": 0.0, "avg_first_spins": 0.0,
     }
     parsed_df = parse_session_log_data(live_df, slot_name, family_name)
     if parsed_df.empty:
@@ -271,13 +269,9 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     for col in ["_feature_win_num", "_hit", "_attempt", "_mult", "_spins"]:
         if col in parsed_df.columns:
             parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
-    first_hits = parsed_df[
-        (parsed_df["_feature_win_num"] == 1) & (parsed_df["_spins"].notna())
-    ]
+    first_hits = parsed_df[(parsed_df["_feature_win_num"] == 1) & (parsed_df["_spins"].notna())]
     if first_hits.empty:
-        first_hits = parsed_df[
-            (parsed_df["_hit"] == 1) & (parsed_df["_attempt"] == 1) & (parsed_df["_spins"].notna())
-        ]
+        first_hits = parsed_df[(parsed_df["_hit"] == 1) & (parsed_df["_attempt"] == 1) & (parsed_df["_spins"].notna())]
     first_hit_count = len(first_hits)
     avg_first_mult = round(float(first_hits["_mult"].mean()), 1) if not first_hits.empty else 0.0
     valid_spins = first_hits["_spins"].dropna()
@@ -302,18 +296,12 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     else:
         recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}%): Single hit machine. Lock profits and exit."
     return {
-        "repeat_sample_size": total_logs,
-        "attempt2_population": attempt2_population,
-        "multi_hit_count": repeat_count,
-        "multi_hit_rate": multi_hit_rate,
-        "avg_repeat_multiplier": avg_repeat_mult,
-        "max_repeat_multiplier": max_repeat_mult,
-        "avg_attempt2_spins": avg_att2_spins,
-        "repeat_recommendation": recommendation,
-        "first_hit_count": first_hit_count,
-        "first_hit_total": total_logs,
-        "avg_first_multiplier": avg_first_mult,
-        "avg_first_spins": avg_first_spins,
+        "repeat_sample_size": total_logs, "attempt2_population": attempt2_population,
+        "multi_hit_count": repeat_count, "multi_hit_rate": multi_hit_rate,
+        "avg_repeat_multiplier": avg_repeat_mult, "max_repeat_multiplier": max_repeat_mult,
+        "avg_attempt2_spins": avg_att2_spins, "repeat_recommendation": recommendation,
+        "first_hit_count": first_hit_count, "first_hit_total": total_logs,
+        "avg_first_multiplier": avg_first_mult, "avg_first_spins": avg_first_spins,
     }
 
 def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_mode=True):
@@ -377,45 +365,28 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             rvi_score, source_proof, active_day, day_factor, day_hits, total_hits = compute_75_25_rvi(slot, fam, live_df, target_day, strict_mode)
             rehit_metrics = compute_slot_rehit_metrics(slot, fam, live_df)
             slot_scores.append({
-                "family": fam,
-                "slot": slot,
-                "rvi": rvi_score,
-                "source_proof": source_proof,
-                "target_day": active_day,
-                "day_factor": day_factor,
-                "day_hits": day_hits,
-                "total_hits": total_hits,
-                "rehit_metrics": rehit_metrics
+                "family": fam, "slot": slot, "rvi": rvi_score, "source_proof": source_proof,
+                "target_day": active_day, "day_factor": day_factor, "day_hits": day_hits,
+                "total_hits": total_hits, "rehit_metrics": rehit_metrics
             })
     def _rank_key(x):
         total = x.get("total_hits", 0) or 0
         sample_bonus = min(total, 20) / 20.0
         reliability = 1.0 if total >= 5 else 0.3
-        return (
-            x["rvi"] * reliability,
-            x["rehit_metrics"].get("multi_hit_rate", 0),
-            sample_bonus,
-            x.get("day_hits", 0),
-        )
+        return (x["rvi"] * reliability, x["rehit_metrics"].get("multi_hit_rate", 0), sample_bonus, x.get("day_hits", 0))
     slot_scores = sorted(slot_scores, key=_rank_key, reverse=True)
     for item in slot_scores:
         records.append({
-            "family": item["family"],
-            "slot": item["slot"],
-            "base_rvi": item["rvi"],
-            "checkin_alloc": 500.0,
-            "strategy_plan": STRATEGY_PLAN_SUMMARY,
-            "source_proof": item["source_proof"],
-            "target_day": item["target_day"],
-            "day_factor": item["day_factor"],
-            "day_hits": item["day_hits"],
-            "total_hits": item["total_hits"],
-            "rehit_metrics": item["rehit_metrics"]
+            "family": item["family"], "slot": item["slot"], "base_rvi": item["rvi"],
+            "checkin_alloc": 500.0, "strategy_plan": STRATEGY_PLAN_SUMMARY,
+            "source_proof": item["source_proof"], "target_day": item["target_day"],
+            "day_factor": item["day_factor"], "day_hits": item["day_hits"],
+            "total_hits": item["total_hits"], "rehit_metrics": item["rehit_metrics"]
         })
     return sorted(records, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE (NEW)
+# 2B. GAMBLE DATA ENGINE
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -429,12 +400,10 @@ def load_gamble_data():
         return pd.DataFrame()
 
 def append_gamble_record(record: dict):
-    """Append one row to the Gamble Log sheet."""
     try:
         existing = load_gamble_data()
         new_row = pd.DataFrame([record])
         if not existing.empty:
-            # Align columns
             for col in existing.columns:
                 if col not in new_row.columns:
                     new_row[col] = ""
@@ -452,87 +421,46 @@ def append_gamble_record(record: dict):
         return False
 
 def get_gamble_suggestion(sequence: list):
-    """
-    Simple frequency / Markov suggestion.
-    Priority: exact 5-card match → last-3 → last-2 → last-1 → global.
-    Returns dict with color + suit recommendations + sample sizes.
-    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
-        # Cold start – pure 50/50 & 25%
-        return {
-            "color": "Red",
-            "color_pct": 50.0,
-            "color_n": 0,
-            "suit": "Hearts",
-            "suit_pct": 25.0,
-            "suit_n": 0,
-            "method": "Cold start (no data yet)"
-        }
+        return {"color": "Red", "suit": "Hearts", "method": "Cold start"}
 
-    # Clean data
     df = df.dropna(subset=["Actual_Next"])
     df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
     df = df[df["Actual_Next"].isin(SUITS)]
-
     if df.empty:
-        return {
-            "color": "Red", "color_pct": 50.0, "color_n": 0,
-            "suit": "Hearts", "suit_pct": 25.0, "suit_n": 0,
-            "method": "No valid Actual_Next rows"
-        }
+        return {"color": "Red", "suit": "Hearts", "method": "No data"}
 
     def most_common(counter, default="Hearts"):
         if not counter:
-            return default, 0.0, 0
-        total = sum(counter.values())
-        item, cnt = counter.most_common(1)[0]
-        return item, round(100.0 * cnt / total, 1), total
+            return default
+        return counter.most_common(1)[0][0]
 
-    # Global fallback
     global_suits = Counter(df["Actual_Next"])
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
-    g_suit, g_suit_pct, g_suit_n = most_common(global_suits)
-    g_color, g_color_pct, g_color_n = most_common(global_colors, "Red")
+    g_suit = most_common(global_suits)
+    g_color = most_common(global_colors, "Red")
 
-    # Build sequence string helpers
     def seq_str(cards):
         return "-".join(cards)
 
-    # Try longer matches first
-    methods = [
-        (5, "Exact 5-card match"),
-        (3, "Last-3 match"),
-        (2, "Last-2 match"),
-        (1, "Last-1 match"),
-    ]
-
-    for length, label in methods:
+    for length, label in [(5, "Exact 5"), (3, "Last-3"), (2, "Last-2"), (1, "Last-1")]:
         if len(sequence) < length:
             continue
         key = seq_str(sequence[-length:])
-        # Look for rows whose Card(6-length) ... Card5 match the key
-        # We store Sequence as "C1-C2-C3-C4-C5"
         if "Sequence" not in df.columns:
             continue
         matches = df[df["Sequence"].astype(str).str.endswith(key)]
-        if len(matches) >= 3:          # need at least a few samples
+        if len(matches) >= 3:
             suits = Counter(matches["Actual_Next"])
             colors = Counter([SUIT_COLOR[s] for s in matches["Actual_Next"]])
-            suit, suit_pct, suit_n = most_common(suits)
-            color, color_pct, color_n = most_common(colors, "Red")
             return {
-                "color": color, "color_pct": color_pct, "color_n": color_n,
-                "suit": suit, "suit_pct": suit_pct, "suit_n": suit_n,
-                "method": f"{label} (n={len(matches)})"
+                "color": most_common(colors, "Red"),
+                "suit": most_common(suits),
+                "method": label
             }
 
-    # Fall back to global
-    return {
-        "color": g_color, "color_pct": g_color_pct, "color_n": g_color_n,
-        "suit": g_suit, "suit_pct": g_suit_pct, "suit_n": g_suit_n,
-        "method": f"Global frequency (n={g_suit_n})"
-    }
+    return {"color": g_color, "suit": g_suit, "method": "Global"}
 
 # ==========================================
 # 3. AI AGENT ENGINE
@@ -575,14 +503,11 @@ def build_agent_context():
     slot_context_summary = []
     for s in available_slots[:20]:
         slot_context_summary.append({
-            "slot": s["slot"],
-            "family": s["family"],
-            "rvi_score": s["base_rvi"],
+            "slot": s["slot"], "family": s["family"], "rvi_score": s["base_rvi"],
             "multi_hit_rate": f"{s['rehit_metrics']['multi_hit_rate']}%",
             "multi_hit_count": s['rehit_metrics']['multi_hit_count'],
             "attempt2_population": s['rehit_metrics'].get('attempt2_population', 0),
-            "strategy_plan": STRATEGY_PLAN_SUMMARY,
-            "checkin_alloc": "$500",
+            "strategy_plan": STRATEGY_PLAN_SUMMARY, "checkin_alloc": "$500",
             "recommendation_protocol": s['rehit_metrics']['repeat_recommendation']
         })
     system_instruction = f"""
@@ -744,67 +669,61 @@ with st.sidebar.form("quick_mark_played_form"):
 # ==========================================
 
 # -------------------------------------------------
-# TAB 0: GAMBLE ANALYZER (NEW DEFAULT)
+# TAB 0: GAMBLE ANALYZER (DEFAULT)
 # -------------------------------------------------
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
-    st.subheader("🃏 Gamble Analyzer – Card Sequence Tracker")
-    st.caption("Enter the last 5 cards you see on the machine. The system will suggest the next colour (2×) and suit (4×) from your own history.")
+    st.subheader("🃏 Gamble Analyzer")
+    st.caption("Tap the 5 cards you see → get simple next suggestion → log the real card → sequence rolls forward automatically for consecutive gambles.")
 
-    # ---- Quick entry buttons ----
-    st.markdown("### 1. Tap the 5 cards in order (left → right)")
+    # ---- Quick entry ----
+    st.markdown("### Enter the 5 cards (left → right)")
     cols = st.columns(4)
     for i, suit in enumerate(SUITS):
         with cols[i]:
-            if st.button(f"{SUIT_EMOJI[suit]} {suit}", key=f"suit_btn_{suit}", use_container_width=True):
+            label = f"{SUIT_EMOJI[suit]} {suit}"
+            if st.button(label, key=f"suit_btn_{suit}", use_container_width=True):
                 if len(st.session_state.gamble_sequence) < 5:
                     st.session_state.gamble_sequence.append(suit)
-                    st.session_state.gamble_suggestion = None   # reset suggestion
+                    st.session_state.gamble_suggestion = None
                     st.rerun()
 
-    # Current sequence display
     seq = st.session_state.gamble_sequence
+
+    # Current sequence with proper colours
     if seq:
         st.markdown("#### Current sequence")
-        display = "  →  ".join([f"{SUIT_EMOJI[s]} {s}" for s in seq])
-        st.markdown(f"**{display}**  ({len(seq)}/5)")
-        if st.button("↺ Clear sequence", key="clear_seq"):
+        html_parts = [suit_html(s) for s in seq]
+        st.markdown(" &nbsp;→&nbsp; ".join(html_parts) + f" &nbsp;&nbsp;({len(seq)}/5)", unsafe_allow_html=True)
+        
+        if st.button("↺ Clear sequence (new machine)", key="clear_seq"):
             st.session_state.gamble_sequence = []
             st.session_state.gamble_suggestion = None
             st.rerun()
     else:
-        st.info("No cards entered yet. Click the four suit buttons above.")
+        st.info("Click the four suit buttons above to enter the cards.")
 
-    # ---- Suggestion ----
+    # ---- Suggestion (only when 5 cards present) ----
     if len(seq) == 5:
         if st.session_state.gamble_suggestion is None:
             st.session_state.gamble_suggestion = get_gamble_suggestion(seq)
 
         sug = st.session_state.gamble_suggestion
-        st.markdown("---")
-        st.markdown("### 2. Suggestion for the NEXT card")
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric(
-                "Recommended COLOUR (2×)",
-                f"{COLOR_EMOJI[sug['color']]} {sug['color']}",
-                delta=f"{sug['color_pct']}%  (n={sug['color_n']})"
-            )
-        with c2:
-            st.metric(
-                "Recommended SUIT (4×)",
-                f"{SUIT_EMOJI[sug['suit']]} {sug['suit']}",
-                delta=f"{sug['suit_pct']}%  (n={sug['suit_n']})"
-            )
-        st.caption(f"Method: {sug['method']}")
-
-        # ---- Log the result ----
         st.markdown("---")
-        st.markdown("### 3. After the real next card appears – log it")
-        with st.form("log_gamble_result", clear_on_submit=True):
-            actual = st.selectbox("Actual next card:", options=SUITS, index=0)
-            notes = st.text_input("Optional notes:", value="")
-            submitted = st.form_submit_button("💾 Save sequence + actual to Google Sheet")
+        st.markdown("### Next card suggestion")
+        st.markdown(
+            f"**Colour** &nbsp;&nbsp; {color_html(sug['color'])}<br>"
+            f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
+            unsafe_allow_html=True
+        )
+
+        # ---- Log actual + auto-roll sequence ----
+        st.markdown("---")
+        st.markdown("### Log the real next card")
+        with st.form("log_gamble_result", clear_on_submit=False):
+            actual = st.selectbox("Actual next card", options=SUITS, index=0, key="actual_select")
+            submitted = st.form_submit_button("💾 Log & roll sequence forward", use_container_width=True)
+            
             if submitted:
                 now = datetime.now()
                 record = {
@@ -821,41 +740,23 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                     "Suggested_Suit": sug["suit"],
                     "Actual_Next": actual,
                     "Actual_Color": SUIT_COLOR[actual],
-                    "Notes": notes
                 }
                 if append_gamble_record(record):
-                    st.success("✅ Logged to Gamble Log sheet.")
-                    st.session_state.gamble_sequence = []
-                    st.session_state.gamble_suggestion = None
+                    # Roll the window forward
+                    st.session_state.gamble_sequence = seq[1:] + [actual]
+                    st.session_state.gamble_suggestion = None   # force fresh suggestion
+                    st.success(f"Logged. Sequence rolled → now ready for next gamble.")
                     st.rerun()
 
-    # ---- Recent history & simple stats ----
+    # ---- Recent history ----
     st.markdown("---")
-    st.markdown("### Recent Gamble Log (last 15)")
+    st.markdown("### Recent log (last 12)")
     gdf = load_gamble_data()
     if not gdf.empty:
-        show_cols = [c for c in ["Timestamp", "Sequence", "Suggested_Color", "Suggested_Suit", "Actual_Next", "Actual_Color", "Notes"] if c in gdf.columns]
-        st.dataframe(gdf[show_cols].tail(15).iloc[::-1], use_container_width=True, hide_index=True)
-
-        # Quick overall frequencies
-        if "Actual_Next" in gdf.columns:
-            valid = gdf["Actual_Next"].dropna().astype(str).str.strip()
-            valid = valid[valid.isin(SUITS)]
-            if len(valid) > 0:
-                st.markdown("#### Overall frequencies so far")
-                suit_counts = valid.value_counts(normalize=True).mul(100).round(1)
-                color_counts = valid.map(SUIT_COLOR).value_counts(normalize=True).mul(100).round(1)
-                sc1, sc2 = st.columns(2)
-                with sc1:
-                    st.write("**Suits**")
-                    for s, pct in suit_counts.items():
-                        st.write(f"{SUIT_EMOJI[s]} {s}: {pct}%")
-                with sc2:
-                    st.write("**Colours**")
-                    for c, pct in color_counts.items():
-                        st.write(f"{COLOR_EMOJI[c]} {c}: {pct}%")
+        show_cols = [c for c in ["Timestamp", "Sequence", "Suggested_Color", "Suggested_Suit", "Actual_Next", "Actual_Color"] if c in gdf.columns]
+        st.dataframe(gdf[show_cols].tail(12).iloc[::-1], use_container_width=True, hide_index=True)
     else:
-        st.info("No records in Gamble Log yet. Start logging sequences and the suggestions will improve.")
+        st.info("No records yet. Start logging and the suggestions will improve.")
 
 # -------------------------------------------------
 # TAB 1: TODAY'S PRIORITY BOARD
@@ -938,8 +839,7 @@ elif st.session_state.active_tab == "📈 Overall Performance":
                 success_rate = (first_hits / first_total) if first_total > 0 else 0.0
                 avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
                 overall_slots.append({
-                    "family": fam,
-                    "slot": slot,
+                    "family": fam, "slot": slot,
                     "calc_success_rate": success_rate,
                     "avg_first_multiplier": avg_1st_mult,
                     "rehit_metrics": rehit
