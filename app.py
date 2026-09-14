@@ -32,7 +32,6 @@ TAB_OPTIONS = [
     "🃏 Gamble Analyzer",
     "📊 Today's Priority Board",
     "📈 Overall Performance",
-    "📋 Pre-Planned Execution Cards",
     "📝 Live Data Entry",
     "🤖 Interactive AI Agent",
     "🧺 Played Basket & Overrides"
@@ -209,13 +208,11 @@ def load_and_inspect_sheet():
         return pd.DataFrame(), []
 
 def parse_spin_value(raw):
-    """Parse 'Spin of feature hit' → integer (strips +). Returns None if invalid."""
     if pd.isna(raw):
         return None
     s = str(raw).strip()
     if not s or s.lower() in ("na", "nan", ""):
         return None
-    # remove trailing +
     if s.endswith("+"):
         s = s[:-1]
     try:
@@ -223,10 +220,11 @@ def parse_spin_value(raw):
     except Exception:
         return None
 
-def get_spins_needed(slot_name, family_name, live_df, percentile=85):
+def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=85):
     """
-    Calculate the spin count that covers ~85% of historical real hits.
-    Outliers are naturally handled by using a high percentile.
+    Dynamically calculate the spin count that covers ~85% of historical hits
+    for a specific Hit Number (1 = first feature, 2 = second feature).
+    Fully data-driven – updates automatically when Session Log changes.
     """
     if live_df.empty:
         return None
@@ -235,8 +233,8 @@ def get_spins_needed(slot_name, family_name, live_df, percentile=85):
     slot_col = cols.get("slot") or cols.get("slot theme name")
     fam_col = cols.get("family") or cols.get("slot family")
     spin_col = cols.get("spin of feature hit") or cols.get("spin")
-    win_col = cols.get("win amount") or cols.get("win amount ($)") or cols.get("win")
-    feat_col = cols.get("feature type")
+    hit_col = cols.get("hit number") or cols.get("hit")
+    feat_win_col = cols.get("feature win number")
 
     if not slot_col or not fam_col or not spin_col:
         return None
@@ -249,23 +247,23 @@ def get_spins_needed(slot_name, family_name, live_df, percentile=85):
     if df.empty:
         return None
 
-    # Keep only real hits
-    if win_col:
-        df["_win"] = pd.to_numeric(df[win_col].astype(str).str.replace(r"[^\d.]", "", regex=True), errors="coerce")
-        hits = df[df["_win"] > 0]
-    elif feat_col:
-        hits = df[df[feat_col].astype(str).str.lower() != "na"]
+    # Prefer Hit Number column, fall back to Feature Win Number
+    if hit_col:
+        df["_hit"] = pd.to_numeric(df[hit_col], errors="coerce")
+        hits = df[df["_hit"] == hit_number]
+    elif feat_win_col:
+        df["_hit"] = pd.to_numeric(df[feat_win_col], errors="coerce")
+        hits = df[df["_hit"] == hit_number]
     else:
-        hits = df
+        return None
 
     if hits.empty:
         return None
 
     spins = hits[spin_col].apply(parse_spin_value).dropna().astype(int)
-    if len(spins) < 3:
+    if len(spins) < 2:
         return None
 
-    # 85th percentile (covers the vast majority of wins, ignores extreme late outliers)
     value = int(np.percentile(spins, percentile))
     return value
 
@@ -421,12 +419,17 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
         for slot in slots:
             rvi_score, source_proof, active_day, day_factor, day_hits, total_hits = compute_75_25_rvi(slot, fam, live_df, target_day, strict_mode)
             rehit_metrics = compute_slot_rehit_metrics(slot, fam, live_df)
-            spins_needed = get_spins_needed(slot, fam, live_df, percentile=85)
+            
+            # Dynamic spin calculations
+            spin_1st = get_spins_for_hit(slot, fam, live_df, hit_number=1, percentile=85)
+            spin_2nd = get_spins_for_hit(slot, fam, live_df, hit_number=2, percentile=85)
+            
             slot_scores.append({
                 "family": fam, "slot": slot, "rvi": rvi_score, "source_proof": source_proof,
                 "target_day": active_day, "day_factor": day_factor, "day_hits": day_hits,
                 "total_hits": total_hits, "rehit_metrics": rehit_metrics,
-                "spins_needed": spins_needed
+                "spin_1st": spin_1st,
+                "spin_2nd": spin_2nd
             })
     def _rank_key(x):
         total = x.get("total_hits", 0) or 0
@@ -441,7 +444,8 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             "source_proof": item["source_proof"], "target_day": item["target_day"],
             "day_factor": item["day_factor"], "day_hits": item["day_hits"],
             "total_hits": item["total_hits"], "rehit_metrics": item["rehit_metrics"],
-            "spins_needed": item["spins_needed"]
+            "spin_1st": item["spin_1st"],
+            "spin_2nd": item["spin_2nd"]
         })
     return sorted(records, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
 
@@ -481,7 +485,6 @@ def append_gamble_record(record: dict):
         return False
 
 def get_gamble_suggestion(sequence: list):
-    """Always recalculate from current data."""
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts"}
@@ -512,7 +515,7 @@ def get_gamble_suggestion(sequence: list):
         if "Sequence" not in df.columns:
             continue
         matches = df[df["Sequence"].astype(str).str.endswith(key)]
-        if len(matches) >= 2:          # lowered threshold so it starts reacting earlier
+        if len(matches) >= 2:
             suits = Counter(matches["Actual_Next"])
             colors = Counter([SUIT_COLOR[s] for s in matches["Actual_Next"]])
             return {
@@ -523,7 +526,7 @@ def get_gamble_suggestion(sequence: list):
     return {"color": g_color, "suit": g_suit}
 
 # ==========================================
-# 3. AI AGENT ENGINE (unchanged)
+# 3. AI AGENT ENGINE
 # ==========================================
 @st.cache_resource
 def get_gemini_client():
@@ -735,7 +738,6 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
     st.caption("Tap the 5 cards → log the real next card → sequence rolls forward automatically.")
 
-    # Quick entry
     st.markdown("### Enter the 5 cards (left → right)")
     cols = st.columns(4)
     for i, suit in enumerate(SUITS):
@@ -757,9 +759,8 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
     else:
         st.info("Click the four suit buttons above to enter the cards.")
 
-    # Always force calculation when we have 5 cards
     if len(seq) == 5:
-        sug = get_gamble_suggestion(seq)   # forced every time
+        sug = get_gamble_suggestion(seq)
 
         st.markdown("---")
         st.markdown("### Next card")
@@ -792,12 +793,10 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                     "Actual_Color": SUIT_COLOR[actual],
                 }
                 if append_gamble_record(record):
-                    # Roll forward
                     st.session_state.gamble_sequence = seq[1:] + [actual]
                     st.success("Logged. Sequence rolled forward.")
                     st.rerun()
 
-    # Recent history
     st.markdown("---")
     st.markdown("### Recent log (last 12)")
     gdf = load_gamble_data()
@@ -808,7 +807,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.info("No records yet.")
 
 # -------------------------------------------------
-# TAB 1: TODAY'S PRIORITY BOARD  (simplified)
+# TAB 1: TODAY'S PRIORITY BOARD
 # -------------------------------------------------
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
@@ -822,18 +821,17 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
         if first_total > 5:
             filtered_slots.append(s)
 
-    # Sort by RVI / multi-hit as before
     sorted_slots = sorted(filtered_slots, key=lambda x: (x["base_rvi"], x["rehit_metrics"]["multi_hit_rate"]), reverse=True)
     current_display = sorted_slots[:st.session_state.display_limit]
 
     table_data = []
     for rank, item in enumerate(current_display, 1):
-        spins = item.get("spins_needed")
         table_data.append({
             "Rank": rank,
             "Family": item.get("family", "N/A"),
             "Slot": item.get("slot", "N/A"),
-            "Spins Needed": spins if spins is not None else "—"
+            "Spin required for first hit": item.get("spin_1st") if item.get("spin_1st") is not None else "—",
+            "Spin needed for 2nd hit": item.get("spin_2nd") if item.get("spin_2nd") is not None else "—",
         })
 
     df_priority = pd.DataFrame(table_data)
@@ -848,7 +846,8 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "Rank": st.column_config.NumberColumn("Rank", width="small"),
                 "Family": st.column_config.TextColumn("Family", width="medium"),
                 "Slot": st.column_config.TextColumn("Slot", width="medium"),
-                "Spins Needed": st.column_config.NumberColumn("Spins Needed", width="small", help="85th percentile of historical hit spins (outliers ignored)"),
+                "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium", help="85th percentile of historical 1st-hit spins"),
+                "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium", help="85th percentile of historical 2nd-hit spins"),
             }
         )
 
@@ -858,8 +857,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             st.rerun()
 
 # -------------------------------------------------
-# Remaining tabs stay exactly the same as previous version
-# (Overall Performance, Pre-Planned, Live Data Entry, AI Agent, Played Basket)
+# TAB 2: OVERALL PERFORMANCE
 # -------------------------------------------------
 elif st.session_state.active_tab == "📈 Overall Performance":
     st.subheader("📈 Overall Performance (All Historical Logs)")
@@ -906,34 +904,9 @@ elif st.session_state.active_tab == "📈 Overall Performance":
     else:
         st.dataframe(df_overall, use_container_width=True, hide_index=True)
 
-elif st.session_state.active_tab == "📋 Pre-Planned Execution Cards":
-    st.subheader("Pre-Planned Per-Slot Execution Cards")
-    col_c1, col_c2 = st.columns(2)
-    with col_c1:
-        card_family = st.selectbox("1. Select Slot Family:", options=list(SLOT_MASTER_LIST.keys()), key="card_fam_select")
-    with col_c2:
-        card_slot = st.selectbox("2. Select Slot Theme:", options=SLOT_MASTER_LIST[card_family], key="card_slot_select")
-    if card_slot:
-        slot_data = next((s for s in st.session_state.slots_db if s["slot"] == card_slot and s["family"] == card_family), None)
-        if slot_data:
-            rehit = slot_data.get("rehit_metrics", {})
-            multi_rate = rehit.get("multi_hit_rate", 0)
-            att2_pop = rehit.get("attempt2_population", 0)
-            st.markdown("---")
-            st.markdown(f"### 🎰 Execution Card: **{slot_data.get('slot', 'N/A')}** ({slot_data.get('family', 'N/A')})")
-            col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Check-In Budget", "$500 Total", delta="$100 / Denom @ $5 Bet")
-            col_m2.metric(f"Day Context RVI ({st.session_state.selected_day})", f"{slot_data.get('base_rvi', 0)}", delta=f"{slot_data.get('day_factor', 1.0)}x Weight")
-            col_m3.metric("Repeat Hit Rate", f"{multi_rate}%", delta=f"of {att2_pop} 2nd attempts")
-            st.markdown("#### 💵 Fixed $5 Bet Denomination Breakdown ($500 Total Budget)")
-            df_steps = pd.DataFrame(STRATEGY_STEPS)[["step", "denom", "bet", "budget", "spins"]]
-            df_steps.columns = ["Step #", "Denomination", "Fixed Bet / Spin ($)", "Allocated Budget ($)", "Est. Spins (Line Wins Dynamic)"]
-            st.dataframe(df_steps, use_container_width=True, hide_index=True)
-            if st.button(f"✅ Mark '{slot_data['slot']}' as Played"):
-                res = mark_slot_played(slot_data['slot'])
-                st.success(res)
-                st.rerun()
-
+# -------------------------------------------------
+# TAB 3: LIVE DATA ENTRY
+# -------------------------------------------------
 elif st.session_state.active_tab == "📝 Live Data Entry":
     st.subheader("📝 Live Session Data Entry")
     chosen_date = st.date_input("Select Date:", value=datetime.now().date(), key="live_date_picker")
@@ -990,6 +963,9 @@ elif st.session_state.active_tab == "📝 Live Data Entry":
             except Exception as e:
                 st.error(f"Failed to update Google Sheets: {e}")
 
+# -------------------------------------------------
+# TAB 4: INTERACTIVE AI AGENT
+# -------------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive AI Agent":
     st.subheader("🤖 Slotpilot AI Assistant")
     with st.container():
@@ -1031,6 +1007,9 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.session_state.pending_rerun = False
             st.rerun()
 
+# -------------------------------------------------
+# TAB 5: PLAYED BASKET & OVERRIDES
+# -------------------------------------------------
 elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
     st.subheader("🧺 Played Basket")
     if not st.session_state.played_basket:
