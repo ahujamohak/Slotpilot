@@ -197,6 +197,28 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
+# EXCEPTION ADJUSTMENTS (manual boosts / penalties)
+# ==========================================
+# These override the generic formula for specific slots so the board
+# better reflects real recent performance and risk.
+
+UPSIDE_BOOST = {
+    "Shadow Clan": 2.10,           # strong recent big wins
+    "Emperor's Choice": 2.00,      # multiple large multipliers
+    "Minotaur’s Treasure": 1.70,
+    "Maximus Money": 1.55,
+    "Battle Drum": 1.40,
+    "Aztec Thunder": 1.25,
+}
+
+GRINDER_PENALTY = {
+    "Amazon Hearts": 0.58,
+    "Cleopatra’s Kingdom": 0.62,
+    "Sands of Fortunes": 0.65,
+    "Lunar Dragon": 0.72,
+}
+
+# ==========================================
 # 2. SHEET DATA INSPECTION & METRICS ENGINE
 # ==========================================
 @st.cache_data(ttl=15)
@@ -455,7 +477,6 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 success_rate = first_hits / first_total if first_total > 0 else 0
                 success_score = min(10.0, success_rate * 8.5)
 
-                # Strong upside emphasis
                 mult_score = min(13.0, (avg_mult / 5.0) + (max_mult / 22.0))
 
                 if spin_1st is None:
@@ -480,16 +501,22 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
 
                 composite = (
                     0.12 * success_score +
-                    0.48 * mult_score +          # very dominant
+                    0.48 * mult_score +
                     0.15 * spin_score +
                     0.25 * multi_size_bonus
                 )
 
-                # Softened reliability
                 if first_total < 5:
                     composite *= 0.88
                 elif first_total < 8:
                     composite *= 0.95
+
+            # ===== APPLY EXCEPTIONS =====
+            if slot in UPSIDE_BOOST:
+                composite *= UPSIDE_BOOST[slot]
+            if slot in GRINDER_PENALTY:
+                composite *= GRINDER_PENALTY[slot]
+            # ============================
 
             slot_scores.append({
                 "family": fam,
@@ -565,10 +592,6 @@ def append_gamble_record(record: dict):
         return False
 
 def get_gamble_suggestion(sequence: list):
-    """
-    Fixed version – colour is decided mainly from sequence matches.
-    Global colour is only a weak fallback. This removes the heavy Red bias.
-    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts"}
@@ -587,7 +610,7 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # 1. Try to find colour + suit from matching sequences (strongest signal)
+    # Sequence-first colour decision
     for length in [5, 4, 3, 2, 1]:
         if len(sequence) < length:
             continue
@@ -605,15 +628,13 @@ def get_gamble_suggestion(sequence: list):
                 best_suit = most_common(suit_counter)
                 return {"color": preferred_color, "suit": best_suit}
 
-    # 2. Weak global fallback (only used when almost no sequence data)
+    # Soft global fallback
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
-    # Soften the bias – if one colour is not overwhelmingly dominant, allow both
     total = sum(global_colors.values())
     red_count = global_colors.get("Red", 0)
     black_count = global_colors.get("Black", 0)
     
     if total > 0 and abs(red_count - black_count) / total < 0.25:
-        # Roughly balanced → prefer the colour of the last card in the sequence
         last_color = SUIT_COLOR.get(sequence[-1], "Red") if sequence else "Red"
         preferred_color = last_color
     else:
@@ -898,7 +919,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Ranked by upside potential (strong multiplier + multi-hit size focus)")
+    st.caption("Ranked by upside + targeted exceptions for recent high performers")
 
     filtered_slots = []
     for s in st.session_state.slots_db:
