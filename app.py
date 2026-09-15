@@ -32,7 +32,7 @@ TAB_OPTIONS = [
     "🃏 Gamble Analyzer",
     "📊 Today's Priority Board",
     "📈 Overall Performance",
-    # "📝 Live Data Entry",          # temporarily disabled
+    # "📝 Live Data Entry",
     "🤖 Interactive AI Agent",
     "🧺 Played Basket & Overrides"
 ]
@@ -226,17 +226,14 @@ def parse_spin_value(raw):
 def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=85):
     if live_df.empty:
         return None
-
     cols = {str(c).lower().strip(): c for c in live_df.columns}
     slot_col = cols.get("slot") or cols.get("slot theme name")
     fam_col = cols.get("family") or cols.get("slot family")
     spin_col = cols.get("spin of feature hit") or cols.get("spin")
     hit_col = cols.get("hit number") or cols.get("hit")
     feat_win_col = cols.get("feature win number")
-
     if not slot_col or not fam_col or not spin_col:
         return None
-
     df = live_df.copy()
     df = df[
         (df[slot_col].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()) &
@@ -244,7 +241,6 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
     ]
     if df.empty:
         return None
-
     if hit_col:
         df["_hit"] = pd.to_numeric(df[hit_col], errors="coerce")
         hits = df[df["_hit"] == hit_number]
@@ -253,14 +249,11 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
         hits = df[df["_hit"] == hit_number]
     else:
         return None
-
     if hits.empty:
         return None
-
     spins = hits[spin_col].apply(parse_spin_value).dropna().astype(int)
     if len(spins) < 2:
         return None
-
     value = int(np.percentile(spins, percentile))
     value = int(round(value * 1.20))  # silent +20%
     return value
@@ -363,13 +356,13 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     avg_third_mult = round(third_entries["_mult"].mean(), 1) if not third_entries.empty else 0.0
 
     if attempt2_population == 0 and repeat_count == 0:
-        recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No second feature logged yet."
+        recommendation = "ℹ️ UNTESTED REPEAT PROFILE"
     elif multi_hit_rate >= 40.0:
-        recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}%): Re-probe strategy immediately after win."
+        recommendation = f"🔥 HIGH REPEAT POTENTIAL ({multi_hit_rate}%)"
     elif multi_hit_rate >= 20.0:
-        recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}%): Re-probe if win > 20x."
+        recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}%)"
     else:
-        recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}%): Single hit machine. Lock profits and exit."
+        recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}%)"
     
     return {
         "repeat_sample_size": total_logs, "attempt2_population": attempt2_population,
@@ -459,49 +452,44 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             if first_total < 3:
                 composite = 0.0
             else:
-                # 1. Success rate (lower weight)
                 success_rate = first_hits / first_total if first_total > 0 else 0
-                success_score = min(10.0, success_rate * 9.0)
+                success_score = min(10.0, success_rate * 8.5)
 
-                # 2. Multiplier strength – dominant factor
-                # Average + strong emphasis on max multiplier (upside)
-                mult_score = min(12.0, (avg_mult / 5.5) + (max_mult / 28.0))
+                # Strong upside emphasis
+                mult_score = min(13.0, (avg_mult / 5.0) + (max_mult / 22.0))
 
-                # 3. Spin efficiency (softer)
                 if spin_1st is None:
                     spin_score = 4.5
                 elif spin_1st <= 40:
-                    spin_score = 9.5
+                    spin_score = 9.0
                 elif spin_1st <= 55:
-                    spin_score = 7.5
+                    spin_score = 7.0
                 elif spin_1st <= 70:
-                    spin_score = 5.0
+                    spin_score = 4.8
                 elif spin_1st <= 90:
-                    spin_score = 2.8
+                    spin_score = 2.5
                 else:
-                    spin_score = 1.2
+                    spin_score = 1.0
 
-                # 4. Multi-hit SIZE bonus (stronger)
-                multi_size_bonus = min(4.0, 
-                    (avg_2nd_mult / 18.0) + 
-                    (max_2nd_mult / 35.0) + 
-                    (avg_3rd_mult / 22.0) + 
-                    (multi_rate / 50.0)
+                multi_size_bonus = min(4.5, 
+                    (avg_2nd_mult / 16.0) + 
+                    (max_2nd_mult / 30.0) + 
+                    (avg_3rd_mult / 20.0) + 
+                    (multi_rate / 45.0)
                 )
 
-                # Final composite – heavy on upside
                 composite = (
-                    0.15 * success_score +
-                    0.45 * mult_score +          # ← dominant
-                    0.18 * spin_score +
-                    0.22 * multi_size_bonus
+                    0.12 * success_score +
+                    0.48 * mult_score +          # very dominant
+                    0.15 * spin_score +
+                    0.25 * multi_size_bonus
                 )
 
-                # Mild reliability adjustment
-                if first_total < 6:
-                    composite *= 0.82
-                elif first_total < 10:
-                    composite *= 0.93
+                # Softened reliability
+                if first_total < 5:
+                    composite *= 0.88
+                elif first_total < 8:
+                    composite *= 0.95
 
             slot_scores.append({
                 "family": fam,
@@ -542,7 +530,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE
+# 2B. GAMBLE DATA ENGINE – FIXED COLOUR BIAS
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -577,6 +565,10 @@ def append_gamble_record(record: dict):
         return False
 
 def get_gamble_suggestion(sequence: list):
+    """
+    Fixed version – colour is decided mainly from sequence matches.
+    Global colour is only a weak fallback. This removes the heavy Red bias.
+    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts"}
@@ -592,13 +584,10 @@ def get_gamble_suggestion(sequence: list):
             return default
         return counter.most_common(1)[0][0]
 
-    global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
-    preferred_color = most_common(global_colors, "Red")
-    allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
-
     def seq_str(cards):
         return "-".join(cards)
 
+    # 1. Try to find colour + suit from matching sequences (strongest signal)
     for length in [5, 4, 3, 2, 1]:
         if len(sequence) < length:
             continue
@@ -607,12 +596,30 @@ def get_gamble_suggestion(sequence: list):
             continue
         matches = df[df["Sequence"].astype(str).str.endswith(key)]
         if len(matches) >= 1:
-            valid_suits = [s for s in matches["Actual_Next"] if s in allowed_suits]
-            if valid_suits:
-                suit_counter = Counter(valid_suits)
+            next_suits = matches["Actual_Next"].tolist()
+            color_counter = Counter([SUIT_COLOR[s] for s in next_suits])
+            preferred_color = most_common(color_counter)
+            allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
+            suit_counter = Counter([s for s in next_suits if s in allowed])
+            if suit_counter:
                 best_suit = most_common(suit_counter)
                 return {"color": preferred_color, "suit": best_suit}
 
+    # 2. Weak global fallback (only used when almost no sequence data)
+    global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
+    # Soften the bias – if one colour is not overwhelmingly dominant, allow both
+    total = sum(global_colors.values())
+    red_count = global_colors.get("Red", 0)
+    black_count = global_colors.get("Black", 0)
+    
+    if total > 0 and abs(red_count - black_count) / total < 0.25:
+        # Roughly balanced → prefer the colour of the last card in the sequence
+        last_color = SUIT_COLOR.get(sequence[-1], "Red") if sequence else "Red"
+        preferred_color = last_color
+    else:
+        preferred_color = most_common(global_colors, "Red")
+
+    allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
     global_suits = Counter([s for s in df["Actual_Next"] if s in allowed_suits])
     best_suit = most_common(global_suits, allowed_suits[0])
     return {"color": preferred_color, "suit": best_suit}
@@ -676,14 +683,10 @@ def build_agent_context():
     EXECUTION STRATEGY IN USE:
     - Check-in: $500 per machine across 5 denoms ($100 budget per denom).
     - Fixed Bet Denom Rotation: Always $5.00 bet per spin. Rotate through 5 denoms ($1.00, $0.10, $0.05, $0.02, $0.01).
-    - Dynamic Spin Count: Consuming $100 per denom results in 20 base spins, but line wins (small to big) re-fund play, resulting in 20 to 50+ spins per denom.
-    - Exit Criteria: Stop on a denom when its $100 allocation is consumed or shift to next denom. If feature hits, book profit at $700+ balance ($200 profit), or exit if balance drops back to $500.
+    - Dynamic Spin Count: Consuming $100 per denom results in 20 base spins, but line wins re-fund play.
+    - Exit Criteria: Stop on a denom when its $100 allocation is consumed. Book profit at $700+ or exit if back to $500.
     AVAILABLE TOP-RANKED SLOTS DATASET:
     {slot_context_summary}
-    OPERATIONAL INSTRUCTIONS:
-    1. Advise the user based strictly on the $500 check-in, fixed $5 bet denomination cycle ($100 allocated per denom), and line win dynamics.
-    2. Acknowledge that spin counts per denom vary (20-50+ spins) based on line wins, but the bankroll budget ($100/denom) remains fixed.
-    3. You have tool function calls to mark machines played or update bankroll directly.
     """
     return system_instruction
 
@@ -723,8 +726,8 @@ def run_gemini_agent(user_prompt: str):
 def run_groq_agent(user_prompt: str):
     client = get_groq_client()
     if not client:
-        return "⚠️ Groq fallback unavailable: `GROQ_API_KEY` is not set."
-    system_instruction = build_agent_context() + "\n\nNOTE: Text-only fallback mode active."
+        return "⚠️ Groq fallback unavailable."
+    system_instruction = build_agent_context() + "\n\nNOTE: Text-only fallback mode."
     messages = [{"role": "system", "content": system_instruction}]
     for msg in st.session_state.chat_messages:
         role = "user" if msg["role"] == "user" else "assistant"
@@ -895,7 +898,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Ranked by upside potential (multiplier strength + multi-hit size)")
+    st.caption("Ranked by upside potential (strong multiplier + multi-hit size focus)")
 
     filtered_slots = []
     for s in st.session_state.slots_db:
@@ -990,7 +993,7 @@ elif st.session_state.active_tab == "📈 Overall Performance":
         })
     df_overall = pd.DataFrame(table_data_overall)
     if df_overall.empty:
-        st.info("No slots with > 5 total attempts found in historical logs.")
+        st.info("No slots with > 5 total attempts found.")
     else:
         st.dataframe(df_overall, use_container_width=True, hide_index=True)
 
