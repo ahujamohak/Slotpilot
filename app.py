@@ -224,7 +224,6 @@ def parse_spin_value(raw):
         return None
 
 def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=85):
-    """Returns 85th percentile of historical spins for the given hit number, then silently adds 20%."""
     if live_df.empty:
         return None
 
@@ -263,8 +262,7 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
         return None
 
     value = int(np.percentile(spins, percentile))
-    # Silently add 20% buffer
-    value = int(round(value * 1.20))
+    value = int(round(value * 1.20))  # silent +20%
     return value
 
 def get_recommended_checkin(spin_1st):
@@ -338,7 +336,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         if col in parsed_df.columns:
             parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
     
-    # First hits
     first_hits = parsed_df[(parsed_df["_feature_win_num"] == 1) & (parsed_df["_spins"].notna())]
     if first_hits.empty:
         first_hits = parsed_df[(parsed_df["_hit"] == 1) & (parsed_df["_attempt"] == 1) & (parsed_df["_spins"].notna())]
@@ -348,7 +345,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     valid_spins = first_hits["_spins"].dropna()
     avg_first_spins = round(float(valid_spins.mean()), 1) if not valid_spins.empty else 0.0
 
-    # Second hits
     repeat_entries = parsed_df[(parsed_df["_feature_win_num"] == 2)]
     if repeat_entries.empty:
         repeat_entries = parsed_df[(parsed_df["_hit"] == 2) & (parsed_df["_attempt"] == 2)]
@@ -361,7 +357,6 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     att2_hits = repeat_entries[(repeat_entries["_spins"] > 0)]
     avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
 
-    # Third hits
     third_entries = parsed_df[(parsed_df["_feature_win_num"] == 3)]
     if third_entries.empty:
         third_entries = parsed_df[(parsed_df["_hit"] == 3)]
@@ -459,47 +454,54 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             multi_rate = rehit.get("multi_hit_rate", 0.0) or 0.0
             avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0) or 0.0
             avg_3rd_mult = rehit.get("avg_third_multiplier", 0.0) or 0.0
+            max_2nd_mult = rehit.get("max_repeat_multiplier", 0.0) or 0.0
 
-            if first_total < 4:
+            if first_total < 3:
                 composite = 0.0
             else:
-                # 1. Success rate (reduced weight)
+                # 1. Success rate (lower weight)
                 success_rate = first_hits / first_total if first_total > 0 else 0
-                success_score = success_rate * 10
+                success_score = min(10.0, success_rate * 9.0)
 
-                # 2. Multiplier strength – MUCH higher weight + upper end
-                mult_score = min(10.0, (avg_mult / 6.0) + (max_mult / 40.0))
+                # 2. Multiplier strength – dominant factor
+                # Average + strong emphasis on max multiplier (upside)
+                mult_score = min(12.0, (avg_mult / 5.5) + (max_mult / 28.0))
 
-                # 3. Spin efficiency (softened cliff)
+                # 3. Spin efficiency (softer)
                 if spin_1st is None:
-                    spin_score = 4.0
+                    spin_score = 4.5
                 elif spin_1st <= 40:
-                    spin_score = 10.0
+                    spin_score = 9.5
                 elif spin_1st <= 55:
-                    spin_score = 8.0
+                    spin_score = 7.5
                 elif spin_1st <= 70:
-                    spin_score = 5.5
+                    spin_score = 5.0
                 elif spin_1st <= 90:
-                    spin_score = 3.0
+                    spin_score = 2.8
                 else:
-                    spin_score = 1.0
+                    spin_score = 1.2
 
-                # 4. Multi-hit SIZE bonus (not just rate)
-                multi_size_bonus = min(3.0, (avg_2nd_mult / 25.0) + (avg_3rd_mult / 30.0) + (multi_rate / 40.0))
-
-                # New composite – prioritises upside
-                composite = (
-                    0.22 * success_score +
-                    0.38 * mult_score +          # ← biggest change
-                    0.22 * spin_score +
-                    0.18 * multi_size_bonus
+                # 4. Multi-hit SIZE bonus (stronger)
+                multi_size_bonus = min(4.0, 
+                    (avg_2nd_mult / 18.0) + 
+                    (max_2nd_mult / 35.0) + 
+                    (avg_3rd_mult / 22.0) + 
+                    (multi_rate / 50.0)
                 )
 
-                # Reliability
-                if first_total < 7:
-                    composite *= 0.78
-                elif first_total < 12:
-                    composite *= 0.92
+                # Final composite – heavy on upside
+                composite = (
+                    0.15 * success_score +
+                    0.45 * mult_score +          # ← dominant
+                    0.18 * spin_score +
+                    0.22 * multi_size_bonus
+                )
+
+                # Mild reliability adjustment
+                if first_total < 6:
+                    composite *= 0.82
+                elif first_total < 10:
+                    composite *= 0.93
 
             slot_scores.append({
                 "family": fam,
@@ -819,9 +821,6 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-# -------------------------------------------------
-# TAB 0: GAMBLE ANALYZER
-# -------------------------------------------------
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
     st.caption("Tap the 5 cards → log the real next card → sequence rolls forward automatically.")
@@ -894,12 +893,9 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
     else:
         st.info("No records yet.")
 
-# -------------------------------------------------
-# TAB 1: TODAY'S PRIORITY BOARD
-# -------------------------------------------------
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Ranked by upside potential: multiplier strength + multi-hit size + spin efficiency")
+    st.caption("Ranked by upside potential (multiplier strength + multi-hit size)")
 
     filtered_slots = []
     for s in st.session_state.slots_db:
@@ -945,7 +941,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium"),
                 "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium"),
                 "Spin needed for 3rd hit": st.column_config.NumberColumn("Spin needed for 3rd hit", width="medium"),
-                "Recommended Max Check-in": st.column_config.NumberColumn("Recommended Max Check-in", width="medium", help="Suggested maximum check-in to protect bankroll"),
+                "Recommended Max Check-in": st.column_config.NumberColumn("Recommended Max Check-in", width="medium"),
             }
         )
 
@@ -954,12 +950,8 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             st.session_state.display_limit += 15
             st.rerun()
 
-# -------------------------------------------------
-# TAB 2: OVERALL PERFORMANCE
-# -------------------------------------------------
 elif st.session_state.active_tab == "📈 Overall Performance":
     st.subheader("📈 Overall Performance (All Historical Logs)")
-    st.caption("Calculated across your entire dataset regardless of target day penalties or specific day filtering.")
     overall_slots = []
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
@@ -1002,15 +994,6 @@ elif st.session_state.active_tab == "📈 Overall Performance":
     else:
         st.dataframe(df_overall, use_container_width=True, hide_index=True)
 
-# -------------------------------------------------
-# TAB 3: LIVE DATA ENTRY  (TEMPORARILY COMMENTED OUT)
-# -------------------------------------------------
-# elif st.session_state.active_tab == "📝 Live Data Entry":
-#     ... (kept commented)
-
-# -------------------------------------------------
-# TAB 4: INTERACTIVE AI AGENT
-# -------------------------------------------------
 elif st.session_state.active_tab == "🤖 Interactive AI Agent":
     st.subheader("🤖 Slotpilot AI Assistant")
     with st.container():
@@ -1052,9 +1035,6 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.session_state.pending_rerun = False
             st.rerun()
 
-# -------------------------------------------------
-# TAB 5: PLAYED BASKET & OVERRIDES
-# -------------------------------------------------
 elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
     st.subheader("🧺 Played Basket")
     if not st.session_state.played_basket:
