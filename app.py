@@ -197,14 +197,11 @@ SLOT_MASTER_LIST = {
 }
 
 # ==========================================
-# EXCEPTION ADJUSTMENTS (manual boosts / penalties)
+# EXCEPTION ADJUSTMENTS
 # ==========================================
-# These override the generic formula for specific slots so the board
-# better reflects real recent performance and risk.
-
 UPSIDE_BOOST = {
-    "Shadow Clan": 2.10,           # strong recent big wins
-    "Emperor's Choice": 2.00,      # multiple large multipliers
+    "Shadow Clan": 2.10,
+    "Emperor's Choice": 2.00,
     "Minotaur’s Treasure": 1.70,
     "Maximus Money": 1.55,
     "Battle Drum": 1.40,
@@ -281,16 +278,19 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
     return value
 
 def get_recommended_checkin(spin_1st):
+    """Realistic check-in for $5 bet play."""
     if spin_1st is None:
-        return 200
-    if spin_1st <= 35:
         return 300
-    elif spin_1st <= 50:
-        return 250
-    elif spin_1st <= 65:
-        return 200
+    if spin_1st <= 40:
+        return 300
+    elif spin_1st <= 60:
+        return 350
+    elif spin_1st <= 80:
+        return 400
+    elif spin_1st <= 100:
+        return 450
     else:
-        return 150
+        return 500
 
 def parse_session_log_data(live_df, slot_name, family_name):
     if live_df.empty:
@@ -511,12 +511,11 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 elif first_total < 8:
                     composite *= 0.95
 
-            # ===== APPLY EXCEPTIONS =====
+            # Apply exceptions
             if slot in UPSIDE_BOOST:
                 composite *= UPSIDE_BOOST[slot]
             if slot in GRINDER_PENALTY:
                 composite *= GRINDER_PENALTY[slot]
-            # ============================
 
             slot_scores.append({
                 "family": fam,
@@ -557,7 +556,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE – FIXED COLOUR BIAS
+# 2B. GAMBLE DATA ENGINE
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -610,7 +609,6 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # Sequence-first colour decision
     for length in [5, 4, 3, 2, 1]:
         if len(sequence) < length:
             continue
@@ -628,7 +626,6 @@ def get_gamble_suggestion(sequence: list):
                 best_suit = most_common(suit_counter)
                 return {"color": preferred_color, "suit": best_suit}
 
-    # Soft global fallback
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     total = sum(global_colors.values())
     red_count = global_colors.get("Red", 0)
@@ -703,9 +700,8 @@ def build_agent_context():
     - Played Basket (Played Today): {st.session_state.played_basket}
     EXECUTION STRATEGY IN USE:
     - Check-in: $500 per machine across 5 denoms ($100 budget per denom).
-    - Fixed Bet Denom Rotation: Always $5.00 bet per spin. Rotate through 5 denoms ($1.00, $0.10, $0.05, $0.02, $0.01).
-    - Dynamic Spin Count: Consuming $100 per denom results in 20 base spins, but line wins re-fund play.
-    - Exit Criteria: Stop on a denom when its $100 allocation is consumed. Book profit at $700+ or exit if back to $500.
+    - Fixed Bet Denom Rotation: Always $5.00 bet per spin.
+    - Exit Criteria: Book profit at $700+ or exit if back to $500.
     AVAILABLE TOP-RANKED SLOTS DATASET:
     {slot_context_summary}
     """
@@ -919,7 +915,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Ranked by upside + targeted exceptions for recent high performers")
+    st.caption("Ranked by upside + targeted exceptions | Realistic $5 check-in")
 
     filtered_slots = []
     for s in st.session_state.slots_db:
@@ -976,22 +972,30 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
 elif st.session_state.active_tab == "📈 Overall Performance":
     st.subheader("📈 Overall Performance (All Historical Logs)")
+    st.caption("Sorted by a more robust score (Avg Mult × sample reliability). Low-sample high-variance machines are no longer over-ranked.")
+
     overall_slots = []
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
             rehit = compute_slot_rehit_metrics(slot, fam, live_sheet_df)
             first_total = rehit.get("first_hit_total", 0)
-            if first_total > 5:
+            if first_total >= 6:  # slightly higher minimum
                 first_hits = rehit.get("first_hit_count", 0)
                 success_rate = (first_hits / first_total) if first_total > 0 else 0.0
                 avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
+                # Robust score: average mult penalised by low sample size
+                reliability = min(1.0, first_total / 25.0)
+                robust_score = avg_1st_mult * (0.6 + 0.4 * reliability)
                 overall_slots.append({
                     "family": fam, "slot": slot,
                     "calc_success_rate": success_rate,
                     "avg_first_multiplier": avg_1st_mult,
+                    "robust_score": robust_score,
                     "rehit_metrics": rehit
                 })
-    sorted_overall = sorted(overall_slots, key=lambda x: x["avg_first_multiplier"], reverse=True)
+
+    sorted_overall = sorted(overall_slots, key=lambda x: x["robust_score"], reverse=True)
+
     table_data_overall = []
     for rank, item in enumerate(sorted_overall, 1):
         rehit = item["rehit_metrics"]
@@ -1014,7 +1018,7 @@ elif st.session_state.active_tab == "📈 Overall Performance":
         })
     df_overall = pd.DataFrame(table_data_overall)
     if df_overall.empty:
-        st.info("No slots with > 5 total attempts found.")
+        st.info("No slots with ≥ 6 total attempts found.")
     else:
         st.dataframe(df_overall, use_container_width=True, hide_index=True)
 
