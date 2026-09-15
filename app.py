@@ -263,12 +263,11 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
         return None
 
     value = int(np.percentile(spins, percentile))
-    # Silently add 20% buffer (never mentioned in the UI)
+    # Silently add 20% buffer
     value = int(round(value * 1.20))
     return value
 
 def get_recommended_checkin(spin_1st):
-    """Simple risk-based max check-in recommendation."""
     if spin_1st is None:
         return 200
     if spin_1st <= 35:
@@ -329,6 +328,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "multi_hit_rate": 0.0, "avg_repeat_multiplier": 0.0, "max_repeat_multiplier": 0.0,
         "avg_attempt2_spins": 0.0, "repeat_recommendation": "No Repeat Data",
         "first_hit_count": 0, "first_hit_total": 0, "avg_first_multiplier": 0.0, "avg_first_spins": 0.0,
+        "avg_third_multiplier": 0.0, "max_first_multiplier": 0.0,
     }
     parsed_df = parse_session_log_data(live_df, slot_name, family_name)
     if parsed_df.empty:
@@ -337,13 +337,18 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     for col in ["_feature_win_num", "_hit", "_attempt", "_mult", "_spins"]:
         if col in parsed_df.columns:
             parsed_df[col] = pd.to_numeric(parsed_df[col], errors="coerce")
+    
+    # First hits
     first_hits = parsed_df[(parsed_df["_feature_win_num"] == 1) & (parsed_df["_spins"].notna())]
     if first_hits.empty:
         first_hits = parsed_df[(parsed_df["_hit"] == 1) & (parsed_df["_attempt"] == 1) & (parsed_df["_spins"].notna())]
     first_hit_count = len(first_hits)
     avg_first_mult = round(float(first_hits["_mult"].mean()), 1) if not first_hits.empty else 0.0
+    max_first_mult = round(float(first_hits["_mult"].max()), 1) if not first_hits.empty else 0.0
     valid_spins = first_hits["_spins"].dropna()
     avg_first_spins = round(float(valid_spins.mean()), 1) if not valid_spins.empty else 0.0
+
+    # Second hits
     repeat_entries = parsed_df[(parsed_df["_feature_win_num"] == 2)]
     if repeat_entries.empty:
         repeat_entries = parsed_df[(parsed_df["_hit"] == 2) & (parsed_df["_attempt"] == 2)]
@@ -355,6 +360,13 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
     max_repeat_mult = round(repeat_entries["_mult"].max(), 1) if not repeat_entries.empty else 0.0
     att2_hits = repeat_entries[(repeat_entries["_spins"] > 0)]
     avg_att2_spins = round(att2_hits["_spins"].mean(), 1) if not att2_hits.empty else 0.0
+
+    # Third hits
+    third_entries = parsed_df[(parsed_df["_feature_win_num"] == 3)]
+    if third_entries.empty:
+        third_entries = parsed_df[(parsed_df["_hit"] == 3)]
+    avg_third_mult = round(third_entries["_mult"].mean(), 1) if not third_entries.empty else 0.0
+
     if attempt2_population == 0 and repeat_count == 0:
         recommendation = "ℹ️ UNTESTED REPEAT PROFILE: No second feature logged yet."
     elif multi_hit_rate >= 40.0:
@@ -363,6 +375,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         recommendation = f"⚡ MODERATE REPEAT POTENTIAL ({multi_hit_rate}%): Re-probe if win > 20x."
     else:
         recommendation = f"⚠️ LOW REPEAT POTENTIAL ({multi_hit_rate}%): Single hit machine. Lock profits and exit."
+    
     return {
         "repeat_sample_size": total_logs, "attempt2_population": attempt2_population,
         "multi_hit_count": repeat_count, "multi_hit_rate": multi_hit_rate,
@@ -370,6 +383,7 @@ def compute_slot_rehit_metrics(slot_name, family_name, live_df):
         "avg_attempt2_spins": avg_att2_spins, "repeat_recommendation": recommendation,
         "first_hit_count": first_hit_count, "first_hit_total": total_logs,
         "avg_first_multiplier": avg_first_mult, "avg_first_spins": avg_first_spins,
+        "avg_third_multiplier": avg_third_mult, "max_first_multiplier": max_first_mult,
     }
 
 def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_mode=True):
@@ -441,41 +455,51 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             first_total = rehit.get("first_hit_total", 0) or 0
             first_hits = rehit.get("first_hit_count", 0) or 0
             avg_mult = rehit.get("avg_first_multiplier", 0.0) or 0.0
+            max_mult = rehit.get("max_first_multiplier", 0.0) or 0.0
             multi_rate = rehit.get("multi_hit_rate", 0.0) or 0.0
+            avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0) or 0.0
+            avg_3rd_mult = rehit.get("avg_third_multiplier", 0.0) or 0.0
 
-            if first_total < 3:
+            if first_total < 4:
                 composite = 0.0
             else:
+                # 1. Success rate (reduced weight)
                 success_rate = first_hits / first_total if first_total > 0 else 0
                 success_score = success_rate * 10
-                mult_score = min(10.0, avg_mult / 8.0)
 
+                # 2. Multiplier strength – MUCH higher weight + upper end
+                mult_score = min(10.0, (avg_mult / 6.0) + (max_mult / 40.0))
+
+                # 3. Spin efficiency (softened cliff)
                 if spin_1st is None:
-                    spin_score = 3.0
-                elif spin_1st <= 35:
+                    spin_score = 4.0
+                elif spin_1st <= 40:
                     spin_score = 10.0
-                elif spin_1st <= 50:
+                elif spin_1st <= 55:
                     spin_score = 8.0
-                elif spin_1st <= 65:
+                elif spin_1st <= 70:
                     spin_score = 5.5
-                elif spin_1st <= 80:
-                    spin_score = 2.5
+                elif spin_1st <= 90:
+                    spin_score = 3.0
                 else:
-                    spin_score = 0.5
+                    spin_score = 1.0
 
-                second_bonus = min(2.5, multi_rate / 20.0)
+                # 4. Multi-hit SIZE bonus (not just rate)
+                multi_size_bonus = min(3.0, (avg_2nd_mult / 25.0) + (avg_3rd_mult / 30.0) + (multi_rate / 40.0))
 
+                # New composite – prioritises upside
                 composite = (
-                    0.32 * success_score +
-                    0.28 * mult_score +
-                    0.30 * spin_score +
-                    0.10 * second_bonus
+                    0.22 * success_score +
+                    0.38 * mult_score +          # ← biggest change
+                    0.22 * spin_score +
+                    0.18 * multi_size_bonus
                 )
 
-                if first_total < 6:
-                    composite *= 0.75
-                elif first_total < 10:
-                    composite *= 0.90
+                # Reliability
+                if first_total < 7:
+                    composite *= 0.78
+                elif first_total < 12:
+                    composite *= 0.92
 
             slot_scores.append({
                 "family": fam,
@@ -516,7 +540,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE (improved consecutive logic)
+# 2B. GAMBLE DATA ENGINE
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -551,12 +575,6 @@ def append_gamble_record(record: dict):
         return False
 
 def get_gamble_suggestion(sequence: list):
-    """
-    Improved version for consecutive gambles.
-    - Stronger sequence matching (accepts weaker matches on longer history)
-    - Always enforces colour-suit consistency
-    - Better fallback when data is thin after rolling
-    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts"}
@@ -572,7 +590,6 @@ def get_gamble_suggestion(sequence: list):
             return default
         return counter.most_common(1)[0][0]
 
-    # Global colour preference
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     preferred_color = most_common(global_colors, "Red")
     allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
@@ -580,7 +597,6 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # Try longest match first, then shorter. Accept even single strong matches for consecutive plays.
     for length in [5, 4, 3, 2, 1]:
         if len(sequence) < length:
             continue
@@ -588,14 +604,13 @@ def get_gamble_suggestion(sequence: list):
         if "Sequence" not in df.columns:
             continue
         matches = df[df["Sequence"].astype(str).str.endswith(key)]
-        if len(matches) >= 1:  # more lenient for consecutive
+        if len(matches) >= 1:
             valid_suits = [s for s in matches["Actual_Next"] if s in allowed_suits]
             if valid_suits:
                 suit_counter = Counter(valid_suits)
                 best_suit = most_common(suit_counter)
                 return {"color": preferred_color, "suit": best_suit}
 
-    # Fallback to global among allowed suits
     global_suits = Counter([s for s in df["Actual_Next"] if s in allowed_suits])
     best_suit = most_common(global_suits, allowed_suits[0])
     return {"color": preferred_color, "suit": best_suit}
@@ -793,7 +808,6 @@ with st.sidebar.form("bankroll_form"):
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("✅ Quick Mark Played")
-# Fixed: Family change now correctly updates Slot options
 qm_family = st.sidebar.selectbox("Family:", options=list(SLOT_MASTER_LIST.keys()), key="qm_fam")
 qm_slot = st.sidebar.selectbox("Slot:", options=SLOT_MASTER_LIST[qm_family], key="qm_slot")
 if st.sidebar.button("Mark as Played", use_container_width=True):
@@ -885,7 +899,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 # -------------------------------------------------
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Ranked by real-world usefulness: hit rate + size + spin efficiency + second-hit potential")
+    st.caption("Ranked by upside potential: multiplier strength + multi-hit size + spin efficiency")
 
     filtered_slots = []
     for s in st.session_state.slots_db:
@@ -916,7 +930,6 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     if df_priority.empty:
         st.info("No slots with enough data.")
     else:
-        # Only the clean copy expander (no TSV download button)
         csv_text = df_priority.to_csv(index=False, sep="\t")
         with st.expander("📋 Click here → Select All → Copy"):
             st.code(csv_text, language=None)
@@ -937,7 +950,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
         )
 
     if len(filtered_slots) > st.session_state.display_limit:
-        if st.button("➕ Load 15 More Slots"):
+        if st.button("➕ Load 15 MoreSlots"):
             st.session_state.display_limit += 15
             st.rerun()
 
