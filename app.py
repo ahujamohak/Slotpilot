@@ -129,6 +129,8 @@ if "gamble_sequence" not in st.session_state:
     st.session_state.gamble_sequence = []
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "🃏 Gamble Analyzer"
+if "ai_gamble_suggestion" not in st.session_state:
+    st.session_state.ai_gamble_suggestion = None
 
 def mark_slot_played(slot_name: str) -> str:
     if slot_name not in st.session_state.played_basket:
@@ -278,7 +280,6 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
     return value
 
 def get_recommended_checkin(spin_1st):
-    """Realistic check-in for $5 bet play."""
     if spin_1st is None:
         return 300
     if spin_1st <= 40:
@@ -511,7 +512,6 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 elif first_total < 8:
                     composite *= 0.95
 
-            # Apply exceptions
             if slot in UPSIDE_BOOST:
                 composite *= UPSIDE_BOOST[slot]
             if slot in GRINDER_PENALTY:
@@ -556,7 +556,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE – IMPROVED LONG CHAIN
+# 2B. GAMBLE DATA ENGINE – STRONGER + AI
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -597,45 +597,38 @@ def _parse_sequence_str(seq_str: str) -> list:
     return [p for p in parts if p in SUITS]
 
 def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list:
-    """
-    Rebuild the longest continuous card chain that ends with the current 5-card window.
-    Walks backwards through recent records using 4-card overlap.
-    """
     if recent_df.empty or "Sequence" not in recent_df.columns or len(current_seq) < 4:
         return current_seq[:]
 
     extended = current_seq[:]
 
-    # Go from newest → oldest
     for _, row in recent_df.iloc[::-1].iterrows():
         prev = _parse_sequence_str(str(row.get("Sequence", "")))
         if len(prev) < 5:
             continue
-
-        # Check 4-card overlap
         if extended[:4] == prev[-4:]:
-            # Prepend the older unique cards
             extended = prev[:-4] + extended
         else:
-            # Chain is broken – stop
             break
 
-    # Cap at 12 cards so matching stays practical
     return extended[-12:] if len(extended) > 12 else extended
 
 def get_gamble_suggestion(sequence: list):
     """
-    Improved suggestion engine with better long-chain support.
+    Stronger statistical engine:
+    - Looks at last 100 records for chain building
+    - Prefers higher frequency + more recent matches
+    - Stronger preference for longer contexts
     """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
-        return {"color": "Red", "suit": "Hearts", "context_len": 0}
+        return {"color": "Red", "suit": "Hearts", "context_len": 0, "match_count": 0}
 
     df = df.dropna(subset=["Actual_Next"])
     df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
     df = df[df["Actual_Next"].isin(SUITS)]
     if df.empty:
-        return {"color": "Red", "suit": "Hearts", "context_len": 0}
+        return {"color": "Red", "suit": "Hearts", "context_len": 0, "match_count": 0}
 
     def most_common(counter, default=None):
         if not counter:
@@ -645,13 +638,12 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # 1. Reconstruct the longest continuous chain ending with current sequence
-    recent = df.tail(40) if len(df) > 40 else df          # look further back
+    # 1. Build longer continuous chain (look further back)
+    recent = df.tail(100) if len(df) > 100 else df
     extended = _build_extended_sequence(sequence, recent)
     context_len = len(extended)
 
-    # 2. Try matches from longest context down to 1
-    #    Strongly prefer longer matches
+    # 2. Search from longest context down
     search_lengths = list(range(min(context_len, 9), 0, -1))
 
     for length in search_lengths:
@@ -659,22 +651,35 @@ def get_gamble_suggestion(sequence: list):
         if "Sequence" not in df.columns:
             continue
 
-        matches = df[df["Sequence"].astype(str).str.endswith(key)]
-        if len(matches) >= 1:
-            next_suits = matches["Actual_Next"].tolist()
-            color_counter = Counter([SUIT_COLOR[s] for s in next_suits])
-            preferred_color = most_common(color_counter)
+        matches = df[df["Sequence"].astype(str).str.endswith(key)].copy()
+        if len(matches) == 0:
+            continue
 
-            allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
-            suit_counter = Counter([s for s in next_suits if s in allowed])
+        # Prefer more recent matches by giving later rows higher weight
+        matches = matches.reset_index(drop=True)
+        matches["recency_weight"] = np.linspace(0.6, 1.4, len(matches))
 
-            if suit_counter:
-                best_suit = most_common(suit_counter)
-                return {
-                    "color": preferred_color,
-                    "suit": best_suit,
-                    "context_len": context_len
-                }
+        # Count with recency weighting
+        weighted_suits = []
+        for _, row in matches.iterrows():
+            weight = row["recency_weight"]
+            weighted_suits.extend([row["Actual_Next"]] * max(1, int(round(weight * 2))))
+
+        suit_counter = Counter(weighted_suits)
+        color_counter = Counter([SUIT_COLOR[s] for s in weighted_suits])
+
+        preferred_color = most_common(color_counter)
+        allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
+        filtered_counter = Counter({s: c for s, c in suit_counter.items() if s in allowed})
+
+        if filtered_counter:
+            best_suit = most_common(filtered_counter)
+            return {
+                "color": preferred_color,
+                "suit": best_suit,
+                "context_len": context_len,
+                "match_count": len(matches)
+            }
 
     # 3. Soft global fallback
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
@@ -695,8 +700,92 @@ def get_gamble_suggestion(sequence: list):
     return {
         "color": preferred_color,
         "suit": best_suit,
-        "context_len": context_len
+        "context_len": context_len,
+        "match_count": 0
     }
+
+def build_ai_gamble_summary(sequence: list, extended: list, df: pd.DataFrame) -> str:
+    """Create a condensed summary of matching patterns for the AI."""
+    if df.empty:
+        return "No historical data available."
+
+    summary_parts = []
+    summary_parts.append(f"Current sequence: {' → '.join(sequence)}")
+    if len(extended) > len(sequence):
+        summary_parts.append(f"Extended continuous context ({len(extended)} cards): {' → '.join(extended)}")
+
+    # Find best matching patterns
+    def seq_str(cards):
+        return "-".join(cards)
+
+    pattern_info = []
+    for length in range(min(len(extended), 6), 0, -1):
+        key = seq_str(extended[-length:])
+        matches = df[df["Sequence"].astype(str).str.endswith(key)]
+        if len(matches) >= 2:
+            next_counts = Counter(matches["Actual_Next"].tolist())
+            top = next_counts.most_common(3)
+            pattern_info.append(f"After last {length} cards ({key}): {dict(top)} (n={len(matches)})")
+
+    if pattern_info:
+        summary_parts.append("Historical patterns found:")
+        summary_parts.extend(pattern_info[:5])
+    else:
+        summary_parts.append("No strong exact historical patterns found for this sequence.")
+
+    # Overall colour distribution
+    color_counts = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
+    summary_parts.append(f"Overall colour distribution in database: {dict(color_counts)}")
+
+    return "\n".join(summary_parts)
+
+def get_ai_gamble_suggestion(sequence: list, extended: list):
+    """Ask Gemini/Groq for a reasoned suggestion using condensed history."""
+    df = load_gamble_data()
+    summary = build_ai_gamble_summary(sequence, extended, df)
+
+    prompt = f"""You are helping with a card-guessing game (Red/Black and suit prediction).
+
+Here is the current situation and historical data summary:
+
+{summary}
+
+Based on the patterns above, recommend the most likely next Colour (Red or Black) and Suit (Hearts, Diamonds, Clubs or Spades).
+Rules:
+- Hearts and Diamonds are Red
+- Clubs and Spades are Black
+- Be consistent (if you pick Red, the suit must be Hearts or Diamonds)
+
+Reply in this exact format only:
+Colour: Red
+Suit: Hearts
+Reason: short explanation
+"""
+
+    try:
+        client = get_gemini_client()
+        if client:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt
+            )
+            text = response.text or ""
+            return text.strip(), "Gemini"
+    except Exception:
+        pass
+
+    try:
+        client = get_groq_client()
+        if client:
+            completion = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2
+            )
+            text = completion.choices[0].message.content or ""
+            return text.strip(), "Groq"
+    except Exception as e:
+        return f"AI unavailable: {e}", "None"
 
 # ==========================================
 # 3. AI AGENT ENGINE
@@ -899,7 +988,7 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
-    st.caption("Tap the 5 cards → log the real next card → sequence rolls forward. Consecutive gambles now use longer context.")
+    st.caption("Statistical engine now looks further back + prefers frequent/recent matches. AI suggestion available.")
 
     st.markdown("### Enter the 5 cards (left → right)")
     cols = st.columns(4)
@@ -908,6 +997,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
             if st.button(f"{SUIT_EMOJI[suit]} {suit}", key=f"suit_btn_{suit}", use_container_width=True):
                 if len(st.session_state.gamble_sequence) < 5:
                     st.session_state.gamble_sequence.append(suit)
+                    st.session_state.ai_gamble_suggestion = None
                     st.rerun()
 
     seq = st.session_state.gamble_sequence
@@ -918,6 +1008,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.markdown(" &nbsp;→&nbsp; ".join(html_parts) + f" &nbsp;&nbsp;({len(seq)}/5)", unsafe_allow_html=True)
         if st.button("↺ Clear sequence (new machine)", key="clear_seq"):
             st.session_state.gamble_sequence = []
+            st.session_state.ai_gamble_suggestion = None
             st.rerun()
     else:
         st.info("Click the four suit buttons above to enter the cards.")
@@ -925,8 +1016,13 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
     if len(seq) == 5:
         sug = get_gamble_suggestion(seq)
 
+        # Build extended for AI
+        df_full = load_gamble_data()
+        recent = df_full.tail(100) if len(df_full) > 100 else df_full
+        extended = _build_extended_sequence(seq, recent)
+
         st.markdown("---")
-        st.markdown("### Next card")
+        st.markdown("### Statistical suggestion")
         
         col_sug, col_btn = st.columns([3, 1])
         with col_sug:
@@ -935,7 +1031,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
                 unsafe_allow_html=True
             )
-            st.caption(f"Context used: {sug.get('context_len', 0)} cards")
+            st.caption(f"Context used: {sug.get('context_len', 0)} cards | Matches found: {sug.get('match_count', 0)}")
         with col_btn:
             st.write("")
             if st.button("✅ Correct – Log this", key="quick_correct", use_container_width=True, type="primary"):
@@ -958,11 +1054,27 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 }
                 if append_gamble_record(record):
                     st.session_state.gamble_sequence = seq[1:] + [actual]
+                    st.session_state.ai_gamble_suggestion = None
                     st.success("Logged as Correct. Sequence rolled forward.")
                     st.rerun()
 
+        # AI Suggestion section
         st.markdown("---")
-        st.markdown("### Log the real next card (if suggestion was wrong)")
+        st.markdown("### AI suggestion (uses full history patterns)")
+        
+        if st.button("🤖 Ask AI for better suggestion", key="ask_ai_gamble"):
+            with st.spinner("Analyzing full history patterns..."):
+                ai_text, provider = get_ai_gamble_suggestion(seq, extended)
+                st.session_state.ai_gamble_suggestion = (ai_text, provider)
+                st.rerun()
+
+        if st.session_state.ai_gamble_suggestion:
+            ai_text, provider = st.session_state.ai_gamble_suggestion
+            st.markdown(ai_text)
+            st.caption(f"_Source: {provider}_")
+
+        st.markdown("---")
+        st.markdown("### Log the real next card (if both suggestions were wrong)")
         with st.form("log_gamble_result", clear_on_submit=False):
             actual = st.selectbox("Actual next card", options=SUITS, index=0, key="actual_select")
             submitted = st.form_submit_button("💾 Log & roll sequence forward", use_container_width=True)
@@ -985,6 +1097,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 }
                 if append_gamble_record(record):
                     st.session_state.gamble_sequence = seq[1:] + [actual]
+                    st.session_state.ai_gamble_suggestion = None
                     st.success("Logged. Sequence rolled forward.")
                     st.rerun()
 
@@ -1064,7 +1177,6 @@ elif st.session_state.active_tab == "📈 Overall Performance":
             rehit = compute_slot_rehit_metrics(slot, fam, live_sheet_df)
             first_total = rehit.get("first_hit_total", 0)
             
-            # Higher minimum sample
             if first_total < 10:
                 continue
                 
@@ -1074,7 +1186,6 @@ elif st.session_state.active_tab == "📈 Overall Performance":
             avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0) or 0.0
             multi_hit_count = rehit.get("multi_hit_count", 0) or 0
 
-            # === Much stronger reliability ===
             sample_factor = min(1.0, first_total / 40.0)
             hit_quality = 0.65 + (0.35 * success_rate)
             robust_score = avg_1st_mult * sample_factor * hit_quality
