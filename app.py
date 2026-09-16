@@ -21,8 +21,8 @@ st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wid
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-GEMINI_MODEL = "gemini-3.6-flash"
-GROQ_MODEL = "openai/gpt-oss-120b"
+GEMINI_MODEL = "gemini-2.0-flash"
+GROQ_MODEL = "llama-3.3-70b-versatile"
 
 SESSION_STATE_WORKSHEET = "Live Session"
 SESSION_LOG_WORKSHEET = "Session Log"
@@ -679,7 +679,7 @@ def get_gamble_suggestion(sequence: list):
     }
 
 # ==========================================
-# 3. AI AGENT ENGINE
+# 3. AI AGENT ENGINE  (Gemini → Groq fallback)
 # ==========================================
 @st.cache_resource
 def get_gemini_client():
@@ -803,13 +803,8 @@ def run_ai_agent(user_prompt: str):
             return f"⚠️ AI providers failed:\n- Gemini: {gemini_err}\n- Groq: {groq_err}", "None"
 
 def get_ai_gamble_suggestion(sequence: list, extended: list):
-    """Ask AI for a gamble suggestion based on the current + extended sequence."""
-    try:
-        client = get_gemini_client()
-        if not client:
-            return "AI unavailable (no API key).", "None"
-        
-        prompt = f"""
+    """Ask AI for a gamble suggestion. Tries Gemini first, falls back to Groq on any error."""
+    prompt = f"""
 You are helping with a casino gamble feature (colour/suit prediction).
 
 Current 5-card sequence: {' → '.join(sequence)}
@@ -823,42 +818,60 @@ Colour: Red or Black
 Suit: Hearts / Diamonds / Clubs / Spades
 Reason: short explanation
 """
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt
-        )
-        return response.text or "No response", "Gemini"
-    except Exception as e:
-        return f"AI error: {e}", "None"
 
-def get_ai_priority_ranking(slots_db, selected_day, played_basket):
-    """Ask AI to re-rank the top machines for today."""
+    # 1. Try Gemini
     try:
         client = get_gemini_client()
-        if not client:
-            return None, "None"
-        
-        # Prepare top candidates
-        candidates = []
-        for s in slots_db:
-            if s["slot"] in played_basket:
-                continue
-            rehit = s.get("rehit_metrics", {})
-            if rehit.get("first_hit_total", 0) < 5:
-                continue
-            candidates.append({
-                "slot": s["slot"],
-                "family": s["family"],
-                "composite": s.get("composite", 0),
-                "avg_mult": rehit.get("avg_first_multiplier", 0),
-                "hit_rate": f"{rehit.get('first_hit_count',0)}/{rehit.get('first_hit_total',0)}",
-                "spin_1st": s.get("spin_1st"),
-                "multi_rate": rehit.get("multi_hit_rate", 0)
-            })
-        
-        candidates = candidates[:60]
-        
-        prompt = f"""
+        if client:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt
+            )
+            text = response.text or "No response"
+            return text, "Gemini"
+    except Exception as e:
+        gemini_error = str(e)
+    else:
+        gemini_error = "No Gemini client"
+
+    # 2. Fallback to Groq
+    try:
+        client = get_groq_client()
+        if client:
+            completion = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            text = completion.choices[0].message.content
+            return f"{text}\n\n_(⚠️ Gemini unavailable → used Groq)_", "Groq (fallback)"
+    except Exception as e:
+        return f"AI error (both providers failed):\nGemini: {gemini_error}\nGroq: {e}", "None"
+
+    return "AI unavailable (no API keys configured).", "None"
+
+def get_ai_priority_ranking(slots_db, selected_day, played_basket):
+    """Ask AI to re-rank machines. Tries Gemini first, falls back to Groq."""
+    candidates = []
+    for s in slots_db:
+        if s["slot"] in played_basket:
+            continue
+        rehit = s.get("rehit_metrics", {})
+        if rehit.get("first_hit_total", 0) < 5:
+            continue
+        candidates.append({
+            "slot": s["slot"],
+            "family": s["family"],
+            "composite": s.get("composite", 0),
+            "avg_mult": rehit.get("avg_first_multiplier", 0),
+            "hit_rate": f"{rehit.get('first_hit_count',0)}/{rehit.get('first_hit_total',0)}",
+            "spin_1st": s.get("spin_1st"),
+            "multi_rate": rehit.get("multi_hit_rate", 0)
+        })
+    
+    candidates = candidates[:60]
+    
+    prompt = f"""
 You are an expert slot machine ranking engine for live casino play.
 
 Target day: {selected_day}
@@ -879,13 +892,36 @@ Return ONLY a clean numbered list in this exact format (one per line):
 ...
 Do not add extra text before or after the list.
 """
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt
-        )
-        return response.text or "", "Gemini"
+
+    # 1. Try Gemini
+    try:
+        client = get_gemini_client()
+        if client:
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt
+            )
+            return response.text or "", "Gemini"
     except Exception as e:
-        return None, f"Error: {e}"
+        gemini_error = str(e)
+    else:
+        gemini_error = "No Gemini client"
+
+    # 2. Fallback to Groq
+    try:
+        client = get_groq_client()
+        if client:
+            completion = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3
+            )
+            text = completion.choices[0].message.content
+            return text, "Groq (fallback)"
+    except Exception as e:
+        return None, f"Both failed – Gemini: {gemini_error} | Groq: {e}"
+
+    return None, "No AI providers available"
 
 def parse_ai_priority_list(ai_text: str, slots_db: list):
     """Parse the AI numbered list back into slot records."""
@@ -897,7 +933,6 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
     slot_lookup = {(s["family"].lower(), s["slot"].lower()): s for s in slots_db}
     
     for line in lines:
-        # Expected: "1. Family | Slot Name"
         match = re.match(r"^\d+[\.\)]\s*(.+?)\s*\|\s*(.+)$", line)
         if not match:
             continue
@@ -908,7 +943,6 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
         if key in slot_lookup:
             parsed.append(slot_lookup[key])
         else:
-            # Fuzzy fallback
             for s in slots_db:
                 if s["slot"].lower() == slot.lower():
                     parsed.append(s)
@@ -992,7 +1026,7 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
-    st.caption("Statistical engine looks further back + prefers frequent/recent matches. AI suggestion available.")
+    st.caption("Statistical engine + AI suggestion (Gemini → Groq fallback).")
 
     st.markdown("### Enter the 5 cards (left → right)")
     cols = st.columns(4)
@@ -1064,7 +1098,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.markdown("### AI suggestion (uses full history patterns)")
         
         if st.button("🤖 Ask AI for better suggestion", key="ask_ai_gamble"):
-            with st.spinner("Analyzing full history patterns..."):
+            with st.spinner("Analyzing full history patterns (Gemini → Groq)..."):
                 ai_text, provider = get_ai_gamble_suggestion(seq, extended)
                 st.session_state.ai_gamble_suggestion = (ai_text, provider)
                 st.rerun()
@@ -1113,7 +1147,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Statistical ranking + AI-refined ranking available")
+    st.caption("Statistical ranking + AI-refined ranking (Gemini → Groq fallback)")
 
     filtered_slots = []
     for s in st.session_state.slots_db:
@@ -1172,10 +1206,10 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     # === AI Priority Ranking ===
     st.markdown("---")
     st.markdown("### AI-Refined Priority Ranking")
-    st.caption("The AI reviews the top statistical candidates and produces its own ranked list of the best 40–50 machines for today.")
+    st.caption("The AI reviews the top statistical candidates and produces its own ranked list (Gemini → Groq fallback).")
 
     if st.button("🤖 Ask AI for Priority Ranking", key="ask_ai_priority", type="primary"):
-        with st.spinner("AI is analysing all data and ranking the best machines for today..."):
+        with st.spinner("AI is analysing all data and ranking the best machines for today (Gemini → Groq)..."):
             ai_text, provider = get_ai_priority_ranking(
                 st.session_state.slots_db,
                 st.session_state.selected_day,
