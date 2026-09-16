@@ -96,6 +96,7 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.last_saved_ts = None
     st.session_state.last_save_error = None
     st.session_state.gamble_sequence = []
+    st.session_state.ai_priority_result = None
     if wipe_persisted:
         persist_session_state()
 
@@ -131,6 +132,8 @@ if "active_tab" not in st.session_state:
     st.session_state.active_tab = "🃏 Gamble Analyzer"
 if "ai_gamble_suggestion" not in st.session_state:
     st.session_state.ai_gamble_suggestion = None
+if "ai_priority_result" not in st.session_state:
+    st.session_state.ai_priority_result = None
 
 def mark_slot_played(slot_name: str) -> str:
     if slot_name not in st.session_state.played_basket:
@@ -198,9 +201,6 @@ SLOT_MASTER_LIST = {
     "Wild Rumble": ["Shen Shan"]
 }
 
-# ==========================================
-# EXCEPTION ADJUSTMENTS
-# ==========================================
 UPSIDE_BOOST = {
     "Shadow Clan": 2.10,
     "Emperor's Choice": 2.00,
@@ -276,7 +276,7 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
     if len(spins) < 2:
         return None
     value = int(np.percentile(spins, percentile))
-    value = int(round(value * 1.20))  # silent +20%
+    value = int(round(value * 1.20))
     return value
 
 def get_recommended_checkin(spin_1st):
@@ -477,7 +477,6 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             else:
                 success_rate = first_hits / first_total if first_total > 0 else 0
                 success_score = min(10.0, success_rate * 8.5)
-
                 mult_score = min(13.0, (avg_mult / 5.0) + (max_mult / 22.0))
 
                 if spin_1st is None:
@@ -556,7 +555,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE – STRONGER + AI
+# 2B. GAMBLE DATA ENGINE
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -599,9 +598,7 @@ def _parse_sequence_str(seq_str: str) -> list:
 def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list:
     if recent_df.empty or "Sequence" not in recent_df.columns or len(current_seq) < 4:
         return current_seq[:]
-
     extended = current_seq[:]
-
     for _, row in recent_df.iloc[::-1].iterrows():
         prev = _parse_sequence_str(str(row.get("Sequence", "")))
         if len(prev) < 5:
@@ -610,16 +607,9 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
             extended = prev[:-4] + extended
         else:
             break
-
     return extended[-12:] if len(extended) > 12 else extended
 
 def get_gamble_suggestion(sequence: list):
-    """
-    Stronger statistical engine:
-    - Looks at last 100 records for chain building
-    - Prefers higher frequency + more recent matches
-    - Stronger preference for longer contexts
-    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts", "context_len": 0, "match_count": 0}
@@ -638,40 +628,30 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # 1. Build longer continuous chain (look further back)
     recent = df.tail(100) if len(df) > 100 else df
     extended = _build_extended_sequence(sequence, recent)
     context_len = len(extended)
 
-    # 2. Search from longest context down
     search_lengths = list(range(min(context_len, 9), 0, -1))
 
     for length in search_lengths:
         key = seq_str(extended[-length:])
         if "Sequence" not in df.columns:
             continue
-
         matches = df[df["Sequence"].astype(str).str.endswith(key)].copy()
         if len(matches) == 0:
             continue
-
-        # Prefer more recent matches by giving later rows higher weight
         matches = matches.reset_index(drop=True)
         matches["recency_weight"] = np.linspace(0.6, 1.4, len(matches))
-
-        # Count with recency weighting
         weighted_suits = []
         for _, row in matches.iterrows():
             weight = row["recency_weight"]
             weighted_suits.extend([row["Actual_Next"]] * max(1, int(round(weight * 2))))
-
         suit_counter = Counter(weighted_suits)
         color_counter = Counter([SUIT_COLOR[s] for s in weighted_suits])
-
         preferred_color = most_common(color_counter)
         allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
         filtered_counter = Counter({s: c for s, c in suit_counter.items() if s in allowed})
-
         if filtered_counter:
             best_suit = most_common(filtered_counter)
             return {
@@ -681,22 +661,18 @@ def get_gamble_suggestion(sequence: list):
                 "match_count": len(matches)
             }
 
-    # 3. Soft global fallback
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     total = sum(global_colors.values())
     red_count = global_colors.get("Red", 0)
     black_count = global_colors.get("Black", 0)
-
     if total > 0 and abs(red_count - black_count) / total < 0.28:
         last_color = SUIT_COLOR.get(sequence[-1], "Red") if sequence else "Red"
         preferred_color = last_color
     else:
         preferred_color = most_common(global_colors, "Red")
-
     allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
     global_suits = Counter([s for s in df["Actual_Next"] if s in allowed_suits])
     best_suit = most_common(global_suits, allowed_suits[0])
-
     return {
         "color": preferred_color,
         "suit": best_suit,
@@ -705,19 +681,14 @@ def get_gamble_suggestion(sequence: list):
     }
 
 def build_ai_gamble_summary(sequence: list, extended: list, df: pd.DataFrame) -> str:
-    """Create a condensed summary of matching patterns for the AI."""
     if df.empty:
         return "No historical data available."
-
     summary_parts = []
     summary_parts.append(f"Current sequence: {' → '.join(sequence)}")
     if len(extended) > len(sequence):
         summary_parts.append(f"Extended continuous context ({len(extended)} cards): {' → '.join(extended)}")
-
-    # Find best matching patterns
     def seq_str(cards):
         return "-".join(cards)
-
     pattern_info = []
     for length in range(min(len(extended), 6), 0, -1):
         key = seq_str(extended[-length:])
@@ -726,24 +697,18 @@ def build_ai_gamble_summary(sequence: list, extended: list, df: pd.DataFrame) ->
             next_counts = Counter(matches["Actual_Next"].tolist())
             top = next_counts.most_common(3)
             pattern_info.append(f"After last {length} cards ({key}): {dict(top)} (n={len(matches)})")
-
     if pattern_info:
         summary_parts.append("Historical patterns found:")
         summary_parts.extend(pattern_info[:5])
     else:
         summary_parts.append("No strong exact historical patterns found for this sequence.")
-
-    # Overall colour distribution
     color_counts = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     summary_parts.append(f"Overall colour distribution in database: {dict(color_counts)}")
-
     return "\n".join(summary_parts)
 
 def get_ai_gamble_suggestion(sequence: list, extended: list):
-    """Ask Gemini/Groq for a reasoned suggestion using condensed history."""
     df = load_gamble_data()
     summary = build_ai_gamble_summary(sequence, extended, df)
-
     prompt = f"""You are helping with a card-guessing game (Red/Black and suit prediction).
 
 Here is the current situation and historical data summary:
@@ -761,19 +726,14 @@ Colour: Red
 Suit: Hearts
 Reason: short explanation
 """
-
     try:
         client = get_gemini_client()
         if client:
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt
-            )
+            response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
             text = response.text or ""
             return text.strip(), "Gemini"
     except Exception:
         pass
-
     try:
         client = get_groq_client()
         if client:
@@ -786,6 +746,116 @@ Reason: short explanation
             return text.strip(), "Groq"
     except Exception as e:
         return f"AI unavailable: {e}", "None"
+
+# ==========================================
+# AI PRIORITY RANKING
+# ==========================================
+def get_ai_priority_ranking(slots_db, target_day, played_basket):
+    """Ask AI to select and rank the best 40-50 slots for today."""
+    # Take top statistical candidates (give AI good material)
+    candidates = []
+    for s in slots_db:
+        if s["slot"] in played_basket:
+            continue
+        rehit = s.get("rehit_metrics", {})
+        if rehit.get("first_hit_total", 0) < 6:
+            continue
+        candidates.append(s)
+        if len(candidates) >= 80:
+            break
+
+    if not candidates:
+        return None, "No candidates available"
+
+    # Build condensed summary
+    lines = []
+    for i, s in enumerate(candidates[:60], 1):
+        rehit = s.get("rehit_metrics", {})
+        spin1 = s.get("spin_1st")
+        spin2 = s.get("spin_2nd")
+        avg_mult = rehit.get("avg_first_multiplier", 0)
+        multi_rate = rehit.get("multi_hit_rate", 0)
+        lines.append(
+            f"{i}. {s['family']} | {s['slot']} | "
+            f"AvgMult={avg_mult}x | HitRate={rehit.get('first_hit_count',0)}/{rehit.get('first_hit_total',0)} | "
+            f"Spin1st={spin1 or '—'} | Spin2nd={spin2 or '—'} | MultiHit={multi_rate}%"
+        )
+
+    summary = "\n".join(lines)
+
+    prompt = f"""You are an expert slot machine analyst helping a player choose the best machines to play today ({target_day}).
+
+Here are the top statistical candidates with key metrics:
+
+{summary}
+
+Your task:
+- Select and rank the best 40 to 50 machines for today.
+- Prioritise machines with good upside (high average multiplier + decent sample size), reasonable spin counts, and multi-hit potential.
+- Consider it is {target_day}.
+- Avoid machines that look like pure grinders with low multipliers.
+
+Reply ONLY with a clean numbered list in this exact format (no extra text):
+
+1. Family Name | Slot Name
+2. Family Name | Slot Name
+3. Family Name | Slot Name
+...
+"""
+
+    try:
+        client = get_gemini_client()
+        if client:
+            response = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            text = response.text or ""
+            return text.strip(), "Gemini"
+    except Exception:
+        pass
+
+    try:
+        client = get_groq_client()
+        if client:
+            completion = client.chat.completions.create(
+                model=GROQ_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.25
+            )
+            text = completion.choices[0].message.content or ""
+            return text.strip(), "Groq"
+    except Exception as e:
+        return None, f"AI unavailable: {e}"
+
+def parse_ai_priority_list(ai_text, slots_db):
+    """Parse AI response into a clean list of (family, slot) and match back to metrics."""
+    if not ai_text:
+        return []
+
+    results = []
+    lines = ai_text.strip().split("\n")
+    slot_lookup = {(s["family"].lower(), s["slot"].lower()): s for s in slots_db}
+
+    for line in lines:
+        line = line.strip()
+        if not line or not re.match(r"^\d+[\.\)]", line):
+            continue
+        # Remove leading number
+        clean = re.sub(r"^\d+[\.\)]\s*", "", line)
+        if "|" in clean:
+            parts = [p.strip() for p in clean.split("|")]
+            if len(parts) >= 2:
+                fam = parts[0]
+                slot = parts[1]
+                key = (fam.lower(), slot.lower())
+                if key in slot_lookup:
+                    results.append(slot_lookup[key])
+                else:
+                    # Fuzzy fallback
+                    for s in slots_db:
+                        if s["slot"].lower() == slot.lower():
+                            results.append(s)
+                            break
+
+    return results
 
 # ==========================================
 # 3. AI AGENT ENGINE
@@ -988,7 +1058,7 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
-    st.caption("Statistical engine now looks further back + prefers frequent/recent matches. AI suggestion available.")
+    st.caption("Statistical engine looks further back + prefers frequent/recent matches. AI suggestion available.")
 
     st.markdown("### Enter the 5 cards (left → right)")
     cols = st.columns(4)
@@ -1015,8 +1085,6 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 
     if len(seq) == 5:
         sug = get_gamble_suggestion(seq)
-
-        # Build extended for AI
         df_full = load_gamble_data()
         recent = df_full.tail(100) if len(df_full) > 100 else df_full
         extended = _build_extended_sequence(seq, recent)
@@ -1058,7 +1126,6 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                     st.success("Logged as Correct. Sequence rolled forward.")
                     st.rerun()
 
-        # AI Suggestion section
         st.markdown("---")
         st.markdown("### AI suggestion (uses full history patterns)")
         
@@ -1112,8 +1179,9 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Ranked by upside + targeted exceptions | Realistic $5 check-in")
+    st.caption("Statistical ranking + AI-refined ranking available")
 
+    # === Statistical Board ===
     filtered_slots = []
     for s in st.session_state.slots_db:
         if s["slot"] in st.session_state.played_basket:
@@ -1140,6 +1208,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
     df_priority = pd.DataFrame(table_data)
 
+    st.markdown("### Statistical Ranking")
     if df_priority.empty:
         st.info("No slots with enough data.")
     else:
@@ -1167,6 +1236,67 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             st.session_state.display_limit += 15
             st.rerun()
 
+    # === AI Priority Ranking ===
+    st.markdown("---")
+    st.markdown("### AI-Refined Priority Ranking")
+    st.caption("The AI reviews the top statistical candidates and produces its own ranked list of the best 40–50 machines for today.")
+
+    if st.button("🤖 Ask AI for Priority Ranking", key="ask_ai_priority", type="primary"):
+        with st.spinner("AI is analysing all data and ranking the best machines for today..."):
+            ai_text, provider = get_ai_priority_ranking(
+                st.session_state.slots_db,
+                st.session_state.selected_day,
+                st.session_state.played_basket
+            )
+            if ai_text:
+                parsed = parse_ai_priority_list(ai_text, st.session_state.slots_db)
+                st.session_state.ai_priority_result = (parsed, provider, ai_text)
+            else:
+                st.session_state.ai_priority_result = (None, provider, None)
+            st.rerun()
+
+    if st.session_state.ai_priority_result:
+        parsed_list, provider, raw_text = st.session_state.ai_priority_result
+        if parsed_list:
+            st.success(f"AI ranking ready ({provider}) — showing {len(parsed_list)} machines")
+            
+            ai_table = []
+            for rank, item in enumerate(parsed_list, 1):
+                spin1 = item.get("spin_1st")
+                ai_table.append({
+                    "Rank": rank,
+                    "Family": item.get("family", "N/A"),
+                    "Slot": item.get("slot", "N/A"),
+                    "Spin required for first hit": spin1 if spin1 is not None else "—",
+                    "Spin needed for 2nd hit": item.get("spin_2nd") if item.get("spin_2nd") is not None else "—",
+                    "Spin needed for 3rd hit": item.get("spin_3rd") if item.get("spin_3rd") is not None else "—",
+                    "Recommended Max Check-in": get_recommended_checkin(spin1),
+                })
+            
+            df_ai = pd.DataFrame(ai_table)
+            
+            csv_ai = df_ai.to_csv(index=False, sep="\t")
+            with st.expander("📋 Click here → Select All → Copy (AI Ranking)"):
+                st.code(csv_ai, language=None)
+
+            st.dataframe(
+                df_ai,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Rank": st.column_config.NumberColumn("Rank", width="small"),
+                    "Family": st.column_config.TextColumn("Family", width="medium"),
+                    "Slot": st.column_config.TextColumn("Slot", width="medium"),
+                    "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium"),
+                    "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium"),
+                    "Spin needed for 3rd hit": st.column_config.NumberColumn("Spin needed for 3rd hit", width="medium"),
+                    "Recommended Max Check-in": st.column_config.NumberColumn("Recommended Max Check-in", width="medium"),
+                }
+            )
+        else:
+            st.warning(f"AI response could not be fully parsed ({provider}). Raw response:")
+            st.code(raw_text or "No response")
+
 elif st.session_state.active_tab == "📈 Overall Performance":
     st.subheader("📈 Overall Performance (All Historical Logs)")
     st.caption("Strong sample-size penalty applied. Low-sample high-variance machines are heavily demoted.")
@@ -1176,31 +1306,24 @@ elif st.session_state.active_tab == "📈 Overall Performance":
         for slot in slots:
             rehit = compute_slot_rehit_metrics(slot, fam, live_sheet_df)
             first_total = rehit.get("first_hit_total", 0)
-            
             if first_total < 10:
                 continue
-                
             first_hits = rehit.get("first_hit_count", 0)
             success_rate = (first_hits / first_total) if first_total > 0 else 0.0
             avg_1st_mult = rehit.get("avg_first_multiplier", 0.0) or 0.0
             avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0) or 0.0
             multi_hit_count = rehit.get("multi_hit_count", 0) or 0
-
             sample_factor = min(1.0, first_total / 40.0)
             hit_quality = 0.65 + (0.35 * success_rate)
             robust_score = avg_1st_mult * sample_factor * hit_quality
-
             if multi_hit_count >= 4 and avg_2nd_mult >= 30:
                 robust_score *= 1.12
-
             if slot in ["Maximus Money", "Minotaur’s Treasure", "Ragnar the Great", "Fire Mountain", "El Matador"]:
                 robust_score *= 1.15
             if slot in ["Golden Empress", "New York Nights"]:
                 robust_score *= 0.70
-
             overall_slots.append({
-                "family": fam,
-                "slot": slot,
+                "family": fam, "slot": slot,
                 "calc_success_rate": success_rate,
                 "avg_first_multiplier": avg_1st_mult,
                 "robust_score": robust_score,
