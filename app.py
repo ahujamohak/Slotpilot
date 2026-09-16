@@ -654,7 +654,6 @@ def get_gamble_suggestion(sequence: list):
     extended = _build_extended_sequence(sequence, recent)
 
     # 2. Try matches from longest possible context down to 1
-    #    Prefer matches that come from the extended sequence
     search_lengths = list(range(min(len(extended), 8), 0, -1))
 
     for length in search_lengths:
@@ -672,7 +671,7 @@ def get_gamble_suggestion(sequence: list):
                 best_suit = most_common(suit_counter)
                 return {"color": preferred_color, "suit": best_suit}
 
-    # 3. Soft global fallback (same as before)
+    # 3. Soft global fallback
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     total = sum(global_colors.values())
     red_count = global_colors.get("Red", 0)
@@ -918,14 +917,43 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
 
         st.markdown("---")
         st.markdown("### Next card")
-        st.markdown(
-            f"**Colour** &nbsp;&nbsp; {color_html(sug['color'])}<br>"
-            f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
-            unsafe_allow_html=True
-        )
+        
+        # Display suggestion + quick Correct button side by side
+        col_sug, col_btn = st.columns([3, 1])
+        with col_sug:
+            st.markdown(
+                f"**Colour** &nbsp;&nbsp; {color_html(sug['color'])}<br>"
+                f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
+                unsafe_allow_html=True
+            )
+        with col_btn:
+            st.write("")  # small vertical space
+            if st.button("✅ Correct – Log this", key="quick_correct", use_container_width=True, type="primary"):
+                # Automatically log the suggested suit
+                actual = sug["suit"]   # clean value: "Hearts", "Diamonds", etc.
+                now = datetime.now()
+                record = {
+                    "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "Date": now.strftime("%m/%d/%Y"),
+                    "Day": now.strftime("%A"),
+                    "Card1": seq[0],
+                    "Card2": seq[1],
+                    "Card3": seq[2],
+                    "Card4": seq[3],
+                    "Card5": seq[4],
+                    "Sequence": "-".join(seq),
+                    "Suggested_Color": sug["color"],
+                    "Suggested_Suit": sug["suit"],
+                    "Actual_Next": actual,
+                    "Actual_Color": SUIT_COLOR[actual],
+                }
+                if append_gamble_record(record):
+                    st.session_state.gamble_sequence = seq[1:] + [actual]
+                    st.success("Logged as Correct. Sequence rolled forward.")
+                    st.rerun()
 
         st.markdown("---")
-        st.markdown("### Log the real next card")
+        st.markdown("### Log the real next card (if suggestion was wrong)")
         with st.form("log_gamble_result", clear_on_submit=False):
             actual = st.selectbox("Actual next card", options=SUITS, index=0, key="actual_select")
             submitted = st.form_submit_button("💾 Log & roll sequence forward", use_container_width=True)
@@ -948,7 +976,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 }
                 if append_gamble_record(record):
                     st.session_state.gamble_sequence = seq[1:] + [actual]
-                    st.success("Logged. Sequence rolled forward. Longer context will be used on next suggestion.")
+                    st.success("Logged. Sequence rolled forward.")
                     st.rerun()
 
     st.markdown("---")
