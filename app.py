@@ -597,40 +597,24 @@ def _parse_sequence_str(seq_str: str) -> list:
     return [p for p in parts if p in SUITS]
 
 def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list:
-    """
-    Reconstruct a longer continuous sequence by chaining recent records
-    where the last 4 cards of an older record match the first 4 of the newer one.
-    """
     if recent_df.empty or "Sequence" not in recent_df.columns:
         return current_seq[:]
 
-    # Work from most recent backwards
-    records = recent_df.iloc[::-1].to_dict("records")  # newest first
+    records = recent_df.iloc[::-1].to_dict("records")
     extended = current_seq[:]
 
     for rec in records:
         prev_seq = _parse_sequence_str(str(rec.get("Sequence", "")))
         if len(prev_seq) < 5:
             continue
-        # Check overlap: last 4 of prev should equal first 4 of current extended
         if extended[:4] == prev_seq[-4:]:
-            # Prepend the unique older card(s)
             extended = prev_seq[:-4] + extended
         else:
-            # Chain broken – stop
             break
 
-    # Limit to a sensible maximum (e.g. 12 cards)
     return extended[-12:] if len(extended) > 12 else extended
 
 def get_gamble_suggestion(sequence: list):
-    """
-    Improved suggestion engine:
-    - Reconstructs longer continuous sequence from recent consecutive gambles
-    - Prefers longer context matches against the full database
-    - Still falls back to shorter matches + global frequencies
-    - Enforces colour/suit consistency
-    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts"}
@@ -649,11 +633,9 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # 1. Build extended sequence from recent continuous chain
     recent = df.tail(20) if len(df) > 20 else df
     extended = _build_extended_sequence(sequence, recent)
 
-    # 2. Try matches from longest possible context down to 1
     search_lengths = list(range(min(len(extended), 8), 0, -1))
 
     for length in search_lengths:
@@ -671,7 +653,6 @@ def get_gamble_suggestion(sequence: list):
                 best_suit = most_common(suit_counter)
                 return {"color": preferred_color, "suit": best_suit}
 
-    # 3. Soft global fallback
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     total = sum(global_colors.values())
     red_count = global_colors.get("Red", 0)
@@ -918,7 +899,6 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.markdown("---")
         st.markdown("### Next card")
         
-        # Display suggestion + quick Correct button side by side
         col_sug, col_btn = st.columns([3, 1])
         with col_sug:
             st.markdown(
@@ -927,10 +907,9 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 unsafe_allow_html=True
             )
         with col_btn:
-            st.write("")  # small vertical space
+            st.write("")
             if st.button("✅ Correct – Log this", key="quick_correct", use_container_width=True, type="primary"):
-                # Automatically log the suggested suit
-                actual = sug["suit"]   # clean value: "Hearts", "Diamonds", etc.
+                actual = sug["suit"]
                 now = datetime.now()
                 record = {
                     "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1047,26 +1026,51 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
 elif st.session_state.active_tab == "📈 Overall Performance":
     st.subheader("📈 Overall Performance (All Historical Logs)")
-    st.caption("Sorted by a more robust score (Avg Mult × sample reliability). Low-sample high-variance machines are no longer over-ranked.")
+    st.caption("Strong sample-size penalty applied. Low-sample high-variance machines are heavily demoted.")
 
     overall_slots = []
     for fam, slots in SLOT_MASTER_LIST.items():
         for slot in slots:
             rehit = compute_slot_rehit_metrics(slot, fam, live_sheet_df)
             first_total = rehit.get("first_hit_total", 0)
-            if first_total >= 6:
-                first_hits = rehit.get("first_hit_count", 0)
-                success_rate = (first_hits / first_total) if first_total > 0 else 0.0
-                avg_1st_mult = rehit.get("avg_first_multiplier", 0.0)
-                reliability = min(1.0, first_total / 25.0)
-                robust_score = avg_1st_mult * (0.6 + 0.4 * reliability)
-                overall_slots.append({
-                    "family": fam, "slot": slot,
-                    "calc_success_rate": success_rate,
-                    "avg_first_multiplier": avg_1st_mult,
-                    "robust_score": robust_score,
-                    "rehit_metrics": rehit
-                })
+            
+            # Higher minimum sample
+            if first_total < 10:
+                continue
+                
+            first_hits = rehit.get("first_hit_count", 0)
+            success_rate = (first_hits / first_total) if first_total > 0 else 0.0
+            avg_1st_mult = rehit.get("avg_first_multiplier", 0.0) or 0.0
+            avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0) or 0.0
+            multi_hit_count = rehit.get("multi_hit_count", 0) or 0
+
+            # === Much stronger reliability ===
+            # Needs ~40 samples to be fully trusted
+            sample_factor = min(1.0, first_total / 40.0)
+            
+            # Mild credit for hit rate
+            hit_quality = 0.65 + (0.35 * success_rate)
+            
+            robust_score = avg_1st_mult * sample_factor * hit_quality
+
+            # Small bonus for machines that also have decent 2nd-hit data
+            if multi_hit_count >= 4 and avg_2nd_mult >= 30:
+                robust_score *= 1.12
+
+            # Optional light exceptions for proven performers
+            if slot in ["Maximus Money", "Minotaur’s Treasure", "Ragnar the Great", "Fire Mountain", "El Matador"]:
+                robust_score *= 1.15
+            if slot in ["Golden Empress", "New York Nights"]:  # known high-variance low-sample
+                robust_score *= 0.70
+
+            overall_slots.append({
+                "family": fam,
+                "slot": slot,
+                "calc_success_rate": success_rate,
+                "avg_first_multiplier": avg_1st_mult,
+                "robust_score": robust_score,
+                "rehit_metrics": rehit
+            })
 
     sorted_overall = sorted(overall_slots, key=lambda x: x["robust_score"], reverse=True)
 
@@ -1092,7 +1096,7 @@ elif st.session_state.active_tab == "📈 Overall Performance":
         })
     df_overall = pd.DataFrame(table_data_overall)
     if df_overall.empty:
-        st.info("No slots with ≥ 6 total attempts found.")
+        st.info("No slots with ≥ 10 total attempts found.")
     else:
         st.dataframe(df_overall, use_container_width=True, hide_index=True)
 
