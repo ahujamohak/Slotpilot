@@ -556,7 +556,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE – IMPROVED FOR CONSECUTIVE PLAYS
+# 2B. GAMBLE DATA ENGINE – IMPROVED LONG CHAIN
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -597,33 +597,45 @@ def _parse_sequence_str(seq_str: str) -> list:
     return [p for p in parts if p in SUITS]
 
 def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list:
-    if recent_df.empty or "Sequence" not in recent_df.columns:
+    """
+    Rebuild the longest continuous card chain that ends with the current 5-card window.
+    Walks backwards through recent records using 4-card overlap.
+    """
+    if recent_df.empty or "Sequence" not in recent_df.columns or len(current_seq) < 4:
         return current_seq[:]
 
-    records = recent_df.iloc[::-1].to_dict("records")
     extended = current_seq[:]
 
-    for rec in records:
-        prev_seq = _parse_sequence_str(str(rec.get("Sequence", "")))
-        if len(prev_seq) < 5:
+    # Go from newest → oldest
+    for _, row in recent_df.iloc[::-1].iterrows():
+        prev = _parse_sequence_str(str(row.get("Sequence", "")))
+        if len(prev) < 5:
             continue
-        if extended[:4] == prev_seq[-4:]:
-            extended = prev_seq[:-4] + extended
+
+        # Check 4-card overlap
+        if extended[:4] == prev[-4:]:
+            # Prepend the older unique cards
+            extended = prev[:-4] + extended
         else:
+            # Chain is broken – stop
             break
 
+    # Cap at 12 cards so matching stays practical
     return extended[-12:] if len(extended) > 12 else extended
 
 def get_gamble_suggestion(sequence: list):
+    """
+    Improved suggestion engine with better long-chain support.
+    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
-        return {"color": "Red", "suit": "Hearts"}
+        return {"color": "Red", "suit": "Hearts", "context_len": 0}
 
     df = df.dropna(subset=["Actual_Next"])
     df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
     df = df[df["Actual_Next"].isin(SUITS)]
     if df.empty:
-        return {"color": "Red", "suit": "Hearts"}
+        return {"color": "Red", "suit": "Hearts", "context_len": 0}
 
     def most_common(counter, default=None):
         if not counter:
@@ -633,32 +645,44 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    recent = df.tail(20) if len(df) > 20 else df
+    # 1. Reconstruct the longest continuous chain ending with current sequence
+    recent = df.tail(40) if len(df) > 40 else df          # look further back
     extended = _build_extended_sequence(sequence, recent)
+    context_len = len(extended)
 
-    search_lengths = list(range(min(len(extended), 8), 0, -1))
+    # 2. Try matches from longest context down to 1
+    #    Strongly prefer longer matches
+    search_lengths = list(range(min(context_len, 9), 0, -1))
 
     for length in search_lengths:
         key = seq_str(extended[-length:])
         if "Sequence" not in df.columns:
             continue
+
         matches = df[df["Sequence"].astype(str).str.endswith(key)]
         if len(matches) >= 1:
             next_suits = matches["Actual_Next"].tolist()
             color_counter = Counter([SUIT_COLOR[s] for s in next_suits])
             preferred_color = most_common(color_counter)
+
             allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
             suit_counter = Counter([s for s in next_suits if s in allowed])
+
             if suit_counter:
                 best_suit = most_common(suit_counter)
-                return {"color": preferred_color, "suit": best_suit}
+                return {
+                    "color": preferred_color,
+                    "suit": best_suit,
+                    "context_len": context_len
+                }
 
+    # 3. Soft global fallback
     global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
     total = sum(global_colors.values())
     red_count = global_colors.get("Red", 0)
     black_count = global_colors.get("Black", 0)
-    
-    if total > 0 and abs(red_count - black_count) / total < 0.25:
+
+    if total > 0 and abs(red_count - black_count) / total < 0.28:
         last_color = SUIT_COLOR.get(sequence[-1], "Red") if sequence else "Red"
         preferred_color = last_color
     else:
@@ -667,7 +691,12 @@ def get_gamble_suggestion(sequence: list):
     allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
     global_suits = Counter([s for s in df["Actual_Next"] if s in allowed_suits])
     best_suit = most_common(global_suits, allowed_suits[0])
-    return {"color": preferred_color, "suit": best_suit}
+
+    return {
+        "color": preferred_color,
+        "suit": best_suit,
+        "context_len": context_len
+    }
 
 # ==========================================
 # 3. AI AGENT ENGINE
@@ -906,6 +935,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
                 unsafe_allow_html=True
             )
+            st.caption(f"Context used: {sug.get('context_len', 0)} cards")
         with col_btn:
             st.write("")
             if st.button("✅ Correct – Log this", key="quick_correct", use_container_width=True, type="primary"):
@@ -1045,22 +1075,16 @@ elif st.session_state.active_tab == "📈 Overall Performance":
             multi_hit_count = rehit.get("multi_hit_count", 0) or 0
 
             # === Much stronger reliability ===
-            # Needs ~40 samples to be fully trusted
             sample_factor = min(1.0, first_total / 40.0)
-            
-            # Mild credit for hit rate
             hit_quality = 0.65 + (0.35 * success_rate)
-            
             robust_score = avg_1st_mult * sample_factor * hit_quality
 
-            # Small bonus for machines that also have decent 2nd-hit data
             if multi_hit_count >= 4 and avg_2nd_mult >= 30:
                 robust_score *= 1.12
 
-            # Optional light exceptions for proven performers
             if slot in ["Maximus Money", "Minotaur’s Treasure", "Ragnar the Great", "Fire Mountain", "El Matador"]:
                 robust_score *= 1.15
-            if slot in ["Golden Empress", "New York Nights"]:  # known high-variance low-sample
+            if slot in ["Golden Empress", "New York Nights"]:
                 robust_score *= 0.70
 
             overall_slots.append({
