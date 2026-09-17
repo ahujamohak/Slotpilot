@@ -21,8 +21,8 @@ st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wid
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-GEMINI_MODEL = "gemini-2.5-flash"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GEMINI_MODEL = "gemini-3.6-flash"  # updated from gemini-2.5-flash
+GROQ_MODEL = "llama-3.1-8b-instant"    # updated from llama-3.3-70b-versatile (or use another active Groq model ID)
 
 SESSION_STATE_WORKSHEET = "Live Session"
 SESSION_LOG_WORKSHEET = "Session Log"
