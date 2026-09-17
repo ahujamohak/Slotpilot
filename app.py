@@ -21,7 +21,7 @@ st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wid
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
 SESSION_STATE_WORKSHEET = "Live Session"
