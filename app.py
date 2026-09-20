@@ -557,7 +557,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     return records
 
 # ==========================================
-# 2B. GAMBLE DATA ENGINE
+# 2B. GAMBLE DATA ENGINE  (IMPROVED)
 # ==========================================
 @st.cache_data(ttl=10)
 def load_gamble_data():
@@ -612,11 +612,18 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
     return extended[-12:] if len(extended) > 12 else extended
 
 def get_gamble_suggestion(sequence: list):
+    """
+    Improved statistical engine:
+    - Sliding-window / substring matching (instead of pure endswith)
+    - Recency weighting
+    - Color and suit predicted independently
+    - Cleaner, less biased fallback
+    """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {"color": "Red", "suit": "Hearts", "context_len": 0, "match_count": 0}
 
-    df = df.dropna(subset=["Actual_Next"])
+    df = df.dropna(subset=["Actual_Next"]).copy()
     df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
     df = df[df["Actual_Next"].isin(SUITS)]
     if df.empty:
@@ -630,50 +637,78 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    recent = df.tail(40) if len(df) > 40 else df
+    # Build extended sequence for longer context
+    recent = df.tail(80) if len(df) > 80 else df
     extended = _build_extended_sequence(sequence, recent)
     context_len = len(extended)
 
-    search_lengths = list(range(min(context_len, 9), 0, -1))
+    # ----- Collect weighted matches using sliding window -----
+    # Weight: more recent rows get higher weight
+    n = len(df)
+    color_weights = Counter()
+    suit_weights = Counter()
+    total_match_count = 0
+
+    # Try decreasing context lengths (prefer longer matches)
+    search_lengths = list(range(min(context_len, 9), 2, -1))  # at least 3 cards
 
     for length in search_lengths:
         key = seq_str(extended[-length:])
         if "Sequence" not in df.columns:
             continue
-        matches = df[df["Sequence"].astype(str).str.endswith(key)]
-        if len(matches) >= 1:
-            next_suits = matches["Actual_Next"].tolist()
-            color_counter = Counter([SUIT_COLOR[s] for s in next_suits])
-            preferred_color = most_common(color_counter)
-            allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
-            suit_counter = Counter([s for s in next_suits if s in allowed])
-            if suit_counter:
-                best_suit = most_common(suit_counter)
-                return {
-                    "color": preferred_color,
-                    "suit": best_suit,
-                    "context_len": context_len,
-                    "match_count": len(matches)
-                }
 
-    global_colors = Counter([SUIT_COLOR[s] for s in df["Actual_Next"]])
-    total = sum(global_colors.values())
-    red_count = global_colors.get("Red", 0)
-    black_count = global_colors.get("Black", 0)
+        # Sliding-window style: check if key appears anywhere in the historical Sequence
+        # (not only as a strict endswith). This finds far more useful matches.
+        mask = df["Sequence"].astype(str).str.contains(re.escape(key), regex=True, na=False)
+        matches = df[mask]
 
-    if total > 0 and abs(red_count - black_count) / total < 0.28:
-        last_color = SUIT_COLOR.get(sequence[-1], "Red") if sequence else "Red"
-        preferred_color = last_color
+        if len(matches) == 0:
+            continue
+
+        # Apply recency weighting: newer rows (higher index) get higher weight
+        for idx, row in matches.iterrows():
+            # Position-based weight (last 20 rows ≈ weight 3, older ≈ 1)
+            pos = df.index.get_loc(idx) if idx in df.index else 0
+            recency = 1.0 + 2.0 * (pos / max(n - 1, 1))  # 1.0 → 3.0
+            next_suit = row["Actual_Next"]
+            next_color = SUIT_COLOR.get(next_suit, "Red")
+
+            color_weights[next_color] += recency
+            suit_weights[next_suit] += recency
+            total_match_count += 1
+
+        # Prefer the longest context that produced matches
+        if total_match_count >= 3:
+            break
+
+    # ----- Decide color & suit -----
+    if total_match_count > 0:
+        preferred_color = most_common(color_weights, "Red")
+        preferred_suit = most_common(suit_weights, "Hearts")
+        # Ensure suit color is consistent with chosen color (optional safety)
+        # but do NOT force it – independence is more important than perfect consistency
+        return {
+            "color": preferred_color,
+            "suit": preferred_suit,
+            "context_len": context_len,
+            "match_count": total_match_count
+        }
+
+    # ----- Fallback: pure recent actuals (no global majority bias) -----
+    # Use the last 40 Actual_Next values – removes the old Red-biased global counter
+    recent_actuals = df["Actual_Next"].tail(40).tolist()
+    if recent_actuals:
+        color_counter = Counter([SUIT_COLOR[s] for s in recent_actuals])
+        suit_counter = Counter(recent_actuals)
+        preferred_color = most_common(color_counter, "Red")
+        preferred_suit = most_common(suit_counter, "Hearts")
     else:
-        preferred_color = most_common(global_colors, "Red")
-
-    allowed_suits = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
-    global_suits = Counter([s for s in df["Actual_Next"] if s in allowed_suits])
-    best_suit = most_common(global_suits, allowed_suits[0])
+        preferred_color = "Red"
+        preferred_suit = "Hearts"
 
     return {
         "color": preferred_color,
-        "suit": best_suit,
+        "suit": preferred_suit,
         "context_len": context_len,
         "match_count": 0
     }
