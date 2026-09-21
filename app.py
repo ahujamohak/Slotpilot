@@ -613,11 +613,10 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
 
 def get_gamble_suggestion(sequence: list):
     """
-    Improved statistical engine with hard colour↔suit consistency:
-    - Sliding-window / substring matching
-    - Recency weighting
-    - Colour chosen first, then suit restricted to that colour
-    - Cleaner, less biased fallback
+    Statistical engine with correct positional matching:
+    - Only matches patterns that are suffixes of historical Sequences
+    - Longer matches weighted more heavily
+    - Colour decided first, then suit restricted to that colour
     """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
@@ -637,75 +636,74 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # Build extended sequence for longer context
+    # Build extended sequence (kept for future longer logs)
     recent = df.tail(80) if len(df) > 80 else df
     extended = _build_extended_sequence(sequence, recent)
     context_len = len(extended)
 
-    # ----- Collect weighted matches using sliding window -----
     n = len(df)
     color_weights = Counter()
-    suit_weights = Counter()          # will later be filtered by colour
+    suit_weights = Counter()
     total_match_count = 0
 
-    search_lengths = list(range(min(context_len, 9), 2, -1))
+    # Search longest → shortest (max useful length is 5 with current data)
+    search_lengths = list(range(min(context_len, 5), 1, -1))
 
     for length in search_lengths:
         key = seq_str(extended[-length:])
         if "Sequence" not in df.columns:
             continue
 
-        mask = df["Sequence"].astype(str).str.contains(re.escape(key), regex=True, na=False)
+        # *** CRITICAL FIX: must be a suffix, not a substring ***
+        mask = df["Sequence"].astype(str).str.endswith(key, na=False)
         matches = df[mask]
 
         if len(matches) == 0:
             continue
 
+        # Longer matches get higher base weight
+        length_weight = 1.0 + (length - 2) * 0.6   # 3→1.6, 4→2.2, 5→2.8
+
         for idx, row in matches.iterrows():
             pos = df.index.get_loc(idx) if idx in df.index else 0
             recency = 1.0 + 2.0 * (pos / max(n - 1, 1))   # 1.0 → 3.0
+            weight = recency * length_weight
+
             next_suit = row["Actual_Next"]
             next_color = SUIT_COLOR.get(next_suit, "Red")
 
-            color_weights[next_color] += recency
-            suit_weights[next_suit] += recency
+            color_weights[next_color] += weight
+            suit_weights[next_suit] += weight
             total_match_count += 1
 
-        if total_match_count >= 3:
+        # Optional: stop early only if we already have solid long-match evidence
+        if length >= 4 and total_match_count >= 4:
             break
 
     # ----- Decide colour first -----
     if total_match_count > 0:
         preferred_color = most_common(color_weights, "Red")
     else:
-        # Fallback: pure recent actuals
-        recent_actuals = df["Actual_Next"].tail(40).tolist()
+        # Slightly smarter fallback: last 60 actuals, still colour-aware
+        recent_actuals = df["Actual_Next"].tail(60).tolist()
         if recent_actuals:
             color_counter = Counter([SUIT_COLOR[s] for s in recent_actuals])
             preferred_color = most_common(color_counter, "Red")
         else:
             preferred_color = "Red"
 
-    # ----- Then choose suit ONLY from the allowed suits for that colour -----
+    # ----- Suit restricted to chosen colour -----
     allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
 
     if total_match_count > 0:
-        # Restrict the suit weights we already collected
         filtered_suit_weights = Counter({
             s: w for s, w in suit_weights.items() if s in allowed
         })
-        if filtered_suit_weights:
-            preferred_suit = most_common(filtered_suit_weights)
-        else:
-            preferred_suit = allowed[0]
+        preferred_suit = most_common(filtered_suit_weights, allowed[0])
     else:
-        # Fallback suit from recent actuals of the same colour
-        recent_actuals = df["Actual_Next"].tail(40).tolist()
+        recent_actuals = df["Actual_Next"].tail(60).tolist()
         filtered_recent = [s for s in recent_actuals if s in allowed]
-        if filtered_recent:
-            preferred_suit = most_common(Counter(filtered_recent), allowed[0])
-        else:
-            preferred_suit = allowed[0]
+        preferred_suit = most_common(Counter(filtered_recent), allowed[0]) if filtered_recent else allowed[0]
 
     return {
         "color": preferred_color,
