@@ -1136,6 +1136,20 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
                 unsafe_allow_html=True
             )
+            conf = sug.get("confidence", "None")
+            note = sug.get("note", "")
+            strength = sug.get("color_strength", 0)
+
+            if conf == "High":
+                st.success(f"**High confidence** ({strength}%) – {note}")
+            elif conf == "Medium":
+                st.info(f"**Medium confidence** ({strength}%) – {note}")
+            elif conf in ("Low", "Very Low"):
+                st.warning(f"**{conf} confidence** ({strength}%) – {note}")
+            else:
+                st.caption(f"No strong pattern – {note}")
+
+            
             st.caption(f"Context used: {sug.get('context_len', 0)} cards | Matches found: {sug.get('match_count', 0)}")
         with col_btn:
             st.write("")
