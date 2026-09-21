@@ -613,20 +613,30 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
 
 def get_gamble_suggestion(sequence: list):
     """
-    Statistical engine with correct positional matching:
-    - Only matches patterns that are suffixes of historical Sequences
-    - Longer matches weighted more heavily
+    Improved statistical gamble engine (v2)
+    - Suffix-only matching (correct positional logic)
+    - Length + recency weighting
+    - Minimum sample thresholds to avoid over-confidence
+    - Explicit confidence reporting
     - Colour decided first, then suit restricted to that colour
     """
     df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
-        return {"color": "Red", "suit": "Hearts", "context_len": 0, "match_count": 0}
+        return {
+            "color": "Red", "suit": "Hearts",
+            "context_len": 0, "match_count": 0,
+            "confidence": "None", "note": "No data"
+        }
 
     df = df.dropna(subset=["Actual_Next"]).copy()
     df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
     df = df[df["Actual_Next"].isin(SUITS)]
     if df.empty:
-        return {"color": "Red", "suit": "Hearts", "context_len": 0, "match_count": 0}
+        return {
+            "color": "Red", "suit": "Hearts",
+            "context_len": 0, "match_count": 0,
+            "confidence": "None", "note": "No valid data"
+        }
 
     def most_common(counter, default=None):
         if not counter:
@@ -645,8 +655,9 @@ def get_gamble_suggestion(sequence: list):
     color_weights = Counter()
     suit_weights = Counter()
     total_match_count = 0
+    length_hits = {5: 0, 4: 0, 3: 0, 2: 0}   # track how many matches per length
 
-    # Search longest → shortest (max useful length is 5 with current data)
+    # Search longest → shortest (max useful = 5 with current data)
     search_lengths = list(range(min(context_len, 5), 1, -1))
 
     for length in search_lengths:
@@ -654,19 +665,20 @@ def get_gamble_suggestion(sequence: list):
         if "Sequence" not in df.columns:
             continue
 
-        # *** CRITICAL FIX: must be a suffix, not a substring ***
+        # *** CRITICAL: must be a suffix ***
         mask = df["Sequence"].astype(str).str.endswith(key, na=False)
         matches = df[mask]
 
         if len(matches) == 0:
             continue
 
-        # Longer matches get higher base weight
-        length_weight = 1.0 + (length - 2) * 0.6   # 3→1.6, 4→2.2, 5→2.8
+        # Length weight – longer is better, but not overwhelmingly so
+        # 5 → 2.5, 4 → 2.0, 3 → 1.5, 2 → 1.0
+        length_weight = 0.5 + (length * 0.4)
 
         for idx, row in matches.iterrows():
             pos = df.index.get_loc(idx) if idx in df.index else 0
-            recency = 1.0 + 2.0 * (pos / max(n - 1, 1))   # 1.0 → 3.0
+            recency = 1.0 + 1.8 * (pos / max(n - 1, 1))   # 1.0 → 2.8
             weight = recency * length_weight
 
             next_suit = row["Actual_Next"]
@@ -675,41 +687,64 @@ def get_gamble_suggestion(sequence: list):
             color_weights[next_color] += weight
             suit_weights[next_suit] += weight
             total_match_count += 1
+            length_hits[length] = length_hits.get(length, 0) + 1
 
-        # Optional: stop early only if we already have solid long-match evidence
-        if length >= 4 and total_match_count >= 4:
-            break
+    # ---------- Decide confidence & colour ----------
+    if total_match_count == 0:
+        # Pure fallback – recent marginal
+        recent_actuals = df["Actual_Next"].tail(50).tolist()
+        color_counter = Counter([SUIT_COLOR[s] for s in recent_actuals])
+        preferred_color = most_common(color_counter, "Red")
+        allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
+        filtered = [s for s in recent_actuals if s in allowed]
+        preferred_suit = most_common(Counter(filtered), allowed[0]) if filtered else allowed[0]
+        return {
+            "color": preferred_color,
+            "suit": preferred_suit,
+            "context_len": context_len,
+            "match_count": 0,
+            "confidence": "None",
+            "note": "No pattern matches – using recent base rate"
+        }
 
-    # ----- Decide colour first -----
-    if total_match_count > 0:
-        preferred_color = most_common(color_weights, "Red")
-    else:
-        # Slightly smarter fallback: last 60 actuals, still colour-aware
-        recent_actuals = df["Actual_Next"].tail(60).tolist()
-        if recent_actuals:
-            color_counter = Counter([SUIT_COLOR[s] for s in recent_actuals])
-            preferred_color = most_common(color_counter, "Red")
-        else:
-            preferred_color = "Red"
+    # Colour decision
+    preferred_color = most_common(color_weights, "Red")
+    total_color_weight = sum(color_weights.values())
+    color_strength = color_weights[preferred_color] / total_color_weight if total_color_weight > 0 else 0.5
 
-    # ----- Suit restricted to chosen colour -----
+    # Suit decision (restricted to chosen colour)
     allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
+    filtered_suit_weights = Counter({s: w for s, w in suit_weights.items() if s in allowed})
+    preferred_suit = most_common(filtered_suit_weights, allowed[0])
 
-    if total_match_count > 0:
-        filtered_suit_weights = Counter({
-            s: w for s, w in suit_weights.items() if s in allowed
-        })
-        preferred_suit = most_common(filtered_suit_weights, allowed[0])
+    # ---------- Confidence logic ----------
+    # Strong only when we have decent sample + clear majority
+    strong_long = length_hits.get(5, 0) + length_hits.get(4, 0)
+    medium = length_hits.get(3, 0)
+
+    if strong_long >= 3 and color_strength >= 0.68:
+        confidence = "High"
+        note = f"Strong pattern ({strong_long} long matches)"
+    elif (strong_long + medium) >= 6 and color_strength >= 0.62:
+        confidence = "Medium"
+        note = f"Decent sample ({strong_long + medium} relevant matches)"
+    elif total_match_count >= 4 and color_strength >= 0.58:
+        confidence = "Low"
+        note = "Weak edge – treat as soft lean"
     else:
-        recent_actuals = df["Actual_Next"].tail(60).tolist()
-        filtered_recent = [s for s in recent_actuals if s in allowed]
-        preferred_suit = most_common(Counter(filtered_recent), allowed[0]) if filtered_recent else allowed[0]
+        confidence = "Very Low"
+        note = "No real edge – almost a coin flip"
 
     return {
         "color": preferred_color,
         "suit": preferred_suit,
         "context_len": context_len,
-        "match_count": total_match_count
+        "match_count": total_match_count,
+        "confidence": confidence,
+        "note": note,
+        # optional debug info you can display
+        "color_strength": round(color_strength * 100, 1),
+        "length_hits": length_hits
     }
 
 # ==========================================
