@@ -611,16 +611,26 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
             break
     return extended[-12:] if len(extended) > 12 else extended
 
-def get_gamble_suggestion(sequence: list):
+# ---- Statistical guardrails ---------------------------------------------
+# With only a few hundred logged spins, a "match" on a 4- or 5-card exact
+# suffix is very likely a coincidence: there are 4^4=256 and 4^5=1024
+# possible suffixes, so seeing 1-2 historical rows end with a given key is
+# noise, not a pattern. MIN_MATCHES_FOR_LENGTH is the minimum number of
+# historical rows a suffix length must have before it is allowed to
+# influence the suggestion at all. SHRINKAGE_K dampens the influence of
+# buckets that only barely clear that bar (Bayesian-style shrinkage toward
+# "no information"), so a bucket with 4 matches counts far less than one
+# with 40. CONFIDENCE settings were also raised: "Low"/"Medium" previously
+# fired on samples too small to be distinguishable from a coin flip.
+MIN_MATCHES_FOR_LENGTH = {5: 6, 4: 10, 3: 18, 2: 30}
+SHRINKAGE_K = 8.0
+
+def _suggest_core(sequence: list, df: pd.DataFrame):
     """
-    Improved statistical gamble engine (v2)
-    - Suffix-only matching (correct positional logic)
-    - Length + recency weighting
-    - Minimum sample thresholds to avoid over-confidence
-    - Explicit confidence reporting
-    - Colour decided first, then suit restricted to that colour
+    Core suggestion logic, factored out so it can be reused both for live
+    suggestions (get_gamble_suggestion) and for walk-forward backtesting
+    (backtest_gamble_accuracy) against an arbitrary historical slice.
     """
-    df = load_gamble_data()
     if df.empty or "Actual_Next" not in df.columns:
         return {
             "color": "Red", "suit": "Hearts",
@@ -646,7 +656,6 @@ def get_gamble_suggestion(sequence: list):
     def seq_str(cards):
         return "-".join(cards)
 
-    # Build extended sequence (kept for future longer logs)
     recent = df.tail(80) if len(df) > 80 else df
     extended = _build_extended_sequence(sequence, recent)
     context_len = len(extended)
@@ -655,9 +664,8 @@ def get_gamble_suggestion(sequence: list):
     color_weights = Counter()
     suit_weights = Counter()
     total_match_count = 0
-    length_hits = {5: 0, 4: 0, 3: 0, 2: 0}   # track how many matches per length
+    length_hits = {5: 0, 4: 0, 3: 0, 2: 0}
 
-    # Search longest → shortest (max useful = 5 with current data)
     search_lengths = list(range(min(context_len, 5), 1, -1))
 
     for length in search_lengths:
@@ -665,21 +673,24 @@ def get_gamble_suggestion(sequence: list):
         if "Sequence" not in df.columns:
             continue
 
-        # *** CRITICAL: must be a suffix ***
         mask = df["Sequence"].astype(str).str.endswith(key, na=False)
         matches = df[mask]
+        raw_count = len(matches)
 
-        if len(matches) == 0:
+        # Guardrail: skip this length entirely unless it clears the
+        # minimum-sample bar for that suffix length.
+        if raw_count < MIN_MATCHES_FOR_LENGTH.get(length, 999):
             continue
 
-        # Length weight – longer is better, but not overwhelmingly so
-        # 5 → 2.5, 4 → 2.0, 3 → 1.5, 2 → 1.0
         length_weight = 0.5 + (length * 0.4)
+        # Shrinkage factor grows toward 1.0 as raw_count grows, so a bucket
+        # that just barely cleared the minimum contributes weakly.
+        shrink = raw_count / (raw_count + SHRINKAGE_K)
 
         for idx, row in matches.iterrows():
             pos = df.index.get_loc(idx) if idx in df.index else 0
-            recency = 1.0 + 1.8 * (pos / max(n - 1, 1))   # 1.0 → 2.8
-            weight = recency * length_weight
+            recency = 1.0 + 1.8 * (pos / max(n - 1, 1))
+            weight = recency * length_weight * shrink
 
             next_suit = row["Actual_Next"]
             next_color = SUIT_COLOR.get(next_suit, "Red")
@@ -689,9 +700,7 @@ def get_gamble_suggestion(sequence: list):
             total_match_count += 1
             length_hits[length] = length_hits.get(length, 0) + 1
 
-    # ---------- Decide confidence & colour ----------
     if total_match_count == 0:
-        # Pure fallback – recent marginal
         recent_actuals = df["Actual_Next"].tail(50).tolist()
         color_counter = Counter([SUIT_COLOR[s] for s in recent_actuals])
         preferred_color = most_common(color_counter, "Red")
@@ -704,36 +713,38 @@ def get_gamble_suggestion(sequence: list):
             "context_len": context_len,
             "match_count": 0,
             "confidence": "None",
-            "note": "No pattern matches – using recent base rate"
+            "note": "No statistically sufficient pattern – using recent base rate",
+            "color_strength": 50.0,
         }
 
-    # Colour decision
     preferred_color = most_common(color_weights, "Red")
     total_color_weight = sum(color_weights.values())
     color_strength = color_weights[preferred_color] / total_color_weight if total_color_weight > 0 else 0.5
 
-    # Suit decision (restricted to chosen colour)
     allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
     filtered_suit_weights = Counter({s: w for s, w in suit_weights.items() if s in allowed})
     preferred_suit = most_common(filtered_suit_weights, allowed[0])
 
-    # ---------- Confidence logic ----------
-    # Strong only when we have decent sample + clear majority
     strong_long = length_hits.get(5, 0) + length_hits.get(4, 0)
     medium = length_hits.get(3, 0)
 
-    if strong_long >= 3 and color_strength >= 0.68:
+    # Confidence bars raised: previously "Low" fired at just 4 matches /
+    # 58% strength, which is statistically indistinguishable from chance
+    # at that sample size. A binary outcome needs roughly n>=60-80 at
+    # ~58% to be even weakly significant, so thresholds now require more
+    # matches before claiming any edge.
+    if strong_long >= 12 and color_strength >= 0.66:
         confidence = "High"
-        note = f"Strong pattern ({strong_long} long matches)"
-    elif (strong_long + medium) >= 6 and color_strength >= 0.62:
+        note = f"Large, consistent long-suffix sample ({strong_long} matches)"
+    elif (strong_long + medium) >= 25 and color_strength >= 0.60:
         confidence = "Medium"
-        note = f"Decent sample ({strong_long + medium} relevant matches)"
-    elif total_match_count >= 4 and color_strength >= 0.58:
+        note = f"Moderate sample ({strong_long + medium} matches)"
+    elif total_match_count >= 30 and color_strength >= 0.56:
         confidence = "Low"
-        note = "Weak edge – treat as soft lean"
+        note = "Weak edge – sample still thin, treat as a soft lean at most"
     else:
         confidence = "Very Low"
-        note = "No real edge – almost a coin flip"
+        note = "Sample too thin to beat a coin flip – do not treat as signal"
 
     return {
         "color": preferred_color,
@@ -742,9 +753,80 @@ def get_gamble_suggestion(sequence: list):
         "match_count": total_match_count,
         "confidence": confidence,
         "note": note,
-        # optional debug info you can display
         "color_strength": round(color_strength * 100, 1),
         "length_hits": length_hits
+    }
+
+def get_gamble_suggestion(sequence: list):
+    """
+    Statistical gamble engine (v3 – statistically guarded)
+    - Suffix-only matching (correct positional logic)
+    - Minimum-sample gating per suffix length (MIN_MATCHES_FOR_LENGTH)
+    - Shrinkage weighting so thin buckets barely move the needle
+    - Confidence thresholds calibrated to real sample-size requirements
+    - Colour decided first, then suit restricted to that colour
+    """
+    df = load_gamble_data()
+    return _suggest_core(sequence, df)
+
+@st.cache_data(ttl=60)
+def backtest_gamble_accuracy(window: int = 50):
+    """
+    True walk-forward backtest of the CURRENT algorithm: for each row i in
+    the log (after a minimum warm-up), predict using only the rows that
+    came before it, then compare to what actually happened. This is the
+    only honest way to know whether the engine currently has any edge —
+    the historical Suggested_Color/Suggested_Suit columns in the sheet
+    were produced by whatever version of the code was live at the time,
+    which may differ from the algorithm running now.
+    Returns overall + last-`window` accuracy, plus baseline (random-chance)
+    rates for comparison.
+    """
+    df = load_gamble_data()
+    if df.empty or "Actual_Next" not in df.columns or "Sequence" not in df.columns:
+        return None
+    df = df.dropna(subset=["Actual_Next", "Sequence"]).reset_index(drop=True)
+    df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
+    df = df[df["Actual_Next"].isin(SUITS)].reset_index(drop=True)
+
+    warm_up = 40  # need enough history before trusting any backtest row
+    if len(df) < warm_up + 5:
+        return None
+
+    records = []
+    for i in range(warm_up, len(df)):
+        history = df.iloc[:i]
+        seq = _parse_sequence_str(str(df.iloc[i]["Sequence"]))
+        if len(seq) < 2:
+            continue
+        pred = _suggest_core(seq, history)
+        actual_suit = df.iloc[i]["Actual_Next"]
+        actual_color = SUIT_COLOR.get(actual_suit, "Red")
+        records.append({
+            "color_correct": pred["color"] == actual_color,
+            "suit_correct": pred["suit"] == actual_suit,
+            "confidence": pred.get("confidence", "None"),
+        })
+
+    if not records:
+        return None
+
+    bt = pd.DataFrame(records)
+    overall_color_acc = bt["color_correct"].mean()
+    overall_suit_acc = bt["suit_correct"].mean()
+    recent = bt.tail(window)
+    recent_color_acc = recent["color_correct"].mean()
+    recent_suit_acc = recent["suit_correct"].mean()
+
+    return {
+        "n_total": len(bt),
+        "n_recent": len(recent),
+        "overall_color_acc": round(overall_color_acc * 100, 1),
+        "overall_suit_acc": round(overall_suit_acc * 100, 1),
+        "recent_color_acc": round(recent_color_acc * 100, 1),
+        "recent_suit_acc": round(recent_suit_acc * 100, 1),
+        "baseline_color_acc": 50.0,
+        "baseline_suit_acc": 25.0,
     }
 
 # ==========================================
@@ -1096,6 +1178,29 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
     st.caption("Statistical engine + AI suggestion (Gemini → Groq fallback).")
+
+    with st.expander("📉 Real backtested accuracy (walk-forward, current algorithm)", expanded=True):
+        bt = backtest_gamble_accuracy(window=50)
+        if bt is None:
+            st.info("Not enough logged history yet for a reliable backtest (need 45+ rows).")
+        else:
+            st.caption(
+                f"Computed by replaying all {bt['n_total']} historical rows and predicting each one "
+                "using only the data that came before it — this reflects the current code, not "
+                "whatever version logged the Suggested_Color/Suit columns at the time."
+            )
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Colour acc. (all)", f"{bt['overall_color_acc']}%", f"baseline {bt['baseline_color_acc']}%")
+            b2.metric(f"Colour acc. (last {bt['n_recent']})", f"{bt['recent_color_acc']}%", f"baseline {bt['baseline_color_acc']}%")
+            b3.metric("Suit acc. (all)", f"{bt['overall_suit_acc']}%", f"baseline {bt['baseline_suit_acc']}%")
+            b4.metric(f"Suit acc. (last {bt['n_recent']})", f"{bt['recent_suit_acc']}%", f"baseline {bt['baseline_suit_acc']}%")
+            if bt["recent_color_acc"] < bt["baseline_color_acc"]:
+                st.warning(
+                    "Recent colour accuracy is below the 50% random-chance baseline. On genuinely "
+                    "shuffled cards this is the expected kind of noise for a suffix-matching model at "
+                    "this sample size — there is no real short-context dependency to exploit here — "
+                    "so treat 'confidence' labels as descriptive of sample size, not as a real edge."
+                )
 
     st.markdown("### Enter the 5 cards (left → right)")
     cols = st.columns(4)
