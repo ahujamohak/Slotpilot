@@ -611,220 +611,162 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
             break
     return extended[-12:] if len(extended) > 12 else extended
 
-# ---- Statistical guardrails ---------------------------------------------
-# With only a few hundred logged spins, a "match" on a 4- or 5-card exact
-# suffix is very likely a coincidence: there are 4^4=256 and 4^5=1024
-# possible suffixes, so seeing 1-2 historical rows end with a given key is
-# noise, not a pattern. MIN_MATCHES_FOR_LENGTH is the minimum number of
-# historical rows a suffix length must have before it is allowed to
-# influence the suggestion at all. SHRINKAGE_K dampens the influence of
-# buckets that only barely clear that bar (Bayesian-style shrinkage toward
-# "no information"), so a bucket with 4 matches counts far less than one
-# with 40. CONFIDENCE settings were also raised: "Low"/"Medium" previously
-# fired on samples too small to be distinguishable from a coin flip.
-MIN_MATCHES_FOR_LENGTH = {5: 6, 4: 10, 3: 18, 2: 30}
-SHRINKAGE_K = 8.0
+# ---- Exact-match history engine -----------------------------------------
+# Logic: if the exact 5-card sequence has been logged before, suggest the card
+# that most often followed it (ties -> the more recent outcome). If it has
+# never been seen, say so and fall back to the overall most common suit.
+# No partial (4/3/2-card) matching: on the current log it does no better than
+# guessing. How much to trust a match depends on how often it has been seen
+# and how consistent the outcome was:
+STRONG_MIN_SEEN, STRONG_MIN_SHARE = 5, 0.80
+MODERATE_MIN_SEEN, MODERATE_MIN_SHARE = 3, 0.60
+
+def _log_pairs(df: pd.DataFrame) -> list:
+    """(5-card key tuple, next suit) pairs, in log order."""
+    pairs = []
+    if df is None or df.empty or "Actual_Next" not in df.columns or "Sequence" not in df.columns:
+        return pairs
+    for seq_str, nxt in zip(df["Sequence"].astype(str), df["Actual_Next"].astype(str).str.strip()):
+        cards = _parse_sequence_str(seq_str)
+        if len(cards) >= 5 and nxt in SUITS:
+            pairs.append((tuple(cards[-5:]), nxt))
+    return pairs
+
+def _decide_from_outcomes(outcomes: list):
+    """Majority next suit among past outcomes; ties go to the most recent."""
+    counts = Counter(outcomes)
+    last_pos = {s: i for i, s in enumerate(outcomes)}
+    top = max(counts, key=lambda s: (counts[s], last_pos[s]))
+    return top, counts[top], len(outcomes), counts
+
+def _grade_match(n_seen: int, k_top: int) -> str:
+    share = k_top / n_seen if n_seen else 0
+    if n_seen >= STRONG_MIN_SEEN and share >= STRONG_MIN_SHARE:
+        return "Strong"
+    if n_seen >= MODERATE_MIN_SEEN and share >= MODERATE_MIN_SHARE:
+        return "Moderate"
+    return "Weak"
 
 def _suggest_core(sequence: list, df: pd.DataFrame):
     """
-    Core suggestion logic, factored out so it can be reused both for live
-    suggestions (get_gamble_suggestion) and for walk-forward backtesting
-    (backtest_gamble_accuracy) against an arbitrary historical slice.
+    Core suggestion logic, shared by live suggestions (get_gamble_suggestion)
+    and the walk-forward backtest (backtest_gamble_accuracy).
     """
-    if df.empty or "Actual_Next" not in df.columns:
+    pairs = _log_pairs(df)
+    if not pairs:
         return {
-            "color": "Red", "suit": "Hearts",
-            "context_len": 0, "match_count": 0,
-            "confidence": "None", "note": "No data"
+            "color": "Red", "suit": "Hearts", "context_len": len(sequence),
+            "match_count": 0, "confidence": "None", "note": "No data yet",
+            "color_strength": 50.0, "matched": False, "outcomes": {},
         }
 
-    df = df.dropna(subset=["Actual_Next"]).copy()
-    df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
-    df = df[df["Actual_Next"].isin(SUITS)]
-    if df.empty:
+    base = Counter(s for _, s in pairs)
+    base_suit, base_n = base.most_common(1)[0]
+
+    if len(sequence) < 5:
         return {
-            "color": "Red", "suit": "Hearts",
-            "context_len": 0, "match_count": 0,
-            "confidence": "None", "note": "No valid data"
+            "color": SUIT_COLOR[base_suit], "suit": base_suit, "context_len": len(sequence),
+            "match_count": 0, "confidence": "None", "note": "Enter all 5 cards",
+            "color_strength": 50.0, "matched": False, "outcomes": {},
         }
 
-    def most_common(counter, default=None):
-        if not counter:
-            return default
-        return counter.most_common(1)[0][0]
+    key = tuple(sequence[-5:])
+    outcomes = [s for k, s in pairs if k == key]
 
-    def seq_str(cards):
-        return "-".join(cards)
-
-    recent = df.tail(80) if len(df) > 80 else df
-    extended = _build_extended_sequence(sequence, recent)
-    context_len = len(extended)
-
-    n = len(df)
-    color_weights = Counter()
-    suit_weights = Counter()
-    total_match_count = 0
-    length_hits = {5: 0, 4: 0, 3: 0, 2: 0}
-
-    search_lengths = list(range(min(context_len, 5), 1, -1))
-
-    for length in search_lengths:
-        key = seq_str(extended[-length:])
-        if "Sequence" not in df.columns:
-            continue
-
-        mask = df["Sequence"].astype(str).str.endswith(key, na=False)
-        matches = df[mask]
-        raw_count = len(matches)
-
-        # Guardrail: skip this length entirely unless it clears the
-        # minimum-sample bar for that suffix length.
-        if raw_count < MIN_MATCHES_FOR_LENGTH.get(length, 999):
-            continue
-
-        length_weight = 0.5 + (length * 0.4)
-        # Shrinkage factor grows toward 1.0 as raw_count grows, so a bucket
-        # that just barely cleared the minimum contributes weakly.
-        shrink = raw_count / (raw_count + SHRINKAGE_K)
-
-        for idx, row in matches.iterrows():
-            pos = df.index.get_loc(idx) if idx in df.index else 0
-            recency = 1.0 + 1.8 * (pos / max(n - 1, 1))
-            weight = recency * length_weight * shrink
-
-            next_suit = row["Actual_Next"]
-            next_color = SUIT_COLOR.get(next_suit, "Red")
-
-            color_weights[next_color] += weight
-            suit_weights[next_suit] += weight
-            total_match_count += 1
-            length_hits[length] = length_hits.get(length, 0) + 1
-
-    if total_match_count == 0:
-        recent_actuals = df["Actual_Next"].tail(50).tolist()
-        color_counter = Counter([SUIT_COLOR[s] for s in recent_actuals])
-        preferred_color = most_common(color_counter, "Red")
-        allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
-        filtered = [s for s in recent_actuals if s in allowed]
-        preferred_suit = most_common(Counter(filtered), allowed[0]) if filtered else allowed[0]
+    if not outcomes:
         return {
-            "color": preferred_color,
-            "suit": preferred_suit,
-            "context_len": context_len,
-            "match_count": 0,
-            "confidence": "None",
-            "note": "No statistically sufficient pattern – using recent base rate",
+            "color": SUIT_COLOR[base_suit], "suit": base_suit, "context_len": 5,
+            "match_count": 0, "confidence": "None", "matched": False, "outcomes": {},
+            "note": (
+                "This exact 5-card sequence is not in the log, so there is no real signal. "
+                f"Showing the most common suit overall ({base_suit}, about "
+                f"{round(10 * base_n / len(pairs), 1)} out of 10)."
+            ),
             "color_strength": 50.0,
         }
 
-    preferred_color = most_common(color_weights, "Red")
-    total_color_weight = sum(color_weights.values())
-    color_strength = color_weights[preferred_color] / total_color_weight if total_color_weight > 0 else 0.5
-
-    allowed = RED_SUITS if preferred_color == "Red" else BLACK_SUITS
-    filtered_suit_weights = Counter({s: w for s, w in suit_weights.items() if s in allowed})
-    preferred_suit = most_common(filtered_suit_weights, allowed[0])
-
-    strong_long = length_hits.get(5, 0) + length_hits.get(4, 0)
-    medium = length_hits.get(3, 0)
-
-    # Confidence bars raised: previously "Low" fired at just 4 matches /
-    # 58% strength, which is statistically indistinguishable from chance
-    # at that sample size. A binary outcome needs roughly n>=60-80 at
-    # ~58% to be even weakly significant, so thresholds now require more
-    # matches before claiming any edge.
-    if strong_long >= 12 and color_strength >= 0.66:
-        confidence = "High"
-        note = f"Large, consistent long-suffix sample ({strong_long} matches)"
-    elif (strong_long + medium) >= 25 and color_strength >= 0.60:
-        confidence = "Medium"
-        note = f"Moderate sample ({strong_long + medium} matches)"
-    elif total_match_count >= 30 and color_strength >= 0.56:
-        confidence = "Low"
-        note = "Weak edge – sample still thin, treat as a soft lean at most"
-    else:
-        confidence = "Very Low"
-        note = "Sample too thin to beat a coin flip – do not treat as signal"
-
+    top, k_top, n_seen, counts = _decide_from_outcomes(outcomes)
+    color = SUIT_COLOR[top]
+    color_share = sum(c for s, c in counts.items() if SUIT_COLOR[s] == color) / n_seen
+    times = "time" if n_seen == 1 else "times"
     return {
-        "color": preferred_color,
-        "suit": preferred_suit,
-        "context_len": context_len,
-        "match_count": total_match_count,
-        "confidence": confidence,
-        "note": note,
-        "color_strength": round(color_strength * 100, 1),
-        "length_hits": length_hits
+        "color": color,
+        "suit": top,
+        "context_len": 5,
+        "match_count": n_seen,
+        "confidence": _grade_match(n_seen, k_top),
+        "matched": True,
+        "outcomes": dict(counts),
+        "note": (
+            f"Seen {n_seen} {times} before; the next card was {top} in {k_top} of them "
+            f"(about {round(10 * k_top / n_seen, 1)} out of 10)."
+        ),
+        "color_strength": round(color_share * 100, 1),
     }
 
 def get_gamble_suggestion(sequence: list):
-    """
-    Statistical gamble engine (v3 – statistically guarded)
-    - Suffix-only matching (correct positional logic)
-    - Minimum-sample gating per suffix length (MIN_MATCHES_FOR_LENGTH)
-    - Shrinkage weighting so thin buckets barely move the needle
-    - Confidence thresholds calibrated to real sample-size requirements
-    - Colour decided first, then suit restricted to that colour
-    """
+    """Exact-match history engine (see comment block above)."""
     df = load_gamble_data()
     return _suggest_core(sequence, df)
 
 @st.cache_data(ttl=60)
 def backtest_gamble_accuracy(window: int = 50):
     """
-    True walk-forward backtest of the CURRENT algorithm: for each row i in
-    the log (after a minimum warm-up), predict using only the rows that
-    came before it, then compare to what actually happened. This is the
-    only honest way to know whether the engine currently has any edge —
-    the historical Suggested_Color/Suggested_Suit columns in the sheet
-    were produced by whatever version of the code was live at the time,
-    which may differ from the algorithm running now.
-    Returns overall + last-`window` accuracy, plus baseline (random-chance)
-    rates for comparison.
+    Honest walk-forward backtest: each logged row is predicted using ONLY the
+    rows logged before it. Also splits results into rows where the exact
+    sequence had been seen before (the engine's real signal) and rows where it
+    had not (plain guessing).
     """
     df = load_gamble_data()
-    if df.empty or "Actual_Next" not in df.columns or "Sequence" not in df.columns:
-        return None
-    df = df.dropna(subset=["Actual_Next", "Sequence"]).reset_index(drop=True)
-    df["Actual_Next"] = df["Actual_Next"].astype(str).str.strip()
-    df = df[df["Actual_Next"].isin(SUITS)].reset_index(drop=True)
-
-    warm_up = 40  # need enough history before trusting any backtest row
-    if len(df) < warm_up + 5:
+    pairs = _log_pairs(df)
+    warm_up = 40
+    if len(pairs) < warm_up + 5:
         return None
 
+    index = {}          # key -> list of outcomes so far
+    base = Counter()
     records = []
-    for i in range(warm_up, len(df)):
-        history = df.iloc[:i]
-        seq = _parse_sequence_str(str(df.iloc[i]["Sequence"]))
-        if len(seq) < 2:
-            continue
-        pred = _suggest_core(seq, history)
-        actual_suit = df.iloc[i]["Actual_Next"]
-        actual_color = SUIT_COLOR.get(actual_suit, "Red")
-        records.append({
-            "color_correct": pred["color"] == actual_color,
-            "suit_correct": pred["suit"] == actual_suit,
-            "confidence": pred.get("confidence", "None"),
-        })
-
-    if not records:
-        return None
+    for i, (key, actual) in enumerate(pairs):
+        if i >= warm_up:
+            outs = index.get(key)
+            if outs:
+                pred, k_top, n_seen, _ = _decide_from_outcomes(outs)
+                matched, grade = True, _grade_match(n_seen, k_top)
+            else:
+                pred, matched, grade = base.most_common(1)[0][0], False, "None"
+            records.append({
+                "color_correct": SUIT_COLOR[pred] == SUIT_COLOR[actual],
+                "suit_correct": pred == actual,
+                "matched": matched,
+                "grade": grade,
+            })
+        index.setdefault(key, []).append(actual)
+        base[actual] += 1
 
     bt = pd.DataFrame(records)
-    overall_color_acc = bt["color_correct"].mean()
-    overall_suit_acc = bt["suit_correct"].mean()
     recent = bt.tail(window)
-    recent_color_acc = recent["color_correct"].mean()
-    recent_suit_acc = recent["suit_correct"].mean()
+
+    def acc(frame, col):
+        return round(frame[col].mean() * 100, 1) if len(frame) else None
+
+    matched_df = bt[bt["matched"]]
+    unmatched_df = bt[~bt["matched"]]
+    strong_df = bt[bt["grade"] == "Strong"]
 
     return {
         "n_total": len(bt),
         "n_recent": len(recent),
-        "overall_color_acc": round(overall_color_acc * 100, 1),
-        "overall_suit_acc": round(overall_suit_acc * 100, 1),
-        "recent_color_acc": round(recent_color_acc * 100, 1),
-        "recent_suit_acc": round(recent_suit_acc * 100, 1),
+        "overall_color_acc": acc(bt, "color_correct"),
+        "overall_suit_acc": acc(bt, "suit_correct"),
+        "recent_color_acc": acc(recent, "color_correct"),
+        "recent_suit_acc": acc(recent, "suit_correct"),
+        "n_matched": len(matched_df),
+        "matched_suit_acc": acc(matched_df, "suit_correct"),
+        "matched_color_acc": acc(matched_df, "color_correct"),
+        "n_unmatched": len(unmatched_df),
+        "unmatched_suit_acc": acc(unmatched_df, "suit_correct"),
+        "n_strong": len(strong_df),
+        "strong_suit_acc": acc(strong_df, "suit_correct"),
         "baseline_color_acc": 50.0,
         "baseline_suit_acc": 25.0,
     }
@@ -1177,29 +1119,37 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
-    st.caption("Statistical engine + AI suggestion (Gemini → Groq fallback).")
+    st.caption("Exact-match history engine + AI suggestion (Gemini → Groq fallback).")
 
-    with st.expander("📉 Real backtested accuracy (walk-forward, current algorithm)", expanded=True):
+    with st.expander("📉 Real backtested accuracy (walk-forward, exact-match engine)", expanded=True):
         bt = backtest_gamble_accuracy(window=50)
         if bt is None:
             st.info("Not enough logged history yet for a reliable backtest (need 45+ rows).")
         else:
+            def _fmt(v):
+                return "n/a" if v is None else f"{v}%"
+            def _tenths(v):
+                return "n/a" if v is None else f"{round(v / 10, 1)} out of 10"
             st.caption(
-                f"Computed by replaying all {bt['n_total']} historical rows and predicting each one "
-                "using only the data that came before it — this reflects the current code, not "
-                "whatever version logged the Suggested_Color/Suit columns at the time."
+                f"Each of the {bt['n_total']} logged rows after the first 40 was predicted using only the "
+                "rows logged before it, so this is what you would really have got, not a score on data "
+                "the engine has already seen."
             )
             b1, b2, b3, b4 = st.columns(4)
-            b1.metric("Colour acc. (all)", f"{bt['overall_color_acc']}%", f"baseline {bt['baseline_color_acc']}%")
-            b2.metric(f"Colour acc. (last {bt['n_recent']})", f"{bt['recent_color_acc']}%", f"baseline {bt['baseline_color_acc']}%")
-            b3.metric("Suit acc. (all)", f"{bt['overall_suit_acc']}%", f"baseline {bt['baseline_suit_acc']}%")
-            b4.metric(f"Suit acc. (last {bt['n_recent']})", f"{bt['recent_suit_acc']}%", f"baseline {bt['baseline_suit_acc']}%")
-            if bt["recent_color_acc"] < bt["baseline_color_acc"]:
+            b1.metric("Suit right (all rows)", _fmt(bt["overall_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
+            b2.metric(f"Suit right (last {bt['n_recent']})", _fmt(bt["recent_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
+            b3.metric(f"Sequence seen before ({bt['n_matched']} rows)", _fmt(bt["matched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
+            b4.metric(f"Never seen ({bt['n_unmatched']} rows)", _fmt(bt["unmatched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
+            st.caption(
+                f"In plain terms: when the exact sequence was in the log, the suit was right "
+                f"{_tenths(bt['matched_suit_acc'])}; when it was not, {_tenths(bt['unmatched_suit_acc'])} "
+                f"(pure guessing is 2.5 out of 10). Strong matches only ({bt['n_strong']} rows): "
+                f"{_tenths(bt['strong_suit_acc'])}."
+            )
+            if bt["matched_suit_acc"] is not None and bt["matched_suit_acc"] <= bt["baseline_suit_acc"]:
                 st.warning(
-                    "Recent colour accuracy is below the 50% random-chance baseline. On genuinely "
-                    "shuffled cards this is the expected kind of noise for a suffix-matching model at "
-                    "this sample size — there is no real short-context dependency to exploit here — "
-                    "so treat 'confidence' labels as descriptive of sample size, not as a real edge."
+                    "Sequence-seen-before accuracy is not above the 25% guessing level, so the "
+                    "exact-match edge is not showing up in the data (yet)."
                 )
 
     st.markdown("### Enter the 5 cards (left → right)")
@@ -1232,7 +1182,7 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
         extended = _build_extended_sequence(seq, recent)
 
         st.markdown("---")
-        st.markdown("### Statistical suggestion")
+        st.markdown("### History-based suggestion")
         
         col_sug, col_btn = st.columns([3, 1])
         with col_sug:
@@ -1243,19 +1193,21 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
             )
             conf = sug.get("confidence", "None")
             note = sug.get("note", "")
-            strength = sug.get("color_strength", 0)
 
-            if conf == "High":
-                st.success(f"**High confidence** ({strength}%) – {note}")
-            elif conf == "Medium":
-                st.info(f"**Medium confidence** ({strength}%) – {note}")
-            elif conf in ("Low", "Very Low"):
-                st.warning(f"**{conf} confidence** ({strength}%) – {note}")
+            if conf == "Strong":
+                st.success(f"**Strong match** – {note}")
+            elif conf == "Moderate":
+                st.info(f"**Moderate match** – {note}")
+            elif conf == "Weak":
+                st.warning(f"**Weak match** – {note}")
             else:
-                st.caption(f"No strong pattern – {note}")
+                st.caption(f"No signal – {note}")
 
-            
-            st.caption(f"Context used: {sug.get('context_len', 0)} cards | Matches found: {sug.get('match_count', 0)}")
+            if sug.get("outcomes"):
+                breakdown = ", ".join(f"{s} ×{c}" for s, c in sorted(sug["outcomes"].items(), key=lambda x: -x[1]))
+                st.caption(f"Times this exact sequence was seen: {sug.get('match_count', 0)} | What followed: {breakdown}")
+            else:
+                st.caption("Times this exact sequence was seen: 0")
         with col_btn:
             st.write("")
             if st.button("✅ Correct – Log this", key="quick_correct", use_container_width=True, type="primary"):
