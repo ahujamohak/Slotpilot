@@ -611,26 +611,30 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
             break
     return extended[-12:] if len(extended) > 12 else extended
 
-# ---- Exact-match history engine -----------------------------------------
-# Logic: if the exact 5-card sequence has been logged before, suggest the card
-# that most often followed it (ties -> the more recent outcome). If it has
-# never been seen, say so and fall back to the overall most common suit.
-# No partial (4/3/2-card) matching: on the current log it does no better than
-# guessing. How much to trust a match depends on how often it has been seen
-# and how consistent the outcome was:
+# ---- Hierarchical match history engine ----------------------------------
+# Priority: exact 5-card match first; if none, try last 4 cards; then 3; then 2.
+# Longer matches + more observations + higher consistency = higher confidence.
+# Ties in next-suit counts are broken by most recent outcome.
 STRONG_MIN_SEEN, STRONG_MIN_SHARE = 5, 0.80
 MODERATE_MIN_SEEN, MODERATE_MIN_SHARE = 3, 0.60
+# Minimum observations required before trusting a shorter (4/3/2) match
+MIN_SEEN_BY_LEN = {5: 1, 4: 2, 3: 3, 2: 4}
 
-def _log_pairs(df: pd.DataFrame) -> list:
-    """(5-card key tuple, next suit) pairs, in log order."""
+def _log_pairs(df: pd.DataFrame, n: int = 5) -> list:
+    """(n-card key tuple, next suit) pairs, in log order. n in 2..5."""
     pairs = []
     if df is None or df.empty or "Actual_Next" not in df.columns or "Sequence" not in df.columns:
         return pairs
+    n = max(2, min(5, int(n)))
     for seq_str, nxt in zip(df["Sequence"].astype(str), df["Actual_Next"].astype(str).str.strip()):
         cards = _parse_sequence_str(seq_str)
-        if len(cards) >= 5 and nxt in SUITS:
-            pairs.append((tuple(cards[-5:]), nxt))
+        if len(cards) >= n and nxt in SUITS:
+            pairs.append((tuple(cards[-n:]), nxt))
     return pairs
+
+def _log_pairs_all(df: pd.DataFrame) -> dict:
+    """Dict of n -> list of (n-card key, next suit) for n in 2..5."""
+    return {n: _log_pairs(df, n) for n in (5, 4, 3, 2)}
 
 def _decide_from_outcomes(outcomes: list):
     """Majority next suit among past outcomes; ties go to the most recent."""
@@ -639,73 +643,100 @@ def _decide_from_outcomes(outcomes: list):
     top = max(counts, key=lambda s: (counts[s], last_pos[s]))
     return top, counts[top], len(outcomes), counts
 
-def _grade_match(n_seen: int, k_top: int) -> str:
+def _grade_match(n_seen: int, k_top: int, match_len: int = 5) -> str:
+    """Grade by consistency + sample size, slightly stricter for shorter matches."""
     share = k_top / n_seen if n_seen else 0
-    if n_seen >= STRONG_MIN_SEEN and share >= STRONG_MIN_SHARE:
+    # Shorter matches need a bit more evidence for the same grade
+    strong_seen = STRONG_MIN_SEEN + (5 - match_len)
+    mod_seen = MODERATE_MIN_SEEN + max(0, (5 - match_len) // 2)
+    if n_seen >= strong_seen and share >= STRONG_MIN_SHARE:
         return "Strong"
-    if n_seen >= MODERATE_MIN_SEEN and share >= MODERATE_MIN_SHARE:
+    if n_seen >= mod_seen and share >= MODERATE_MIN_SHARE:
         return "Moderate"
     return "Weak"
 
 def _suggest_core(sequence: list, df: pd.DataFrame):
     """
-    Core suggestion logic, shared by live suggestions (get_gamble_suggestion)
-    and the walk-forward backtest (backtest_gamble_accuracy).
+    Hierarchical suggestion: try exact 5-card match, then 4, then 3, then 2.
+    Shared by live suggestions and the walk-forward backtest.
     """
-    pairs = _log_pairs(df)
-    if not pairs:
+    pairs_by_n = _log_pairs_all(df)
+    all_5 = pairs_by_n.get(5, [])
+    if not any(pairs_by_n.values()):
         return {
             "color": "Red", "suit": "Hearts", "context_len": len(sequence),
             "match_count": 0, "confidence": "None", "note": "No data yet",
             "color_strength": 50.0, "matched": False, "outcomes": {},
+            "match_len": 0,
         }
 
-    base = Counter(s for _, s in pairs)
+    base = Counter(s for _, s in all_5) if all_5 else Counter(
+        s for n in (5, 4, 3, 2) for _, s in pairs_by_n.get(n, [])
+    )
+    if not base:
+        return {
+            "color": "Red", "suit": "Hearts", "context_len": len(sequence),
+            "match_count": 0, "confidence": "None", "note": "No data yet",
+            "color_strength": 50.0, "matched": False, "outcomes": {},
+            "match_len": 0,
+        }
     base_suit, base_n = base.most_common(1)[0]
+    base_total = sum(base.values())
 
-    if len(sequence) < 5:
+    if len(sequence) < 2:
         return {
             "color": SUIT_COLOR[base_suit], "suit": base_suit, "context_len": len(sequence),
-            "match_count": 0, "confidence": "None", "note": "Enter all 5 cards",
+            "match_count": 0, "confidence": "None", "note": "Enter at least 2 cards",
             "color_strength": 50.0, "matched": False, "outcomes": {},
+            "match_len": 0,
         }
 
-    key = tuple(sequence[-5:])
-    outcomes = [s for k, s in pairs if k == key]
+    # Try longest match first: 5 → 4 → 3 → 2 (only up to available sequence length)
+    max_try = min(5, len(sequence))
+    for n in range(max_try, 1, -1):
+        key = tuple(sequence[-n:])
+        pairs = pairs_by_n.get(n, [])
+        outcomes = [s for k, s in pairs if k == key]
+        min_needed = MIN_SEEN_BY_LEN.get(n, 1)
+        if len(outcomes) < min_needed:
+            continue
 
-    if not outcomes:
+        top, k_top, n_seen, counts = _decide_from_outcomes(outcomes)
+        color = SUIT_COLOR[top]
+        color_share = sum(c for s, c in counts.items() if SUIT_COLOR[s] == color) / n_seen
+        times = "time" if n_seen == 1 else "times"
+        len_label = f"{n}-card"
         return {
-            "color": SUIT_COLOR[base_suit], "suit": base_suit, "context_len": 5,
-            "match_count": 0, "confidence": "None", "matched": False, "outcomes": {},
+            "color": color,
+            "suit": top,
+            "context_len": n,
+            "match_count": n_seen,
+            "confidence": _grade_match(n_seen, k_top, match_len=n),
+            "matched": True,
+            "outcomes": dict(counts),
+            "match_len": n,
             "note": (
-                "This exact 5-card sequence is not in the log, so there is no real signal. "
-                f"Showing the most common suit overall ({base_suit}, about "
-                f"{round(10 * base_n / len(pairs), 1)} out of 10)."
+                f"{len_label} match — seen {n_seen} {times} before; next card was {top} "
+                f"in {k_top} of them (about {round(10 * k_top / n_seen, 1)} out of 10)."
             ),
-            "color_strength": 50.0,
+            "color_strength": round(color_share * 100, 1),
         }
 
-    top, k_top, n_seen, counts = _decide_from_outcomes(outcomes)
-    color = SUIT_COLOR[top]
-    color_share = sum(c for s, c in counts.items() if SUIT_COLOR[s] == color) / n_seen
-    times = "time" if n_seen == 1 else "times"
+    # No usable partial match — fall back to overall base rate
     return {
-        "color": color,
-        "suit": top,
-        "context_len": 5,
-        "match_count": n_seen,
-        "confidence": _grade_match(n_seen, k_top),
-        "matched": True,
-        "outcomes": dict(counts),
+        "color": SUIT_COLOR[base_suit], "suit": base_suit, "context_len": min(5, len(sequence)),
+        "match_count": 0, "confidence": "None", "matched": False, "outcomes": {},
+        "match_len": 0,
         "note": (
-            f"Seen {n_seen} {times} before; the next card was {top} in {k_top} of them "
-            f"(about {round(10 * k_top / n_seen, 1)} out of 10)."
+            "No 5/4/3/2-card match with enough history. "
+            f"Showing the most common suit overall ({base_suit}, about "
+            f"{round(10 * base_n / base_total, 1)} out of 10)."
         ),
-        "color_strength": round(color_share * 100, 1),
+        "color_strength": 50.0,
     }
 
 def get_gamble_suggestion(sequence: list):
-    """Exact-match history engine (see comment block above)."""
+    """Hierarchical history engine (5 → 4 → 3 → 2 card matches)."""
     df = load_gamble_data()
     return _suggest_core(sequence, df)
 
@@ -713,34 +744,57 @@ def get_gamble_suggestion(sequence: list):
 def backtest_gamble_accuracy(window: int = 50):
     """
     Honest walk-forward backtest: each logged row is predicted using ONLY the
-    rows logged before it. Also splits results into rows where the exact
-    sequence had been seen before (the engine's real signal) and rows where it
-    had not (plain guessing).
+    rows logged before it. Uses hierarchical matching (5→4→3→2). Also splits
+    results into rows where any match was found vs pure base-rate guessing.
     """
     df = load_gamble_data()
-    pairs = _log_pairs(df)
+    pairs5 = _log_pairs(df, 5)
     warm_up = 40
-    if len(pairs) < warm_up + 5:
+    if len(pairs5) < warm_up + 5:
         return None
 
-    index = {}          # key -> list of outcomes so far
+    # Build full card sequences + actuals in order (same as pairs5 order)
+    sequences = []
+    if "Sequence" in df.columns and "Actual_Next" in df.columns:
+        for seq_str, nxt in zip(df["Sequence"].astype(str), df["Actual_Next"].astype(str).str.strip()):
+            cards = _parse_sequence_str(seq_str)
+            if len(cards) >= 5 and nxt in SUITS:
+                sequences.append((cards[-5:], nxt))
+
+    # Per-length indexes: n -> {key: [outcomes so far]}
+    indexes = {n: {} for n in (5, 4, 3, 2)}
     base = Counter()
     records = []
-    for i, (key, actual) in enumerate(pairs):
+
+    for i, (cards5, actual) in enumerate(sequences):
         if i >= warm_up:
-            outs = index.get(key)
-            if outs:
-                pred, k_top, n_seen, _ = _decide_from_outcomes(outs)
-                matched, grade = True, _grade_match(n_seen, k_top)
-            else:
-                pred, matched, grade = base.most_common(1)[0][0], False, "None"
+            pred = None
+            matched = False
+            grade = "None"
+            match_len = 0
+            for n in (5, 4, 3, 2):
+                key = tuple(cards5[-n:])
+                outs = indexes[n].get(key)
+                min_needed = MIN_SEEN_BY_LEN.get(n, 1)
+                if outs and len(outs) >= min_needed:
+                    pred, k_top, n_seen, _ = _decide_from_outcomes(outs)
+                    matched, grade, match_len = True, _grade_match(n_seen, k_top, match_len=n), n
+                    break
+            if pred is None:
+                pred = base.most_common(1)[0][0] if base else "Hearts"
+                matched, grade, match_len = False, "None", 0
             records.append({
                 "color_correct": SUIT_COLOR[pred] == SUIT_COLOR[actual],
                 "suit_correct": pred == actual,
                 "matched": matched,
                 "grade": grade,
+                "match_len": match_len,
             })
-        index.setdefault(key, []).append(actual)
+
+        # Update indexes with this row (for future predictions)
+        for n in (5, 4, 3, 2):
+            key = tuple(cards5[-n:])
+            indexes[n].setdefault(key, []).append(actual)
         base[actual] += 1
 
     bt = pd.DataFrame(records)
@@ -752,6 +806,10 @@ def backtest_gamble_accuracy(window: int = 50):
     matched_df = bt[bt["matched"]]
     unmatched_df = bt[~bt["matched"]]
     strong_df = bt[bt["grade"] == "Strong"]
+    by_len = {}
+    for n in (5, 4, 3, 2):
+        sub = bt[bt["match_len"] == n]
+        by_len[n] = {"n": len(sub), "suit_acc": acc(sub, "suit_correct")}
 
     return {
         "n_total": len(bt),
@@ -769,6 +827,7 @@ def backtest_gamble_accuracy(window: int = 50):
         "strong_suit_acc": acc(strong_df, "suit_correct"),
         "baseline_color_acc": 50.0,
         "baseline_suit_acc": 25.0,
+        "by_len": by_len,
     }
 
 # ==========================================
@@ -1119,9 +1178,9 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 
 if st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
-    st.caption("Exact-match history engine + AI suggestion (Gemini → Groq fallback).")
+    st.caption("Hierarchical history engine (5 → 4 → 3 → 2 card match) + AI suggestion (Gemini → Groq fallback).")
 
-    with st.expander("📉 Real backtested accuracy (walk-forward, exact-match engine)", expanded=True):
+    with st.expander("📉 Real backtested accuracy (walk-forward, hierarchical 5→4→3→2 engine)", expanded=True):
         bt = backtest_gamble_accuracy(window=50)
         if bt is None:
             st.info("Not enough logged history yet for a reliable backtest (need 45+ rows).")
@@ -1132,24 +1191,33 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
                 return "n/a" if v is None else f"{round(v / 10, 1)} out of 10"
             st.caption(
                 f"Each of the {bt['n_total']} logged rows after the first 40 was predicted using only the "
-                "rows logged before it, so this is what you would really have got, not a score on data "
-                "the engine has already seen."
+                "rows logged before it (trying 5-card, then 4, then 3, then 2). This is what you would "
+                "really have got, not a score on data the engine has already seen."
             )
             b1, b2, b3, b4 = st.columns(4)
             b1.metric("Suit right (all rows)", _fmt(bt["overall_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
             b2.metric(f"Suit right (last {bt['n_recent']})", _fmt(bt["recent_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
-            b3.metric(f"Sequence seen before ({bt['n_matched']} rows)", _fmt(bt["matched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
-            b4.metric(f"Never seen ({bt['n_unmatched']} rows)", _fmt(bt["unmatched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
+            b3.metric(f"Any match found ({bt['n_matched']} rows)", _fmt(bt["matched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
+            b4.metric(f"No match / base rate ({bt['n_unmatched']} rows)", _fmt(bt["unmatched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
             st.caption(
-                f"In plain terms: when the exact sequence was in the log, the suit was right "
-                f"{_tenths(bt['matched_suit_acc'])}; when it was not, {_tenths(bt['unmatched_suit_acc'])} "
+                f"In plain terms: when a 5/4/3/2-card match was found, the suit was right "
+                f"{_tenths(bt['matched_suit_acc'])}; when not, {_tenths(bt['unmatched_suit_acc'])} "
                 f"(pure guessing is 2.5 out of 10). Strong matches only ({bt['n_strong']} rows): "
                 f"{_tenths(bt['strong_suit_acc'])}."
             )
+            by_len = bt.get("by_len") or {}
+            if by_len:
+                parts = []
+                for n in (5, 4, 3, 2):
+                    info = by_len.get(n) or {}
+                    if info.get("n"):
+                        parts.append(f"{n}-card: {_tenths(info.get('suit_acc'))} (n={info['n']})")
+                if parts:
+                    st.caption("Accuracy by match length — " + " · ".join(parts))
             if bt["matched_suit_acc"] is not None and bt["matched_suit_acc"] <= bt["baseline_suit_acc"]:
                 st.warning(
-                    "Sequence-seen-before accuracy is not above the 25% guessing level, so the "
-                    "exact-match edge is not showing up in the data (yet)."
+                    "Match-found accuracy is not above the 25% guessing level, so the "
+                    "hierarchical edge is not showing up in the data (yet)."
                 )
 
     st.markdown("### Enter the 5 cards (left → right)")
@@ -1194,20 +1262,25 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
             conf = sug.get("confidence", "None")
             note = sug.get("note", "")
 
+            match_len = sug.get("match_len", 0) or 0
+            len_tag = f"{match_len}-card" if match_len else "none"
             if conf == "Strong":
-                st.success(f"**Strong match** – {note}")
+                st.success(f"**Strong {len_tag} match** – {note}")
             elif conf == "Moderate":
-                st.info(f"**Moderate match** – {note}")
+                st.info(f"**Moderate {len_tag} match** – {note}")
             elif conf == "Weak":
-                st.warning(f"**Weak match** – {note}")
+                st.warning(f"**Weak {len_tag} match** – {note}")
             else:
                 st.caption(f"No signal – {note}")
 
             if sug.get("outcomes"):
                 breakdown = ", ".join(f"{s} ×{c}" for s, c in sorted(sug["outcomes"].items(), key=lambda x: -x[1]))
-                st.caption(f"Times this exact sequence was seen: {sug.get('match_count', 0)} | What followed: {breakdown}")
+                st.caption(
+                    f"Match length: {match_len}-card | Times seen: {sug.get('match_count', 0)} | "
+                    f"What followed: {breakdown}"
+                )
             else:
-                st.caption("Times this exact sequence was seen: 0")
+                st.caption(f"Match length: none | Times seen: 0")
         with col_btn:
             st.write("")
             if st.button("✅ Correct – Log this", key="quick_correct", use_container_width=True, type="primary"):
