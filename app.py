@@ -591,6 +591,22 @@ def append_gamble_record(record: dict):
         st.error(f"Failed to write Gamble Log: {e}")
         return False
 
+def delete_gamble_records(timestamps_to_delete: list):
+    """Delete specific rows from the Gamble Log by Timestamp and update the Google Sheet."""
+    try:
+        existing = load_gamble_data()
+        if existing.empty or "Timestamp" not in existing.columns:
+            return False
+        ts_set = set(str(t).strip() for t in timestamps_to_delete)
+        mask = ~existing["Timestamp"].astype(str).str.strip().isin(ts_set)
+        updated = existing[mask].reset_index(drop=True)
+        conn.update(worksheet=GAMBLE_WORKSHEET, data=updated)
+        st.cache_data.clear()
+        return True
+    except Exception as e:
+        st.error(f"Failed to delete from Gamble Log: {e}")
+        return False
+
 def _parse_sequence_str(seq_str: str) -> list:
     if not seq_str or not isinstance(seq_str, str):
         return []
@@ -1199,38 +1215,14 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
         else:
             def _fmt(v):
                 return "n/a" if v is None else f"{v}%"
-            def _tenths(v):
-                return "n/a" if v is None else f"{round(v / 10, 1)} out of 10"
             st.caption(
                 f"Each of the {bt['n_total']} logged rows after the first 40 was predicted using only the "
                 "rows logged before it (trying 5-card, then 4, then 3, then 2, then 1). This is what you would "
                 "really have got, not a score on data the engine has already seen."
             )
-            b1, b2, b3, b4 = st.columns(4)
+            b1, b2 = st.columns(2)
             b1.metric("Suit right (all rows)", _fmt(bt["overall_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
             b2.metric(f"Suit right (last {bt['n_recent']})", _fmt(bt["recent_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
-            b3.metric(f"Any match found ({bt['n_matched']} rows)", _fmt(bt["matched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
-            b4.metric(f"No match / base rate ({bt['n_unmatched']} rows)", _fmt(bt["unmatched_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
-            st.caption(
-                f"In plain terms: when a context match was found, the suit was right "
-                f"{_tenths(bt['matched_suit_acc'])}; when not, {_tenths(bt['unmatched_suit_acc'])} "
-                f"(pure guessing is 2.5 out of 10). Strong matches only ({bt['n_strong']} rows): "
-                f"{_tenths(bt['strong_suit_acc'])}."
-            )
-            by_len = bt.get("by_len") or {}
-            if by_len:
-                parts = []
-                for n in (5, 4, 3, 2, 1):
-                    info = by_len.get(n) or {}
-                    if info.get("n"):
-                        parts.append(f"{n}-card: {_tenths(info.get('suit_acc'))} (n={info['n']})")
-                if parts:
-                    st.caption("Accuracy by match length — " + " · ".join(parts))
-            if bt["matched_suit_acc"] is not None and bt["matched_suit_acc"] <= bt["baseline_suit_acc"]:
-                st.warning(
-                    "Match-found accuracy is not above the 25% guessing level, so the "
-                    "edge is not showing up strongly in the data (yet)."
-                )
 
     st.markdown("### Enter the 5 cards (left → right)")
     cols = st.columns(4)
@@ -1366,7 +1358,37 @@ if st.session_state.active_tab == "🃏 Gamble Analyzer":
     gdf = load_gamble_data()
     if not gdf.empty:
         show_cols = [c for c in ["Timestamp", "Sequence", "Suggested_Color", "Suggested_Suit", "Actual_Next", "Actual_Color"] if c in gdf.columns]
-        st.dataframe(gdf[show_cols].tail(12).iloc[::-1], use_container_width=True, hide_index=True)
+        recent_df = gdf[show_cols].tail(12).iloc[::-1].reset_index(drop=True)
+
+        st.caption("Select any records added by mistake and delete them. Deletion updates the Google Sheet immediately.")
+
+        selected_timestamps = []
+        for idx, row in recent_df.iterrows():
+            ts = str(row.get("Timestamp", "")).strip()
+            seq_str = str(row.get("Sequence", ""))
+            sug_suit = str(row.get("Suggested_Suit", ""))
+            act_next = str(row.get("Actual_Next", ""))
+            act_color = str(row.get("Actual_Color", ""))
+
+            col_chk, col_info = st.columns([0.08, 0.92])
+            with col_chk:
+                if st.checkbox("", key=f"del_chk_{ts}_{idx}", label_visibility="collapsed"):
+                    selected_timestamps.append(ts)
+            with col_info:
+                st.markdown(
+                    f"`{ts}` &nbsp;|&nbsp; **{seq_str}** &nbsp;→&nbsp; "
+                    f"Suggested: {sug_suit} &nbsp;|&nbsp; Actual: **{act_next}** ({act_color})"
+                )
+
+        if selected_timestamps:
+            if st.button(f"🗑️ Delete {len(selected_timestamps)} selected record(s)", type="primary", key="delete_selected_gamble"):
+                if delete_gamble_records(selected_timestamps):
+                    st.success(f"Deleted {len(selected_timestamps)} record(s) from Google Sheet.")
+                    st.rerun()
+                else:
+                    st.error("Delete failed. Check connection or try again.")
+        else:
+            st.caption("No records selected.")
     else:
         st.info("No records yet.")
 
