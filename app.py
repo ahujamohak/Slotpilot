@@ -683,18 +683,18 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                     0.07 * sample_score
                 )
 
-                if first_total < 5:
-                    composite *= 0.80
-                elif first_total < 8:
-                    composite *= 0.90
+                # Hard sample gates — low-n slots must not top the board
+                if first_total < 8:
+                    composite *= 0.55
                 elif first_total < 12:
-                    composite *= 0.95
+                    composite *= 0.75
+                elif first_total < 20:
+                    composite *= 0.90
+                if sample_quality == "Low":
+                    composite *= 0.50
 
-            # Soft manual tilts only (was 2.1x which dominated the board)
-            if slot in UPSIDE_BOOST:
-                composite *= min(1.25, 1.0 + (UPSIDE_BOOST[slot] - 1.0) * 0.25)
-            if slot in GRINDER_PENALTY:
-                composite *= max(0.75, GRINDER_PENALTY[slot])
+            # Manual tilts disabled for ranking — data only
+            # (UPSIDE_BOOST / GRINDER_PENALTY kept in file for reference but not applied)
 
             slot_scores.append({
                 "family": fam,
@@ -2003,26 +2003,23 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-# Session status — plain text only (no custom HTML that can clip on mobile/desktop)
+# Session status — plain text, no markdown stars
 _sp = session_profit_status()
 _pnl_txt = f"+${_sp['pnl']:.0f}" if _sp['pnl'] >= 0 else f"-${abs(_sp['pnl']):.0f}"
-st.caption(
-    f"**Bankroll** ${_sp['current']:.0f}   |   "
-    f"**Session P&L** {_pnl_txt}   |   "
-    f"**Start** ${_sp['start']:.0f}   |   "
-    f"**Profit-lock** +${_sp['stop_win']:.0f}   |   "
-    f"**Stop-loss** −${_sp['stop_loss']:.0f}"
-)
+c_a, c_b, c_c = st.columns(3)
+c_a.write(f"Bankroll: ${_sp['current']:.0f}  (start ${_sp['start']:.0f})")
+c_b.write(f"Session P and L: {_pnl_txt}")
+c_c.write(f"Lock +${_sp['stop_win']:.0f} / Stop -${_sp['stop_loss']:.0f}")
 if _sp["status"] == "STOP_LOSS":
-    st.error(f"🛑 {_sp['message']}")
+    st.error(_sp["message"])
 elif _sp["status"] in ("LOCK_PROFIT", "TARGET_HIT"):
-    st.success(f"🔒 {_sp['message']}")
+    st.success(_sp["message"])
 elif _sp["status"] == "AHEAD":
-    st.info(f"✅ {_sp['message']}")
+    st.info(_sp["message"])
 elif _sp["pnl"] == 0:
-    st.info(f"Session flat (${_sp['current']:.0f}). Stick to plan.")
+    st.info("Session is flat. Stick to the plan.")
 else:
-    st.warning(f"📉 {_sp['message']}")
+    st.warning(_sp["message"])
 
 if st.session_state.active_tab == "🎯 Live Decision":
     st.subheader("🎯 Live Decision Engine")
@@ -2425,7 +2422,8 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             continue
         rehit = s.get("rehit_metrics", {})
         first_total = rehit.get("first_hit_total", 0)
-        if first_total > 5:
+        # Need enough history to trust EV ranking
+        if first_total >= 12:
             filtered_slots.append(s)
 
     current_display = filtered_slots[:st.session_state.display_limit]
