@@ -20,20 +20,14 @@ except ImportError:
 st.set_page_config(
     page_title="Slot Optimization & Execution Agent",
     layout="wide",
-    initial_sidebar_state="collapsed",  # better default on mobile
+    initial_sidebar_state="auto",
 )
 
-# Mobile-first CSS polish
+# Safe CSS — do NOT override Streamlit sidebar width or metric label visibility
 st.markdown("""
 <style>
-    /* Tighter, cleaner mobile layout */
-    .block-container { padding-top: 0.8rem; padding-bottom: 2rem; max-width: 1100px; }
-    div[data-testid="stMetric"] { background: #f7f9fc; border-radius: 10px; padding: 8px 12px; }
-    div[data-testid="stMetric"] label { font-size: 0.75rem !important; }
-    div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.25rem !important; }
-    /* Larger touch targets */
-    .stButton > button { min-height: 2.6rem; border-radius: 10px; font-weight: 600; }
-    /* Suggestion cards */
+    .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1100px; }
+    .stButton > button { min-height: 2.75rem; border-radius: 10px; font-weight: 600; }
     .sug-card {
         border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px;
         background: #ffffff; margin-bottom: 0.6rem;
@@ -41,12 +35,13 @@ st.markdown("""
     }
     .sug-card.ai { border-left: 4px solid #7c3aed; }
     .sug-card.stat { border-left: 4px solid #2563eb; }
-    /* Hide Streamlit branding clutter on small screens */
+    .session-banner {
+        border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px;
+        background: #f8fafc; margin-bottom: 12px; font-size: 0.95rem; line-height: 1.45;
+    }
+    .session-banner b { font-weight: 700; }
     @media (max-width: 640px) {
-        [data-testid="stSidebar"] { min-width: 100% !important; }
-        .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
-        h1, h2, h3 { font-size: 1.15rem !important; }
-        div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
+        .block-container { padding-left: 0.75rem; padding-right: 0.75rem; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -669,23 +664,35 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 elif jj_tendency == "Selective JJ":
                     jj_bonus = 0.6
 
+                # Realized EV proxy: hit_rate * avg_mult (what actually paid historically)
+                ev_proxy = (first_hits / first_total) * avg_mult if first_total > 0 else 0.0
+                ev_score = min(12.0, ev_proxy / 4.0)  # ~48 EV → 12
+
+                # Sample confidence: prefer slots with more history
+                sample_score = min(10.0, first_total / 5.0)
+
                 composite = (
-                    0.11 * success_score +
-                    0.42 * mult_score +
-                    0.14 * spin_score +
-                    0.23 * multi_size_bonus +
-                    0.10 * jj_bonus * 10  # scale into similar range
+                    0.28 * ev_score +          # primary: realized feature EV
+                    0.18 * mult_score +
+                    0.12 * success_score +
+                    0.12 * spin_score +
+                    0.15 * multi_size_bonus +
+                    0.08 * jj_bonus * 10 +
+                    0.07 * sample_score
                 )
 
                 if first_total < 5:
-                    composite *= 0.88
+                    composite *= 0.80
                 elif first_total < 8:
+                    composite *= 0.90
+                elif first_total < 12:
                     composite *= 0.95
 
+            # Soft manual tilts only (was 2.1x which dominated the board)
             if slot in UPSIDE_BOOST:
-                composite *= UPSIDE_BOOST[slot]
+                composite *= min(1.25, 1.0 + (UPSIDE_BOOST[slot] - 1.0) * 0.25)
             if slot in GRINDER_PENALTY:
-                composite *= GRINDER_PENALTY[slot]
+                composite *= max(0.75, GRINDER_PENALTY[slot])
 
             slot_scores.append({
                 "family": fam,
@@ -1893,7 +1900,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 3  # bump when priority schema changes
+SLOTS_DB_VERSION = 4  # bump when priority schema / ranking weights change
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -1994,12 +2001,19 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-# Persistent session banner (every tab)
+# Persistent session banner (plain HTML — labels always visible, no Streamlit metric glitch)
 _sp = session_profit_status()
-_b1, _b2, _b3 = st.columns(3)
-_b1.metric("Bankroll", f"${_sp['current']:.0f}", f"{_sp['pnl']:+.0f} vs start")
-_b2.metric("Profit lock at", f"+${_sp['stop_win']:.0f}")
-_b3.metric("Stop-loss at", f"−${_sp['stop_loss']:.0f}")
+_pnl_txt = f"+${_sp['pnl']:.0f}" if _sp['pnl'] >= 0 else f"-${abs(_sp['pnl']):.0f}"
+st.markdown(
+    f"""<div class="session-banner">
+    <b>Bankroll:</b> ${_sp['current']:.0f}
+    &nbsp;·&nbsp; <b>Session P&amp;L:</b> {_pnl_txt}
+    &nbsp;·&nbsp; <b>Start:</b> ${_sp['start']:.0f}
+    &nbsp;·&nbsp; <b>Profit-lock at:</b> +${_sp['stop_win']:.0f}
+    &nbsp;·&nbsp; <b>Stop-loss at:</b> −${_sp['stop_loss']:.0f}
+    </div>""",
+    unsafe_allow_html=True,
+)
 if _sp["status"] == "STOP_LOSS":
     st.error(f"🛑 {_sp['message']}")
 elif _sp["status"] in ("LOCK_PROFIT", "TARGET_HIT"):
@@ -2067,6 +2081,15 @@ if st.session_state.active_tab == "🎯 Live Decision":
 
         st.info(f"**Bet advice:** {result['bet_advice']}")
         st.write(f"**Reason:** {result['reason']}")
+
+        # Session profit-lock overlay on machine decisions
+        _sp2 = session_profit_status()
+        if _sp2["status"] == "STOP_LOSS":
+            st.error("Session stop-loss is active — do not start a new machine.")
+        elif _sp2["status"] in ("LOCK_PROFIT", "TARGET_HIT"):
+            st.warning("Profit-lock territory. Continue only on A-tier machines with reduced check-in.")
+        elif _sp2["status"] == "AHEAD" and result["action"] == "JUDO JUMP":
+            st.info("Already ahead — JJ only with a tight spin budget; protect the gain.")
 
         # Show the underlying profile so the player can trust / override
         with st.expander("🔍 Slot behaviour profile (what the engine actually saw)", expanded=False):
