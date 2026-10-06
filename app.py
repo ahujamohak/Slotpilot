@@ -609,15 +609,17 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             profile = build_slot_behaviour_profile(fam, slot, live_df)
             jj_tendency, play_style, post_big_note = _derive_jj_tendency(profile)
 
-            # Prefer KM-aware budgets when available
+            # Pooled all-features budget is the main cold-start number
+            pooled = profile.get("pooled", {}) if profile.get("ok") else {}
             hn1 = profile.get("hit_numbers", {}).get(1, {}) if profile.get("ok") else {}
             hn2 = profile.get("hit_numbers", {}).get(2, {}) if profile.get("ok") else {}
             hn3 = profile.get("hit_numbers", {}).get(3, {}) if profile.get("ok") else {}
 
-            budget_1st = hn1.get("km_p85") or hn1.get("p85") or spin_1st
+            budget_1st = pooled.get("km_p85") or pooled.get("p85") or hn1.get("km_p85") or hn1.get("p85") or spin_1st
+            # 2nd/3rd kept for display but post-win size+timing is what Live Decision uses after a hit
             budget_2nd = hn2.get("km_p85") or hn2.get("p85") or spin_2nd
             budget_3rd = hn3.get("km_p85") or hn3.get("p85") or spin_3rd
-            median_1st = hn1.get("median")
+            median_1st = pooled.get("median") or hn1.get("median")
             sample_quality = profile.get("sample_quality", "Low") if profile.get("ok") else "Low"
             multi_rate = profile.get("overall_multi_hit_rate", rehit.get("multi_hit_rate", 0.0)) if profile.get("ok") else rehit.get("multi_hit_rate", 0.0)
 
@@ -933,10 +935,49 @@ def build_slot_behaviour_profile(family_name, slot_name, live_df):
             "censored_spins": censored_spins,
         }
 
-    # ---------- Overall multi-hit rate (attempt 2 given attempt 1 existed) ----------
-    att1 = parsed[parsed["_attempt"] == 1]
+    # ---------- POOLED: all features as one process (+ walk-offs included) ----------
+    # Every real feature hit counts; every "+" walk-off counts as "no feature by this spin"
+    all_hit_mask = (
+        ((parsed["_hit"] > 0) | (parsed["_feature_win_num"] > 0)) &
+        (parsed["_spins"].notna()) &
+        (~parsed["_is_censored"])
+    )
+    all_events = parsed.loc[all_hit_mask, "_spins"].astype(float).tolist()
+    all_cens_mask = (
+        (parsed["_is_censored"] == True) &
+        (parsed["_spins"].notna())
+    )
+    all_censored = parsed.loc[all_cens_mask, "_spins"].astype(float).tolist()
+    # Also: attempts with hit==0 and a spin count but not marked + (rare) — skip
+
+    pooled_n_events = len(all_events)
+    pooled_n_cens = len(all_censored)
+    pooled_n = pooled_n_events + pooled_n_cens
+    pooled_med = _safe_percentile(all_events, 50)
+    pooled_p75 = _safe_percentile(all_events, 75)
+    pooled_p85 = _safe_percentile(all_events, 85)
+    pooled_km85 = _kaplan_meier_percentile(all_events, all_censored, pct=0.85)
+    pooled_km50 = _kaplan_meier_percentile(all_events, all_censored, pct=0.50)
+    all_mults = parsed.loc[all_hit_mask, "_mult"].dropna().astype(float).tolist()
+    profile["pooled"] = {
+        "n_events": pooled_n_events,
+        "n_censored": pooled_n_cens,
+        "n_total": pooled_n,
+        "median": int(pooled_med) if pooled_med is not None else None,
+        "p75": int(pooled_p75) if pooled_p75 is not None else None,
+        "p85": int(pooled_p85) if pooled_p85 is not None else None,
+        "km_p50": pooled_km50,
+        "km_p85": pooled_km85,
+        "avg_mult": round(float(np.mean(all_mults)), 1) if all_mults else None,
+        "max_mult": round(float(np.max(all_mults)), 1) if all_mults else None,
+        "event_spins": all_events,
+        "censored_spins": all_censored,
+        # Longest walk-off: "we know at least this many spins can pass with no feature"
+        "max_walkoff": int(max(all_censored)) if all_censored else None,
+    }
+
+    # ---------- Overall multi-hit rate ----------
     att2 = parsed[parsed["_attempt"] == 2]
-    # Prefer feature_win_num == 2 as the clean "second feature occurred"
     second_hits = parsed[(parsed["_feature_win_num"] == 2) | ((parsed["_hit"] == 2) & (parsed["_attempt"] == 2))]
     n_att2_pop = len(att2) if len(att2) > 0 else len(second_hits)
     n_second = len(second_hits)
@@ -944,85 +985,103 @@ def build_slot_behaviour_profile(family_name, slot_name, live_df):
     profile["n_second_hits"] = n_second
     profile["n_attempt2_pop"] = n_att2_pop
 
-    # ---------- Clustering score ----------
-    # Low variance of inter-hit gaps → regular; high variance → dry-spell + cluster
-    gaps = []
-    for hn in [1, 2, 3]:
-        info = profile["hit_numbers"].get(hn, {})
-        gaps.extend(info.get("event_spins", []))
-    if len(gaps) >= 4:
-        cv = float(np.std(gaps) / (np.mean(gaps) + 1e-6))
-        # Map CV to 0-1-ish score
+    # ---------- Clustering score (from pooled gaps) ----------
+    if len(all_events) >= 4:
+        cv = float(np.std(all_events) / (np.mean(all_events) + 1e-6))
         profile["clustering_score"] = round(min(1.0, max(0.0, (cv - 0.4) / 1.2)), 2)
     else:
-        profile["clustering_score"] = 0.5  # unknown
+        profile["clustering_score"] = 0.5
 
-    # ---------- Post-win behaviour (JJ intelligence) ----------
-    # Look at first-hit multipliers and what happened on the subsequent attempt
-    first_hits = parsed[((parsed["_hit"] == 1) | (parsed["_feature_win_num"] == 1)) & (parsed["_mult"] > 0)]
-    if len(first_hits) >= 3:
-        mults = first_hits["_mult"].astype(float)
+    # ---------- Post-win: size (small/med/large) AND timing (early/late) ----------
+    # Use ANY feature as "prior win", not only hit#1 — then next feature or walk-off
+    any_hits = parsed[
+        ((parsed["_hit"] > 0) | (parsed["_feature_win_num"] > 0)) &
+        (parsed["_mult"] > 0) &
+        (parsed["_spins"].notna()) &
+        (~parsed["_is_censored"])
+    ].copy()
+    if len(any_hits) >= 4:
+        mults = any_hits["_mult"].astype(float)
+        spins_h = any_hits["_spins"].astype(float)
         q33 = float(mults.quantile(0.33))
         q66 = float(mults.quantile(0.66))
+        spin_med = float(spins_h.median()) if len(spins_h) else 40.0
 
-        def _bucket(m):
+        def _size_bucket(m):
             if m <= q33:
                 return "small"
             if m <= q66:
                 return "medium"
             return "large"
 
-        # For each first hit, see if a second hit followed and how many spins it took
-        # We approximate by looking at rows that share the same session context.
-        # Simple robust approach: use overall multi-hit rate conditioned on first mult bucket.
-        post = {"small": {"n": 0, "rehit": 0, "spins": []},
-                "medium": {"n": 0, "rehit": 0, "spins": []},
-                "large": {"n": 0, "rehit": 0, "spins": []}}
+        def _timing_bucket(sp):
+            return "early" if sp <= spin_med else "late"
 
-        # We don't have explicit session IDs, so we use a pragmatic proxy:
-        # count how often a second feature appears after a first feature of each size
-        # by looking at the distribution of first mults that were followed by a feature_win_num==2
-        # (This is approximate but works with the current log structure.)
-        for _, row in first_hits.iterrows():
-            b = _bucket(row["_mult"])
-            post[b]["n"] += 1
+        # Build ordered list of feature events by row order
+        ordered = any_hits.sort_index()
+        post = {}
+        for size in ("small", "medium", "large"):
+            for timing in ("early", "late"):
+                post[f"{size}_{timing}"] = {"n": 0, "rehit": 0, "spins": [], "cens_spins": []}
+            post[size] = {"n": 0, "rehit": 0, "spins": [], "cens_spins": []}
 
-        # Second hits that have a preceding first hit in the same "block"
-        # Heuristic: for every second hit, look at the nearest preceding first hit mult
-        second_rows = parsed[(parsed["_feature_win_num"] == 2) | ((parsed["_hit"] == 2) & (parsed["_attempt"] == 2))]
-        for _, srow in second_rows.iterrows():
-            # Find the most recent first hit before this row (by index order)
-            prev = first_hits[first_hits.index < srow.name]
-            if prev.empty:
-                continue
-            prev_mult = prev.iloc[-1]["_mult"]
-            b = _bucket(prev_mult)
-            post[b]["rehit"] += 1
-            if pd.notna(srow["_spins"]):
-                post[b]["spins"].append(float(srow["_spins"]))
+        idx_list = list(ordered.index)
+        for i, idx in enumerate(idx_list):
+            row = ordered.loc[idx]
+            size = _size_bucket(float(row["_mult"]))
+            timing = _timing_bucket(float(row["_spins"]))
+            key = f"{size}_{timing}"
+            post[key]["n"] += 1
+            post[size]["n"] += 1
 
-        for b in post:
-            n = post[b]["n"]
-            r = post[b]["rehit"]
-            spins = post[b]["spins"]
-            post[b] = {
+            # Next feature after this one?
+            if i + 1 < len(idx_list):
+                nxt = ordered.loc[idx_list[i + 1]]
+                # Only count if same "session-ish" — next row is a later feature
+                # Use spin count of next as gap proxy
+                if pd.notna(nxt["_spins"]):
+                    post[key]["rehit"] += 1
+                    post[key]["spins"].append(float(nxt["_spins"]))
+                    post[size]["rehit"] += 1
+                    post[size]["spins"].append(float(nxt["_spins"]))
+            else:
+                # Look for a walk-off after this feature in the log
+                after = parsed[(parsed.index > idx) & (parsed["_is_censored"] == True) & (parsed["_spins"].notna())]
+                if not after.empty:
+                    csp = float(after.iloc[0]["_spins"])
+                    post[key]["cens_spins"].append(csp)
+                    post[size]["cens_spins"].append(csp)
+
+        def _pack(cell):
+            n = cell["n"]
+            r = cell["rehit"]
+            spins = cell["spins"]
+            cens = cell.get("cens_spins", [])
+            # KM for rehit spin budget when we have censored post-win walks
+            km = _kaplan_meier_percentile(spins, cens, pct=0.85) if (spins or cens) else None
+            return {
                 "n_first": n,
                 "n_rehit": r,
                 "rehit_rate": round(r / n * 100, 1) if n > 0 else None,
                 "median_spins_to_rehit": int(_safe_percentile(spins, 50)) if len(spins) >= 2 else (int(np.median(spins)) if spins else None),
                 "p75_spins_to_rehit": int(_safe_percentile(spins, 75)) if len(spins) >= 2 else None,
+                "km_p85_rehit": km,
+                "n_walkoffs_after": len(cens),
+                "max_walkoff_after": int(max(cens)) if cens else None,
             }
-        profile["post_win"] = post
+
+        profile["post_win"] = {k: _pack(v) for k, v in post.items()}
         profile["mult_buckets"] = {"q33": round(q33, 1), "q66": round(q66, 1)}
+        profile["spin_median_for_timing"] = int(round(spin_med))
     else:
         profile["post_win"] = {}
         profile["mult_buckets"] = {}
+        profile["spin_median_for_timing"] = None
 
-    # Sample quality
-    n1 = profile["hit_numbers"].get(1, {}).get("n_total", 0)
-    if n1 >= 15:
+    # Sample quality from pooled feature count
+    if pooled_n_events >= 20:
         profile["sample_quality"] = "High"
-    elif n1 >= 7:
+    elif pooled_n_events >= 10:
         profile["sample_quality"] = "Medium"
     else:
         profile["sample_quality"] = "Low"
@@ -1052,23 +1111,26 @@ def decide_next_action(family_name, slot_name, attempt_num, spins_so_far, last_m
     last_mult = float(last_mult) if last_mult is not None and last_mult != "" else None
     current_bet = float(current_bet) if current_bet else 5.0
 
-    hn_info = profile["hit_numbers"].get(attempt_num, {})
-    n_total = hn_info.get("n_total", 0)
-    n_events = hn_info.get("n_events", 0)
-    km85 = hn_info.get("km_p85")
-    p75 = hn_info.get("p75")
-    p85 = hn_info.get("p85")
-    median = hn_info.get("median")
+    # PRIMARY: pooled all-features distribution (treat every feature the same)
+    pooled = profile.get("pooled", {})
+    hn_info = profile["hit_numbers"].get(attempt_num, {})  # kept as secondary reference
 
-    # Choose the most reliable upper bound
+    n_total = pooled.get("n_total") or hn_info.get("n_total", 0)
+    n_events = pooled.get("n_events") or hn_info.get("n_events", 0)
+    km85 = pooled.get("km_p85") or hn_info.get("km_p85")
+    p75 = pooled.get("p75") or hn_info.get("p75")
+    p85 = pooled.get("p85") or hn_info.get("p85")
+    median = pooled.get("median") or hn_info.get("median")
+    max_walkoff = pooled.get("max_walkoff")
+
+    # Upper bound: KM (uses + walk-offs) preferred
     upper = km85 or p85 or p75 or median
     if upper is None:
-        upper = 80  # absolute fallback only when zero data
+        upper = 80
 
-    # How far into the distribution are we?
-    # Approximate survival: % of historical attempts that lasted longer than spins_so_far
-    event_spins = hn_info.get("event_spins", [])
-    cens_spins = hn_info.get("censored_spins", [])
+    # If we have long walk-offs beyond upper, note them (do not auto-extend past KM)
+    event_spins = pooled.get("event_spins") or hn_info.get("event_spins", [])
+    cens_spins = pooled.get("censored_spins") or hn_info.get("censored_spins", [])
     still_alive = sum(1 for t in event_spins + cens_spins if t > spins_so_far)
     total_obs = len(event_spins) + len(cens_spins)
     pct_still_going = (still_alive / total_obs * 100) if total_obs > 0 else 50.0
@@ -1090,65 +1152,77 @@ def decide_next_action(family_name, slot_name, attempt_num, spins_so_far, last_m
         action = "WALK"
         bet_advice = "Walk – very few historical attempts lasted this long"
         max_left = 0
-        reasons.append(f"Only {pct_still_going:.0f}% of past attempts of this hit number lasted beyond {int(spins_so_far)} spins.")
+        reasons.append(
+            f"Only {pct_still_going:.0f}% of past feature hunts on this slot lasted beyond {int(spins_so_far)} spins "
+            f"(all features pooled; includes + walk-offs)."
+        )
+        if max_walkoff and spins_so_far >= max_walkoff:
+            reasons.append(f"You are at or past the longest logged walk-off ({max_walkoff} spins).")
 
-    # 2. Just hit a feature – decide whether to Judo Jump, Stay, or Walk for the NEXT attempt
+    # 2. Just hit a feature – use size + early/late timing (not hit#1 vs #2)
     elif last_mult is not None and last_mult > 0 and attempt_num >= 1:
         post = profile.get("post_win", {})
         buckets = profile.get("mult_buckets", {})
         q33 = buckets.get("q33")
         q66 = buckets.get("q66")
+        spin_med = profile.get("spin_median_for_timing") or median or 40
 
         if q33 is not None and q66 is not None:
             if last_mult <= q33:
-                bucket = "small"
+                size = "small"
             elif last_mult <= q66:
-                bucket = "medium"
+                size = "medium"
             else:
-                bucket = "large"
+                size = "large"
         else:
-            # Fallback buckets if not enough data
             if last_mult <= 35:
-                bucket = "small"
+                size = "small"
             elif last_mult <= 70:
-                bucket = "medium"
+                size = "medium"
             else:
-                bucket = "large"
+                size = "large"
 
-        bstats = post.get(bucket, {})
+        # spins_so_far when logging a just-hit feature = how early/late that feature was
+        timing = "early" if spins_so_far <= spin_med else "late"
+        key = f"{size}_{timing}"
+        bstats = post.get(key) or post.get(size) or {}
         rehit_rate = bstats.get("rehit_rate")
         med_rehit = bstats.get("median_spins_to_rehit")
         p75_rehit = bstats.get("p75_spins_to_rehit")
+        km_rehit = bstats.get("km_p85_rehit")
+        walk_after = bstats.get("max_walkoff_after")
 
         overall_rate = profile.get("overall_multi_hit_rate", 0)
+        budget_next = km_rehit or p75_rehit or med_rehit or pooled.get("p75") or 40
 
         if rehit_rate is not None and bstats.get("n_first", 0) >= 2:
             if rehit_rate >= 45 and (med_rehit is not None and med_rehit <= 40):
                 action = "JUDO JUMP"
-                # Suggest a modest raise – player can choose exact size
                 suggested = min(current_bet * 1.5, current_bet + 5) if current_bet < 10 else current_bet * 1.25
-                suggested = round(suggested * 2) / 2  # neat 0.5 steps
-                bet_advice = f"Judo Jump – raise toward ${suggested:.2f} for next ~{p75_rehit or med_rehit or 30} spins"
-                max_left = p75_rehit or med_rehit or 35
+                suggested = round(suggested * 2) / 2
+                bet_advice = f"Judo Jump – raise toward ${suggested:.2f} for next ~{budget_next} spins"
+                max_left = int(budget_next)
                 reasons.append(
-                    f"After a {bucket} win (≤{q66 if bucket!='large' else 'top'}× on this slot) the machine re-hit "
-                    f"{rehit_rate}% of the time, usually inside {med_rehit} spins."
+                    f"After a {size} win that landed {timing} (vs this slot's median {spin_med} spins), "
+                    f"re-hit rate was {rehit_rate}%, usually inside {med_rehit} spins."
                 )
-            elif rehit_rate < 25 and bucket == "large":
+            elif rehit_rate < 25 and size == "large":
                 action = "WALK"
-                bet_advice = "Walk or drop significantly – large wins on this slot historically cool it"
+                bet_advice = "Walk or drop bet – large wins here often cool the machine"
                 max_left = 0
                 reasons.append(
-                    f"After large wins this slot only re-hit {rehit_rate}% of the time. "
-                    f"Overall multi-hit rate is {overall_rate}%."
+                    f"After large wins ({timing}) this slot re-hit only {rehit_rate}% of the time. "
+                    f"Overall multi-hit rate {overall_rate}%."
                 )
+                if walk_after:
+                    reasons.append(f"Logged walk-offs after similar wins went to {walk_after}+ spins with no feature.")
             else:
                 action = "STAY"
                 bet_advice = f"Stay at ${current_bet:.2f}"
-                max_left = p75_rehit or med_rehit or (profile["hit_numbers"].get(attempt_num + 1, {}).get("p75") or 40)
+                max_left = int(budget_next)
                 reasons.append(
-                    f"After {bucket} wins the re-hit rate is {rehit_rate}%. "
-                    f"Continuing at same bet for ~{max_left} spins is reasonable."
+                    f"After {size}/{timing} wins re-hit rate is {rehit_rate}%. "
+                    f"Same bet for about {max_left} spins is reasonable."
                 )
         else:
             # Not enough conditional data – fall back to overall multi-hit rate
@@ -1902,7 +1976,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 5  # bump when priority schema / ranking weights change
+SLOTS_DB_VERSION = 6  # pooled features + size/timing post-win
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -2008,8 +2082,8 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 if st.session_state.active_tab == "🎯 Live Decision":
     st.subheader("🎯 Live Decision Engine")
     st.caption(
-        "Fully data-driven per-slot advice. Uses right-censored walk-offs (+), "
-        "Kaplan-Meier style percentiles, and post-win behaviour unique to each machine."
+        "All feature wins on this slot are pooled for spin budgets (+ walk-offs included). "
+        "After a win, advice uses win size and whether it landed early or late."
     )
 
     # Build family → slots map from master list + any extra seen in data
