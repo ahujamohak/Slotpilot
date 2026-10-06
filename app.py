@@ -450,6 +450,73 @@ def compute_75_25_rvi(slot_name, family_name, live_df, target_day=None, strict_m
     proof_str = f"75% Live Sheet ({hit_count}/{total_logs} hits, {day_log_count} on {target_day}s)"
     return final_rvi, proof_str, target_day, day_factor, day_log_count, total_logs
 
+def _derive_jj_tendency(profile: dict) -> tuple:
+    """
+    From a behaviour profile, derive a short JJ tendency label and a recommended play style.
+    Returns (jj_tendency: str, play_style: str, post_big_note: str)
+    """
+    if not profile or not profile.get("ok"):
+        return "Unknown", "Insufficient data", "—"
+
+    multi_rate = profile.get("overall_multi_hit_rate", 0) or 0
+    post = profile.get("post_win", {})
+    sample_q = profile.get("sample_quality", "Low")
+    clustering = profile.get("clustering_score", 0.5)
+
+    small = post.get("small", {})
+    medium = post.get("medium", {})
+    large = post.get("large", {})
+
+    small_rate = small.get("rehit_rate")
+    med_rate = medium.get("rehit_rate")
+    large_rate = large.get("rehit_rate")
+    large_med_spins = large.get("median_spins_to_rehit")
+    small_med_spins = small.get("median_spins_to_rehit")
+
+    # JJ Tendency
+    if sample_q == "Low":
+        jj = "Unknown"
+    elif small_rate is not None and small_rate >= 45 and (small_med_spins is not None and small_med_spins <= 35):
+        jj = "Aggressive JJ"
+    elif (small_rate or 0) >= 35 or (med_rate or 0) >= 40:
+        jj = "Selective JJ"
+    elif multi_rate >= 40:
+        jj = "Moderate repeat"
+    elif multi_rate >= 25:
+        jj = "Low repeat"
+    else:
+        jj = "Rarely repeats"
+
+    # Post-big-win note
+    if large_rate is None:
+        post_big = "—"
+    elif large_rate < 25:
+        post_big = f"Walk after big (re-hit only {large_rate}%)"
+    elif large_rate < 40:
+        post_big = f"Caution after big ({large_rate}% re-hit)"
+    else:
+        spins_txt = f", ~{large_med_spins} spins" if large_med_spins else ""
+        post_big = f"Can continue after big ({large_rate}%{spins_txt})"
+
+    # Recommended play style
+    if sample_q == "Low":
+        style = "Test lightly"
+    elif jj == "Aggressive JJ" and multi_rate >= 45:
+        style = "Primary target – hunt + JJ"
+    elif jj in ("Aggressive JJ", "Selective JJ") and multi_rate >= 35:
+        style = "Strong – look for JJ spots"
+    elif multi_rate >= 40 and clustering < 0.55:
+        style = "Solid grinder with repeats"
+    elif multi_rate < 25 and (large_rate is not None and large_rate < 30):
+        style = "One-and-done – take profit"
+    elif multi_rate < 30:
+        style = "Selective only"
+    else:
+        style = "Standard"
+
+    return jj, style, post_big
+
+
 def build_priority_dataset(live_df, target_day=None, strict_mode=True):
     records = []
     slot_scores = []
@@ -461,15 +528,31 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             rvi_score, source_proof, active_day, day_factor, day_hits, total_hits = compute_75_25_rvi(slot, fam, live_df, target_day, strict_mode)
             rehit = compute_slot_rehit_metrics(slot, fam, live_df)
 
+            # Legacy spin estimates (kept for compatibility)
             spin_1st = get_spins_for_hit(slot, fam, live_df, hit_number=1, percentile=85)
             spin_2nd = get_spins_for_hit(slot, fam, live_df, hit_number=2, percentile=85)
             spin_3rd = get_spins_for_hit(slot, fam, live_df, hit_number=3, percentile=85)
+
+            # New behaviour profile (KM-aware, censored, post-win)
+            profile = build_slot_behaviour_profile(fam, slot, live_df)
+            jj_tendency, play_style, post_big_note = _derive_jj_tendency(profile)
+
+            # Prefer KM-aware budgets when available
+            hn1 = profile.get("hit_numbers", {}).get(1, {}) if profile.get("ok") else {}
+            hn2 = profile.get("hit_numbers", {}).get(2, {}) if profile.get("ok") else {}
+            hn3 = profile.get("hit_numbers", {}).get(3, {}) if profile.get("ok") else {}
+
+            budget_1st = hn1.get("km_p85") or hn1.get("p85") or spin_1st
+            budget_2nd = hn2.get("km_p85") or hn2.get("p85") or spin_2nd
+            budget_3rd = hn3.get("km_p85") or hn3.get("p85") or spin_3rd
+            median_1st = hn1.get("median")
+            sample_quality = profile.get("sample_quality", "Low") if profile.get("ok") else "Low"
+            multi_rate = profile.get("overall_multi_hit_rate", rehit.get("multi_hit_rate", 0.0)) if profile.get("ok") else rehit.get("multi_hit_rate", 0.0)
 
             first_total = rehit.get("first_hit_total", 0) or 0
             first_hits = rehit.get("first_hit_count", 0) or 0
             avg_mult = rehit.get("avg_first_multiplier", 0.0) or 0.0
             max_mult = rehit.get("max_first_multiplier", 0.0) or 0.0
-            multi_rate = rehit.get("multi_hit_rate", 0.0) or 0.0
             avg_2nd_mult = rehit.get("avg_repeat_multiplier", 0.0) or 0.0
             avg_3rd_mult = rehit.get("avg_third_multiplier", 0.0) or 0.0
             max_2nd_mult = rehit.get("max_repeat_multiplier", 0.0) or 0.0
@@ -482,31 +565,41 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
 
                 mult_score = min(13.0, (avg_mult / 5.0) + (max_mult / 22.0))
 
-                if spin_1st is None:
+                # Prefer new budget for spin score
+                s1 = budget_1st if budget_1st is not None else spin_1st
+                if s1 is None:
                     spin_score = 4.5
-                elif spin_1st <= 40:
+                elif s1 <= 40:
                     spin_score = 9.0
-                elif spin_1st <= 55:
+                elif s1 <= 55:
                     spin_score = 7.0
-                elif spin_1st <= 70:
+                elif s1 <= 70:
                     spin_score = 4.8
-                elif spin_1st <= 90:
+                elif s1 <= 90:
                     spin_score = 2.5
                 else:
                     spin_score = 1.0
 
-                multi_size_bonus = min(4.5, 
-                    (avg_2nd_mult / 16.0) + 
-                    (max_2nd_mult / 30.0) + 
-                    (avg_3rd_mult / 20.0) + 
+                multi_size_bonus = min(4.5,
+                    (avg_2nd_mult / 16.0) +
+                    (max_2nd_mult / 30.0) +
+                    (avg_3rd_mult / 20.0) +
                     (multi_rate / 45.0)
                 )
 
+                # Bonus for strong JJ tendency
+                jj_bonus = 0.0
+                if jj_tendency == "Aggressive JJ":
+                    jj_bonus = 1.1
+                elif jj_tendency == "Selective JJ":
+                    jj_bonus = 0.6
+
                 composite = (
-                    0.12 * success_score +
-                    0.48 * mult_score +
-                    0.15 * spin_score +
-                    0.25 * multi_size_bonus
+                    0.11 * success_score +
+                    0.42 * mult_score +
+                    0.14 * spin_score +
+                    0.23 * multi_size_bonus +
+                    0.10 * jj_bonus * 10  # scale into similar range
                 )
 
                 if first_total < 5:
@@ -532,7 +625,18 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 "rehit_metrics": rehit,
                 "spin_1st": spin_1st,
                 "spin_2nd": spin_2nd,
-                "spin_3rd": spin_3rd
+                "spin_3rd": spin_3rd,
+                # New fields
+                "budget_1st": budget_1st,
+                "budget_2nd": budget_2nd,
+                "budget_3rd": budget_3rd,
+                "median_1st": median_1st,
+                "multi_hit_rate": multi_rate,
+                "jj_tendency": jj_tendency,
+                "play_style": play_style,
+                "post_big_note": post_big_note,
+                "sample_quality": sample_quality,
+                "behaviour_profile": profile,
             })
 
     slot_scores = sorted(slot_scores, key=lambda x: x["composite"], reverse=True)
@@ -553,7 +657,17 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             "rehit_metrics": item["rehit_metrics"],
             "spin_1st": item["spin_1st"],
             "spin_2nd": item["spin_2nd"],
-            "spin_3rd": item["spin_3rd"]
+            "spin_3rd": item["spin_3rd"],
+            "budget_1st": item["budget_1st"],
+            "budget_2nd": item["budget_2nd"],
+            "budget_3rd": item["budget_3rd"],
+            "median_1st": item["median_1st"],
+            "multi_hit_rate": item["multi_hit_rate"],
+            "jj_tendency": item["jj_tendency"],
+            "play_style": item["play_style"],
+            "post_big_note": item["post_big_note"],
+            "sample_quality": item["sample_quality"],
+            "behaviour_profile": item["behaviour_profile"],
         })
     return records
 
