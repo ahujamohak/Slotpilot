@@ -1902,7 +1902,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 4  # bump when priority schema / ranking weights change
+SLOTS_DB_VERSION = 5  # bump when priority schema / ranking weights change
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -2003,23 +2003,7 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-# Session status — plain text, no markdown stars
-_sp = session_profit_status()
-_pnl_txt = f"+${_sp['pnl']:.0f}" if _sp['pnl'] >= 0 else f"-${abs(_sp['pnl']):.0f}"
-c_a, c_b, c_c = st.columns(3)
-c_a.write(f"Bankroll: ${_sp['current']:.0f}  (start ${_sp['start']:.0f})")
-c_b.write(f"Session P and L: {_pnl_txt}")
-c_c.write(f"Lock +${_sp['stop_win']:.0f} / Stop -${_sp['stop_loss']:.0f}")
-if _sp["status"] == "STOP_LOSS":
-    st.error(_sp["message"])
-elif _sp["status"] in ("LOCK_PROFIT", "TARGET_HIT"):
-    st.success(_sp["message"])
-elif _sp["status"] == "AHEAD":
-    st.info(_sp["message"])
-elif _sp["pnl"] == 0:
-    st.info("Session is flat. Stick to the plan.")
-else:
-    st.warning(_sp["message"])
+# Session P&L lives in the sidebar only — no duplicate strip on every page
 
 if st.session_state.active_tab == "🎯 Live Decision":
     st.subheader("🎯 Live Decision Engine")
