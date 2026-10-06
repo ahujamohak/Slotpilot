@@ -26,7 +26,7 @@ st.set_page_config(
 # Minimal CSS — avoid clipping headers / metrics
 st.markdown("""
 <style>
-    .block-container { padding-top: 0.4rem; padding-bottom: 2rem; max-width: 1100px; }
+    .block-container { padding-top: 2.5rem; padding-bottom: 2rem; max-width: 1100px; }
     .stButton > button { min-height: 2.75rem; border-radius: 10px; font-weight: 600; }
     .sug-card {
         border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px;
@@ -113,7 +113,7 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.session_target = 1550.0
     st.session_state.stop_win = 300.0          # lock profit / soft stop when +this
     st.session_state.stop_loss = 1000.0        # hard stop when -this
-    st.session_state.fade_gamble = False       # colour ≈50% — fade not needed by default
+    st.session_state.fade_gamble = True        # default ON — user prefers opposite colour
     st.session_state.active_tab = "🎯 Live Decision"
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
@@ -198,7 +198,7 @@ if "stop_win" not in st.session_state:
 if "stop_loss" not in st.session_state:
     st.session_state.stop_loss = 1000.0
 if "fade_gamble" not in st.session_state:
-    st.session_state.fade_gamble = False
+    st.session_state.fade_gamble = True
 # Ensure bankroll defaults if somehow missing
 if "session_start_bankroll" not in st.session_state:
     st.session_state.session_start_bankroll = 1250.0
