@@ -17,7 +17,39 @@ except ImportError:
 # ==========================================
 # 0. PAGE CONFIG & CONNECTION MANAGEMENT
 # ==========================================
-st.set_page_config(page_title="Slot Optimization & Execution Agent", layout="wide")
+st.set_page_config(
+    page_title="Slot Optimization & Execution Agent",
+    layout="wide",
+    initial_sidebar_state="collapsed",  # better default on mobile
+)
+
+# Mobile-first CSS polish
+st.markdown("""
+<style>
+    /* Tighter, cleaner mobile layout */
+    .block-container { padding-top: 0.8rem; padding-bottom: 2rem; max-width: 1100px; }
+    div[data-testid="stMetric"] { background: #f7f9fc; border-radius: 10px; padding: 8px 12px; }
+    div[data-testid="stMetric"] label { font-size: 0.75rem !important; }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.25rem !important; }
+    /* Larger touch targets */
+    .stButton > button { min-height: 2.6rem; border-radius: 10px; font-weight: 600; }
+    /* Suggestion cards */
+    .sug-card {
+        border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px;
+        background: #ffffff; margin-bottom: 0.6rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .sug-card.ai { border-left: 4px solid #7c3aed; }
+    .sug-card.stat { border-left: 4px solid #2563eb; }
+    /* Hide Streamlit branding clutter on small screens */
+    @media (max-width: 640px) {
+        [data-testid="stSidebar"] { min-width: 100% !important; }
+        .block-container { padding-left: 0.8rem; padding-right: 0.8rem; }
+        h1, h2, h3 { font-size: 1.15rem !important; }
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] { font-size: 1.05rem !important; }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
@@ -1540,8 +1572,39 @@ def run_ai_agent(user_prompt: str):
         except Exception as groq_err:
             return f"⚠️ AI providers failed:\n- Gemini: {gemini_err}\n- Groq: {groq_err}", "None"
 
+def parse_ai_gamble_response(text: str) -> dict:
+    """Extract Colour and Suit from AI free-text response. Returns dict with color, suit, reason, ok."""
+    if not text:
+        return {"ok": False, "color": None, "suit": None, "reason": ""}
+    color, suit, reason = None, None, ""
+    # Colour / Color
+    m = re.search(r"(?i)\bcolou?r\s*[:\-]\s*(red|black)\b", text)
+    if m:
+        color = m.group(1).title()
+    # Suit
+    m = re.search(r"(?i)\bsuit\s*[:\-]\s*(hearts|diamonds|clubs|spades)\b", text)
+    if m:
+        suit = m.group(1).title()
+    # Fallback: look for bare suit words near end
+    if not suit:
+        for s in SUITS:
+            if re.search(rf"(?i)\b{s}\b", text):
+                suit = s
+                break
+    if suit and not color:
+        color = SUIT_COLOR.get(suit)
+    # Reason
+    m = re.search(r"(?i)\breason\s*[:\-]\s*(.+)", text)
+    if m:
+        reason = m.group(1).strip().split("\n")[0][:200]
+    ok = suit in SUITS and color in ("Red", "Black")
+    return {"ok": ok, "color": color, "suit": suit, "reason": reason, "raw": text}
+
+
 def get_ai_gamble_suggestion(sequence: list, extended: list):
-    """Ask AI for a gamble suggestion. Tries Gemini first, falls back to Groq on any error."""
+    """Ask AI for a gamble suggestion. Tries Gemini first, falls back to Groq on any error.
+    Returns (raw_text, provider, parsed_dict).
+    """
     prompt = f"""
 You are helping with a casino gamble feature (colour/suit prediction).
 
@@ -1557,6 +1620,7 @@ Suit: Hearts / Diamonds / Clubs / Spades
 Reason: short explanation
 """
 
+    text, provider = None, "None"
     # 1. Try Gemini
     try:
         client = get_gemini_client()
@@ -1566,27 +1630,90 @@ Reason: short explanation
                 contents=prompt
             )
             text = response.text or "No response"
-            return text, "Gemini"
+            provider = "Gemini"
     except Exception as e:
         gemini_error = str(e)
+        text = None
     else:
         gemini_error = "No Gemini client"
 
     # 2. Fallback to Groq
-    try:
-        client = get_groq_client()
-        if client:
-            completion = client.chat.completions.create(
-                model=GROQ_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3
-            )
-            text = completion.choices[0].message.content
-            return f"{text}\n\n_(⚠️ Gemini unavailable → used Groq)_", "Groq (fallback)"
-    except Exception as e:
-        return f"AI error (both providers failed):\nGemini: {gemini_error}\nGroq: {e}", "None"
+    if text is None:
+        try:
+            client = get_groq_client()
+            if client:
+                completion = client.chat.completions.create(
+                    model=GROQ_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3
+                )
+                text = completion.choices[0].message.content
+                provider = "Groq (fallback)"
+        except Exception as e:
+            text = f"AI error (both providers failed):\nGemini: {gemini_error}\nGroq: {e}"
+            provider = "None"
 
-    return "AI unavailable (no API keys configured).", "None"
+    if text is None:
+        text = "AI unavailable (no API keys configured)."
+        provider = "None"
+
+    parsed = parse_ai_gamble_response(text)
+    return text, provider, parsed
+
+
+def compute_ai_vs_stat_performance(window: int = 50):
+    """
+    From Gamble Log rows that have a Source column (or inferred),
+    compute suit/colour accuracy for Statistical vs AI suggestions.
+    """
+    df = load_gamble_data()
+    if df is None or df.empty or "Actual_Next" not in df.columns:
+        return None
+
+    df = df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    # Normalise optional columns
+    if "Source" not in df.columns:
+        df["Source"] = "Statistical"  # legacy rows treated as statistical
+    else:
+        df["Source"] = df["Source"].fillna("Statistical").astype(str).str.strip()
+
+    def _acc(sub):
+        if sub.empty:
+            return None, None, 0
+        suit_ok = (sub["Suggested_Suit"].astype(str).str.strip().str.title() ==
+                   sub["Actual_Next"].astype(str).str.strip().str.title())
+        # colour from suit if needed
+        def _col(s):
+            s = str(s).strip().title()
+            return SUIT_COLOR.get(s, "")
+        color_ok = sub["Suggested_Suit"].map(_col) == sub["Actual_Next"].map(_col)
+        n = len(sub)
+        return (
+            round(float(suit_ok.mean()) * 100, 1) if n else None,
+            round(float(color_ok.mean()) * 100, 1) if n else None,
+            n,
+        )
+
+    stat = df[df["Source"].str.lower().isin(["statistical", "stat", "markov", ""])]
+    ai = df[df["Source"].str.lower().isin(["ai", "gemini", "groq"])]
+
+    # Prefer most recent window
+    stat_recent = stat.tail(window)
+    ai_recent = ai.tail(window)
+
+    s_suit, s_col, s_n = _acc(stat)
+    s_suit_r, s_col_r, s_n_r = _acc(stat_recent)
+    a_suit, a_col, a_n = _acc(ai)
+    a_suit_r, a_col_r, a_n_r = _acc(ai_recent)
+
+    return {
+        "stat_suit_all": s_suit, "stat_color_all": s_col, "stat_n_all": s_n,
+        "stat_suit_recent": s_suit_r, "stat_color_recent": s_col_r, "stat_n_recent": s_n_r,
+        "ai_suit_all": a_suit, "ai_color_all": a_col, "ai_n_all": a_n,
+        "ai_suit_recent": a_suit_r, "ai_color_recent": a_col_r, "ai_n_recent": a_n_r,
+        "window": window,
+    }
 
 def get_ai_priority_ranking(slots_db, selected_day, played_basket):
     """Ask AI to re-rank machines. Tries Gemini first, falls back to Groq."""
@@ -1690,13 +1817,19 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
+SLOTS_DB_VERSION = 3  # bump when priority schema changes
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
-if "slots_db" not in st.session_state or not st.session_state.slots_db:
+if (
+    "slots_db" not in st.session_state
+    or not st.session_state.slots_db
+    or st.session_state.get("slots_db_version") != SLOTS_DB_VERSION
+):
     st.session_state.slots_db = build_priority_dataset(
         live_sheet_df,
         st.session_state.selected_day,
         st.session_state.strict_day_penalty
     )
+    st.session_state.slots_db_version = SLOTS_DB_VERSION
 
 # ==========================================
 # 4. SIDEBAR & NAVIGATION
@@ -1877,25 +2010,41 @@ if st.session_state.active_tab == "🎯 Live Decision":
 
 elif st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
-    st.caption("Variable-Order Markov engine (longest context first: 5→4→3→2→1→base) + AI suggestion (Gemini → Groq fallback).")
+    st.caption("Statistical (Markov) + AI suggestions side by side. Log either with one tap. Track both accuracies.")
 
-    with st.expander("📉 Real backtested accuracy (walk-forward, Variable-Order Markov)", expanded=True):
+    def _fmt_pct(v):
+        return "n/a" if v is None else f"{v}%"
+
+    # ---- Performance: Statistical (walk-forward) + AI (logged Source) ----
+    with st.expander("📉 Accuracy — Statistical vs AI", expanded=True):
         bt = backtest_gamble_accuracy(window=50)
-        if bt is None:
-            st.info("Not enough logged history yet for a reliable backtest (need 45+ rows).")
-        else:
-            def _fmt(v):
-                return "n/a" if v is None else f"{v}%"
-            st.caption(
-                f"Each of the {bt['n_total']} logged rows after the first 40 was predicted using only the "
-                "rows logged before it (trying 5-card, then 4, then 3, then 2, then 1). This is what you would "
-                "really have got, not a score on data the engine has already seen."
-            )
-            b1, b2 = st.columns(2)
-            b1.metric("Suit right (all rows)", _fmt(bt["overall_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
-            b2.metric(f"Suit right (last {bt['n_recent']})", _fmt(bt["recent_suit_acc"]), f"guessing {bt['baseline_suit_acc']}%")
+        perf = compute_ai_vs_stat_performance(window=50)
 
-    st.markdown("### Enter the 5 cards (left → right)")
+        st.markdown("**Statistical engine** (honest walk-forward on full log)")
+        if bt is None:
+            st.info("Need ~45+ logged rows for statistical backtest.")
+        else:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Suit (all)", _fmt_pct(bt["overall_suit_acc"]), f"vs 25% random")
+            c2.metric(f"Suit (last {bt['n_recent']})", _fmt_pct(bt["recent_suit_acc"]))
+            c3.metric("Colour (all)", _fmt_pct(bt.get("overall_color_acc")))
+
+        st.markdown("**AI suggestions** (from rows you logged with Source = AI)")
+        if perf is None or (perf.get("ai_n_all") or 0) == 0:
+            st.info("No AI-logged results yet. Use the AI card’s ✅ Correct button to start tracking.")
+        else:
+            a1, a2, a3 = st.columns(3)
+            a1.metric("Suit (all AI)", _fmt_pct(perf["ai_suit_all"]), f"n={perf['ai_n_all']}")
+            a2.metric(f"Suit (last {perf['window']} AI)", _fmt_pct(perf["ai_suit_recent"]), f"n={perf['ai_n_recent']}")
+            a3.metric("Colour (all AI)", _fmt_pct(perf["ai_color_all"]))
+            if perf.get("stat_n_all"):
+                st.caption(
+                    f"Head-to-head on logged rows — Stat suit { _fmt_pct(perf['stat_suit_all']) } "
+                    f"(n={perf['stat_n_all']}) vs AI suit { _fmt_pct(perf['ai_suit_all']) } (n={perf['ai_n_all']})."
+                )
+
+    # ---- Card entry ----
+    st.markdown("### Enter the 5 cards")
     cols = st.columns(4)
     for i, suit in enumerate(SUITS):
         with cols[i]:
@@ -1908,15 +2057,14 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
     seq = st.session_state.gamble_sequence
 
     if seq:
-        st.markdown("#### Current sequence")
         html_parts = [suit_html(s) for s in seq]
-        st.markdown(" &nbsp;→&nbsp; ".join(html_parts) + f" &nbsp;&nbsp;({len(seq)}/5)", unsafe_allow_html=True)
-        if st.button("↺ Clear sequence (new machine)", key="clear_seq"):
+        st.markdown("**Sequence:** " + " → ".join(html_parts) + f" &nbsp;({len(seq)}/5)", unsafe_allow_html=True)
+        if st.button("↺ Clear sequence", key="clear_seq", use_container_width=True):
             st.session_state.gamble_sequence = []
             st.session_state.ai_gamble_suggestion = None
             st.rerun()
     else:
-        st.info("Click the four suit buttons above to enter the cards.")
+        st.info("Tap the four suits above to build the sequence.")
 
     if len(seq) == 5:
         sug = get_gamble_suggestion(seq)
@@ -1924,99 +2072,147 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         recent = df_full.tail(100) if len(df_full) > 100 else df_full
         extended = _build_extended_sequence(seq, recent)
 
-        st.markdown("---")
-        st.markdown("### History-based suggestion (Variable-Order Markov)")
-        
-        col_sug, col_btn = st.columns([3, 1])
-        with col_sug:
-            st.markdown(
-                f"**Colour** &nbsp;&nbsp; {color_html(sug['color'])}<br>"
-                f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
-                unsafe_allow_html=True
-            )
-            conf = sug.get("confidence", "None")
-            note = sug.get("note", "")
+        # ---- Statistical card ----
+        st.markdown("### Statistical suggestion")
+        st.markdown('<div class="sug-card stat">', unsafe_allow_html=True)
+        st.markdown(
+            f"**Colour** &nbsp; {color_html(sug['color'])}<br>"
+            f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
+            unsafe_allow_html=True
+        )
+        conf = sug.get("confidence", "None")
+        note = sug.get("note", "")
+        match_len = sug.get("match_len", 0) or 0
+        len_tag = f"{match_len}-card" if match_len else "base-rate"
+        if conf == "Strong":
+            st.success(f"**Strong {len_tag}** – {note}")
+        elif conf == "Moderate":
+            st.info(f"**Moderate {len_tag}** – {note}")
+        elif conf == "Weak":
+            st.warning(f"**Weak {len_tag}** – {note}")
+        else:
+            st.caption(f"No signal – {note}")
+        if sug.get("outcomes"):
+            breakdown = ", ".join(f"{s} ×{c}" for s, c in sorted(sug["outcomes"].items(), key=lambda x: -x[1]))
+            st.caption(f"Seen {sug.get('match_count', 0)}× · Followed by: {breakdown}")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-            match_len = sug.get("match_len", 0) or 0
-            len_tag = f"{match_len}-card" if match_len else "base-rate"
-            if conf == "Strong":
-                st.success(f"**Strong {len_tag} match** – {note}")
-            elif conf == "Moderate":
-                st.info(f"**Moderate {len_tag} match** – {note}")
-            elif conf == "Weak":
-                st.warning(f"**Weak {len_tag} match** – {note}")
-            else:
-                st.caption(f"No signal – {note}")
+        if st.button("✅ Correct – Log Statistical", key="quick_correct", use_container_width=True, type="primary"):
+            actual = sug["suit"]
+            now = datetime.now()
+            record = {
+                "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "Date": now.strftime("%m/%d/%Y"),
+                "Day": now.strftime("%A"),
+                "Card1": seq[0], "Card2": seq[1], "Card3": seq[2], "Card4": seq[3], "Card5": seq[4],
+                "Sequence": "-".join(seq),
+                "Suggested_Color": sug["color"],
+                "Suggested_Suit": sug["suit"],
+                "Actual_Next": actual,
+                "Actual_Color": SUIT_COLOR[actual],
+                "Source": "Statistical",
+            }
+            if append_gamble_record(record):
+                st.session_state.gamble_sequence = seq[1:] + [actual]
+                st.session_state.ai_gamble_suggestion = None
+                st.success("Logged Statistical as Correct. Sequence rolled forward.")
+                st.rerun()
 
-            if sug.get("outcomes"):
-                breakdown = ", ".join(f"{s} ×{c}" for s, c in sorted(sug["outcomes"].items(), key=lambda x: -x[1]))
-                st.caption(
-                    f"Match length: {match_len}-card | Times seen: {sug.get('match_count', 0)} | "
-                    f"What followed: {breakdown}"
-                )
-            else:
-                st.caption(f"Match length: none | Times seen: 0")
-        with col_btn:
-            st.write("")
-            if st.button("✅ Correct – Log this", key="quick_correct", use_container_width=True, type="primary"):
-                actual = sug["suit"]
-                now = datetime.now()
-                record = {
-                    "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-                    "Date": now.strftime("%m/%d/%Y"),
-                    "Day": now.strftime("%A"),
-                    "Card1": seq[0],
-                    "Card2": seq[1],
-                    "Card3": seq[2],
-                    "Card4": seq[3],
-                    "Card5": seq[4],
-                    "Sequence": "-".join(seq),
-                    "Suggested_Color": sug["color"],
-                    "Suggested_Suit": sug["suit"],
-                    "Actual_Next": actual,
-                    "Actual_Color": SUIT_COLOR[actual],
-                }
-                if append_gamble_record(record):
-                    st.session_state.gamble_sequence = seq[1:] + [actual]
-                    st.session_state.ai_gamble_suggestion = None
-                    st.success("Logged as Correct. Sequence rolled forward.")
-                    st.rerun()
-
-        st.markdown("---")
-        st.markdown("### AI suggestion (uses full history patterns)")
-        
-        if st.button("🤖 Ask AI for better suggestion", key="ask_ai_gamble"):
-            with st.spinner("Analyzing full history patterns (Gemini → Groq)..."):
-                ai_text, provider = get_ai_gamble_suggestion(seq, extended)
-                st.session_state.ai_gamble_suggestion = (ai_text, provider)
+        # ---- AI card ----
+        st.markdown("### AI suggestion")
+        if st.button("🤖 Ask AI for suggestion", key="ask_ai_gamble", use_container_width=True):
+            with st.spinner("AI analysing patterns…"):
+                ai_text, provider, parsed = get_ai_gamble_suggestion(seq, extended)
+                st.session_state.ai_gamble_suggestion = (ai_text, provider, parsed)
                 st.rerun()
 
         if st.session_state.ai_gamble_suggestion:
-            ai_text, provider = st.session_state.ai_gamble_suggestion
-            st.markdown(ai_text)
-            st.caption(f"_Source: {provider}_")
+            # Support old 2-tuple and new 3-tuple
+            packed = st.session_state.ai_gamble_suggestion
+            if len(packed) == 3:
+                ai_text, provider, parsed = packed
+            else:
+                ai_text, provider = packed
+                parsed = parse_ai_gamble_response(ai_text)
 
-        st.markdown("---")
-        st.markdown("### Log the real next card (if both suggestions were wrong)")
+            st.markdown('<div class="sug-card ai">', unsafe_allow_html=True)
+            if parsed.get("ok"):
+                st.markdown(
+                    f"**Colour** &nbsp; {color_html(parsed['color'])}<br>"
+                    f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp; {suit_html(parsed['suit'])}",
+                    unsafe_allow_html=True
+                )
+                if parsed.get("reason"):
+                    st.caption(parsed["reason"])
+                st.caption(f"Source: {provider}")
+            else:
+                st.warning("Could not parse Colour/Suit from AI reply. Raw response below.")
+                st.markdown(ai_text)
+                st.caption(f"Source: {provider}")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            if parsed.get("ok"):
+                if st.button("✅ Correct – Log AI", key="quick_correct_ai", use_container_width=True, type="primary"):
+                    actual = parsed["suit"]
+                    now = datetime.now()
+                    record = {
+                        "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+                        "Date": now.strftime("%m/%d/%Y"),
+                        "Day": now.strftime("%A"),
+                        "Card1": seq[0], "Card2": seq[1], "Card3": seq[2], "Card4": seq[3], "Card5": seq[4],
+                        "Sequence": "-".join(seq),
+                        "Suggested_Color": parsed["color"],
+                        "Suggested_Suit": parsed["suit"],
+                        "Actual_Next": actual,
+                        "Actual_Color": SUIT_COLOR[actual],
+                        "Source": "AI",
+                    }
+                    if append_gamble_record(record):
+                        st.session_state.gamble_sequence = seq[1:] + [actual]
+                        st.session_state.ai_gamble_suggestion = None
+                        st.success("Logged AI as Correct. Sequence rolled forward.")
+                        st.rerun()
+
+            with st.expander("Raw AI response"):
+                st.markdown(ai_text)
+
+        # ---- Manual log when both wrong ----
+        st.markdown("### Both wrong? Log the real card")
         with st.form("log_gamble_result", clear_on_submit=False):
             actual = st.selectbox("Actual next card", options=SUITS, index=0, key="actual_select")
-            submitted = st.form_submit_button("💾 Log & roll sequence forward", use_container_width=True)
+            # Which suggestion to attribute the miss to
+            source_choice = st.radio(
+                "Attribute this outcome to",
+                options=["Statistical", "AI", "Both / Unknown"],
+                horizontal=True,
+                key="manual_source",
+            )
+            submitted = st.form_submit_button("💾 Log & roll forward", use_container_width=True)
             if submitted:
                 now = datetime.now()
+                # Prefer AI parsed suit as "suggested" if attributing to AI and we have it
+                if source_choice == "AI" and st.session_state.ai_gamble_suggestion:
+                    packed = st.session_state.ai_gamble_suggestion
+                    parsed = packed[2] if len(packed) == 3 else parse_ai_gamble_response(packed[0])
+                    sug_color = parsed.get("color") or sug["color"]
+                    sug_suit = parsed.get("suit") or sug["suit"]
+                    src = "AI"
+                elif source_choice == "Statistical":
+                    sug_color, sug_suit, src = sug["color"], sug["suit"], "Statistical"
+                else:
+                    sug_color, sug_suit, src = sug["color"], sug["suit"], "Statistical"
+
                 record = {
                     "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
                     "Date": now.strftime("%m/%d/%Y"),
                     "Day": now.strftime("%A"),
-                    "Card1": seq[0],
-                    "Card2": seq[1],
-                    "Card3": seq[2],
-                    "Card4": seq[3],
-                    "Card5": seq[4],
+                    "Card1": seq[0], "Card2": seq[1], "Card3": seq[2], "Card4": seq[3], "Card5": seq[4],
                     "Sequence": "-".join(seq),
-                    "Suggested_Color": sug["color"],
-                    "Suggested_Suit": sug["suit"],
+                    "Suggested_Color": sug_color,
+                    "Suggested_Suit": sug_suit,
                     "Actual_Next": actual,
                     "Actual_Color": SUIT_COLOR[actual],
+                    "Source": src,
                 }
                 if append_gamble_record(record):
                     st.session_state.gamble_sequence = seq[1:] + [actual]
@@ -2024,14 +2220,20 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
                     st.success("Logged. Sequence rolled forward.")
                     st.rerun()
 
+    # ---- Recent log ----
     st.markdown("---")
     st.markdown("### Recent log (last 12)")
     gdf = load_gamble_data()
     if not gdf.empty:
-        show_cols = [c for c in ["Timestamp", "Sequence", "Suggested_Color", "Suggested_Suit", "Actual_Next", "Actual_Color"] if c in gdf.columns]
+        show_cols = [c for c in ["Timestamp", "Sequence", "Suggested_Suit", "Actual_Next", "Source"] if c in gdf.columns]
+        # ensure Source column visible even if missing historically
+        if "Source" not in gdf.columns:
+            gdf = gdf.copy()
+            gdf["Source"] = "Statistical"
+            show_cols = [c for c in ["Timestamp", "Sequence", "Suggested_Suit", "Actual_Next", "Source"] if c in gdf.columns]
         recent_df = gdf[show_cols].tail(12).iloc[::-1].reset_index(drop=True)
 
-        st.caption("Select any records added by mistake and delete them. Deletion updates the Google Sheet immediately.")
+        st.caption("Select mistakes to delete. Deletion updates the Google Sheet.")
 
         selected_timestamps = []
         for idx, row in recent_df.iterrows():
@@ -2039,25 +2241,24 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             seq_str = str(row.get("Sequence", ""))
             sug_suit = str(row.get("Suggested_Suit", ""))
             act_next = str(row.get("Actual_Next", ""))
-            act_color = str(row.get("Actual_Color", ""))
+            src = str(row.get("Source", "Statistical"))
 
-            col_chk, col_info = st.columns([0.08, 0.92])
+            col_chk, col_info = st.columns([0.1, 0.9])
             with col_chk:
                 if st.checkbox("", key=f"del_chk_{ts}_{idx}", label_visibility="collapsed"):
                     selected_timestamps.append(ts)
             with col_info:
                 st.markdown(
-                    f"`{ts}` &nbsp;|&nbsp; **{seq_str}** &nbsp;→&nbsp; "
-                    f"Suggested: {sug_suit} &nbsp;|&nbsp; Actual: **{act_next}** ({act_color})"
+                    f"`{ts}` · **{seq_str}** → {sug_suit} · actual **{act_next}** · _{src}_"
                 )
 
         if selected_timestamps:
-            if st.button(f"🗑️ Delete {len(selected_timestamps)} selected record(s)", type="primary", key="delete_selected_gamble"):
+            if st.button(f"🗑️ Delete {len(selected_timestamps)} selected", type="primary", key="delete_selected_gamble"):
                 if delete_gamble_records(selected_timestamps):
-                    st.success(f"Deleted {len(selected_timestamps)} record(s) from Google Sheet.")
+                    st.success(f"Deleted {len(selected_timestamps)} record(s).")
                     st.rerun()
                 else:
-                    st.error("Delete failed. Check connection or try again.")
+                    st.error("Delete failed.")
         else:
             st.caption("No records selected.")
     else:
@@ -2065,7 +2266,10 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
 
 elif st.session_state.active_tab == "📊 Today's Priority Board":
     st.subheader("Today's Priority Board")
-    st.caption("Statistical ranking + AI-refined ranking (Gemini → Groq fallback)")
+    st.caption(
+        "Per-slot ranking using KM-aware spin budgets, multi-hit rate, JJ tendency and post-big-win behaviour. "
+        "AI-refined ranking still available below."
+    )
 
     filtered_slots = []
     for s in st.session_state.slots_db:
@@ -2080,20 +2284,28 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
     table_data = []
     for rank, item in enumerate(current_display, 1):
-        spin1 = item.get("spin_1st")
+        b1 = item.get("budget_1st")
+        b2 = item.get("budget_2nd")
+        b3 = item.get("budget_3rd")
+        multi = item.get("multi_hit_rate")
         table_data.append({
             "Rank": rank,
             "Family": item.get("family", "N/A"),
             "Slot": item.get("slot", "N/A"),
-            "Spin required for first hit": spin1 if spin1 is not None else "—",
-            "Spin needed for 2nd hit": item.get("spin_2nd") if item.get("spin_2nd") is not None else "—",
-            "Spin needed for 3rd hit": item.get("spin_3rd") if item.get("spin_3rd") is not None else "—",
-            "Recommended Max Check-in": get_recommended_checkin(spin1),
+            "Play Style": item.get("play_style", "—"),
+            "JJ Tendency": item.get("jj_tendency", "—"),
+            "Multi-Hit %": f"{multi:.0f}%" if multi is not None else "—",
+            "Budget 1st": int(b1) if b1 is not None else "—",
+            "Budget 2nd": int(b2) if b2 is not None else "—",
+            "Budget 3rd": int(b3) if b3 is not None else "—",
+            "Post-Big Note": item.get("post_big_note", "—"),
+            "Sample": item.get("sample_quality", "—"),
+            "Check-in $": get_recommended_checkin(b1 if b1 is not None else item.get("spin_1st")),
         })
 
     df_priority = pd.DataFrame(table_data)
 
-    st.markdown("### Statistical Ranking")
+    st.markdown("### Statistical Ranking (enhanced)")
     if df_priority.empty:
         st.info("No slots with enough data.")
     else:
@@ -2109,15 +2321,20 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "Rank": st.column_config.NumberColumn("Rank", width="small"),
                 "Family": st.column_config.TextColumn("Family", width="medium"),
                 "Slot": st.column_config.TextColumn("Slot", width="medium"),
-                "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium"),
-                "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium"),
-                "Spin needed for 3rd hit": st.column_config.NumberColumn("Spin needed for 3rd hit", width="medium"),
-                "Recommended Max Check-in": st.column_config.NumberColumn("Recommended Max Check-in", width="medium"),
+                "Play Style": st.column_config.TextColumn("Play Style", width="medium"),
+                "JJ Tendency": st.column_config.TextColumn("JJ Tendency", width="small"),
+                "Multi-Hit %": st.column_config.TextColumn("Multi-Hit %", width="small"),
+                "Budget 1st": st.column_config.NumberColumn("Budget 1st", width="small"),
+                "Budget 2nd": st.column_config.NumberColumn("Budget 2nd", width="small"),
+                "Budget 3rd": st.column_config.NumberColumn("Budget 3rd", width="small"),
+                "Post-Big Note": st.column_config.TextColumn("Post-Big Note", width="medium"),
+                "Sample": st.column_config.TextColumn("Sample", width="small"),
+                "Check-in $": st.column_config.NumberColumn("Check-in $", width="small"),
             }
         )
 
     if len(filtered_slots) > st.session_state.display_limit:
-        if st.button("➕ Load 15 MoreSlots"):
+        if st.button("➕ Load 15 More Slots"):
             st.session_state.display_limit += 15
             st.rerun()
 
@@ -2144,22 +2361,29 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
         parsed_list, provider, raw_text = st.session_state.ai_priority_result
         if parsed_list:
             st.success(f"AI ranking ready ({provider}) — showing {len(parsed_list)} machines")
-            
+
             ai_table = []
             for rank, item in enumerate(parsed_list, 1):
-                spin1 = item.get("spin_1st")
+                b1 = item.get("budget_1st") or item.get("spin_1st")
+                b2 = item.get("budget_2nd") or item.get("spin_2nd")
+                b3 = item.get("budget_3rd") or item.get("spin_3rd")
+                multi = item.get("multi_hit_rate")
                 ai_table.append({
                     "Rank": rank,
                     "Family": item.get("family", "N/A"),
                     "Slot": item.get("slot", "N/A"),
-                    "Spin required for first hit": spin1 if spin1 is not None else "—",
-                    "Spin needed for 2nd hit": item.get("spin_2nd") if item.get("spin_2nd") is not None else "—",
-                    "Spin needed for 3rd hit": item.get("spin_3rd") if item.get("spin_3rd") is not None else "—",
-                    "Recommended Max Check-in": get_recommended_checkin(spin1),
+                    "Play Style": item.get("play_style", "—"),
+                    "JJ Tendency": item.get("jj_tendency", "—"),
+                    "Multi-Hit %": f"{multi:.0f}%" if multi is not None else "—",
+                    "Budget 1st": int(b1) if b1 is not None else "—",
+                    "Budget 2nd": int(b2) if b2 is not None else "—",
+                    "Budget 3rd": int(b3) if b3 is not None else "—",
+                    "Post-Big Note": item.get("post_big_note", "—"),
+                    "Sample": item.get("sample_quality", "—"),
                 })
-            
+
             df_ai = pd.DataFrame(ai_table)
-            
+
             csv_ai = df_ai.to_csv(index=False, sep="\t")
             with st.expander("📋 Click here → Select All → Copy (AI Ranking)"):
                 st.code(csv_ai, language=None)
@@ -2172,10 +2396,14 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                     "Rank": st.column_config.NumberColumn("Rank", width="small"),
                     "Family": st.column_config.TextColumn("Family", width="medium"),
                     "Slot": st.column_config.TextColumn("Slot", width="medium"),
-                    "Spin required for first hit": st.column_config.NumberColumn("Spin required for first hit", width="medium"),
-                    "Spin needed for 2nd hit": st.column_config.NumberColumn("Spin needed for 2nd hit", width="medium"),
-                    "Spin needed for 3rd hit": st.column_config.NumberColumn("Spin needed for 3rd hit", width="medium"),
-                    "Recommended Max Check-in": st.column_config.NumberColumn("Recommended Max Check-in", width="medium"),
+                    "Play Style": st.column_config.TextColumn("Play Style", width="medium"),
+                    "JJ Tendency": st.column_config.TextColumn("JJ Tendency", width="small"),
+                    "Multi-Hit %": st.column_config.TextColumn("Multi-Hit %", width="small"),
+                    "Budget 1st": st.column_config.NumberColumn("Budget 1st", width="small"),
+                    "Budget 2nd": st.column_config.NumberColumn("Budget 2nd", width="small"),
+                    "Budget 3rd": st.column_config.NumberColumn("Budget 3rd", width="small"),
+                    "Post-Big Note": st.column_config.TextColumn("Post-Big Note", width="medium"),
+                    "Sample": st.column_config.TextColumn("Sample", width="small"),
                 }
             )
         else:
