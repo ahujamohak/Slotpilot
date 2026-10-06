@@ -23,10 +23,10 @@ st.set_page_config(
     initial_sidebar_state="auto",
 )
 
-# Safe CSS — do NOT override Streamlit sidebar width or metric label visibility
+# Minimal CSS — avoid clipping headers / metrics
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1100px; }
+    .block-container { padding-top: 0.4rem; padding-bottom: 2rem; max-width: 1100px; }
     .stButton > button { min-height: 2.75rem; border-radius: 10px; font-weight: 600; }
     .sug-card {
         border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px;
@@ -35,13 +35,8 @@ st.markdown("""
     }
     .sug-card.ai { border-left: 4px solid #7c3aed; }
     .sug-card.stat { border-left: 4px solid #2563eb; }
-    .session-banner {
-        border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 16px;
-        background: #f8fafc; margin-bottom: 12px; font-size: 0.95rem; line-height: 1.45;
-    }
-    .session-banner b { font-weight: 700; }
     @media (max-width: 640px) {
-        .block-container { padding-left: 0.75rem; padding-right: 0.75rem; }
+        .block-container { padding-left: 0.6rem; padding-right: 0.6rem; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -113,12 +108,12 @@ def persist_session_state():
 def reset_all_state(wipe_persisted=True):
     st.session_state.played_basket = []
     st.session_state.display_limit = 30
-    st.session_state.session_start_bankroll = 1000.0
-    st.session_state.current_bankroll = 1000.0
-    st.session_state.session_target = 1800.0
-    st.session_state.stop_win = 400.0          # lock profit / soft stop when +this
-    st.session_state.stop_loss = 300.0         # hard stop when -this
-    st.session_state.fade_gamble = True        # default ON – model has been anti-predictive
+    st.session_state.session_start_bankroll = 1250.0
+    st.session_state.current_bankroll = 1250.0
+    st.session_state.session_target = 1550.0
+    st.session_state.stop_win = 300.0          # lock profit / soft stop when +this
+    st.session_state.stop_loss = 1000.0        # hard stop when -this
+    st.session_state.fade_gamble = False       # colour ≈50% — fade not needed by default
     st.session_state.active_tab = "🎯 Live Decision"
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
@@ -199,11 +194,18 @@ if "active_tab" not in st.session_state:
 if "ai_gamble_suggestion" not in st.session_state:
     st.session_state.ai_gamble_suggestion = None
 if "stop_win" not in st.session_state:
-    st.session_state.stop_win = 400.0
+    st.session_state.stop_win = 300.0
 if "stop_loss" not in st.session_state:
-    st.session_state.stop_loss = 300.0
+    st.session_state.stop_loss = 1000.0
 if "fade_gamble" not in st.session_state:
-    st.session_state.fade_gamble = True
+    st.session_state.fade_gamble = False
+# Ensure bankroll defaults if somehow missing
+if "session_start_bankroll" not in st.session_state:
+    st.session_state.session_start_bankroll = 1250.0
+if "current_bankroll" not in st.session_state:
+    st.session_state.current_bankroll = 1250.0
+if "session_target" not in st.session_state:
+    st.session_state.session_target = 1550.0
 if "ai_priority_result" not in st.session_state:
     st.session_state.ai_priority_result = None
 
@@ -2001,18 +2003,15 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 # 5. DASHBOARD VIEWS
 # ==========================================
 
-# Persistent session banner (plain HTML — labels always visible, no Streamlit metric glitch)
+# Session status — plain text only (no custom HTML that can clip on mobile/desktop)
 _sp = session_profit_status()
 _pnl_txt = f"+${_sp['pnl']:.0f}" if _sp['pnl'] >= 0 else f"-${abs(_sp['pnl']):.0f}"
-st.markdown(
-    f"""<div class="session-banner">
-    <b>Bankroll:</b> ${_sp['current']:.0f}
-    &nbsp;·&nbsp; <b>Session P&amp;L:</b> {_pnl_txt}
-    &nbsp;·&nbsp; <b>Start:</b> ${_sp['start']:.0f}
-    &nbsp;·&nbsp; <b>Profit-lock at:</b> +${_sp['stop_win']:.0f}
-    &nbsp;·&nbsp; <b>Stop-loss at:</b> −${_sp['stop_loss']:.0f}
-    </div>""",
-    unsafe_allow_html=True,
+st.caption(
+    f"**Bankroll** ${_sp['current']:.0f}   |   "
+    f"**Session P&L** {_pnl_txt}   |   "
+    f"**Start** ${_sp['start']:.0f}   |   "
+    f"**Profit-lock** +${_sp['stop_win']:.0f}   |   "
+    f"**Stop-loss** −${_sp['stop_loss']:.0f}"
 )
 if _sp["status"] == "STOP_LOSS":
     st.error(f"🛑 {_sp['message']}")
@@ -2020,6 +2019,8 @@ elif _sp["status"] in ("LOCK_PROFIT", "TARGET_HIT"):
     st.success(f"🔒 {_sp['message']}")
 elif _sp["status"] == "AHEAD":
     st.info(f"✅ {_sp['message']}")
+elif _sp["pnl"] == 0:
+    st.info(f"Session flat (${_sp['current']:.0f}). Stick to plan.")
 else:
     st.warning(f"📉 {_sp['message']}")
 
