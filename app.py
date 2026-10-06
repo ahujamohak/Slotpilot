@@ -676,10 +676,10 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 sample_score = min(10.0, first_total / 5.0)
 
                 composite = (
-                    0.28 * ev_score +          # primary: realized feature EV
+                    0.32 * ev_score +          # primary: realized feature EV
                     0.18 * mult_score +
                     0.12 * success_score +
-                    0.12 * spin_score +
+                    0.08 * spin_score +        # fast spins alone must not crown the board
                     0.15 * multi_size_bonus +
                     0.08 * jj_bonus * 10 +
                     0.07 * sample_score
@@ -694,6 +694,11 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                     composite *= 0.90
                 if sample_quality == "Low":
                     composite *= 0.50
+                # Low multi-hit should not rank as primary JJ targets
+                if multi_rate < 30:
+                    composite *= 0.70
+                elif multi_rate < 40:
+                    composite *= 0.88
 
             # Manual tilts disabled for ranking — data only
             # (UPSIDE_BOOST / GRINDER_PENALTY kept in file for reference but not applied)
@@ -1017,40 +1022,49 @@ def build_slot_behaviour_profile(family_name, slot_name, live_df):
         def _timing_bucket(sp):
             return "early" if sp <= spin_med else "late"
 
-        # Build ordered list of feature events by row order
-        ordered = any_hits.sort_index()
+        # True continues only: attempt-1 feature then attempt-2 (hit or walk).
+        # Chaining every feature in the log was inflating re-hit rates to ~100%.
         post = {}
         for size in ("small", "medium", "large"):
             for timing in ("early", "late"):
                 post[f"{size}_{timing}"] = {"n": 0, "rehit": 0, "spins": [], "cens_spins": []}
             post[size] = {"n": 0, "rehit": 0, "spins": [], "cens_spins": []}
 
-        idx_list = list(ordered.index)
-        for i, idx in enumerate(idx_list):
-            row = ordered.loc[idx]
+        firsts = parsed[
+            ((parsed["_hit"] == 1) | (parsed["_feature_win_num"] == 1)) &
+            (parsed["_mult"] > 0) &
+            (parsed["_spins"].notna()) &
+            (~parsed["_is_censored"])
+        ]
+        for idx, row in firsts.iterrows():
             size = _size_bucket(float(row["_mult"]))
             timing = _timing_bucket(float(row["_spins"]))
             key = f"{size}_{timing}"
             post[key]["n"] += 1
             post[size]["n"] += 1
 
-            # Next feature after this one?
-            if i + 1 < len(idx_list):
-                nxt = ordered.loc[idx_list[i + 1]]
-                # Only count if same "session-ish" — next row is a later feature
-                # Use spin count of next as gap proxy
-                if pd.notna(nxt["_spins"]):
+            after = parsed[parsed.index > idx].head(10)
+            cont = after[
+                (after["_attempt"] == 2) |
+                (after["_feature_win_num"] == 2) |
+                (after["_hit"] == 2)
+            ]
+            if cont.empty:
+                continue
+            c0 = cont.iloc[0]
+            is_cens = bool(c0["_is_censored"]) if pd.notna(c0.get("_is_censored")) else False
+            hit_v = float(c0["_hit"]) if pd.notna(c0.get("_hit")) else 0.0
+            fw = float(c0["_feature_win_num"]) if pd.notna(c0.get("_feature_win_num")) else 0.0
+            if is_cens or (hit_v == 0 and fw < 2):
+                if pd.notna(c0["_spins"]):
+                    post[key]["cens_spins"].append(float(c0["_spins"]))
+                    post[size]["cens_spins"].append(float(c0["_spins"]))
+            elif hit_v > 0 or fw >= 2:
+                if pd.notna(c0["_spins"]):
                     post[key]["rehit"] += 1
-                    post[key]["spins"].append(float(nxt["_spins"]))
+                    post[key]["spins"].append(float(c0["_spins"]))
                     post[size]["rehit"] += 1
-                    post[size]["spins"].append(float(nxt["_spins"]))
-            else:
-                # Look for a walk-off after this feature in the log
-                after = parsed[(parsed.index > idx) & (parsed["_is_censored"] == True) & (parsed["_spins"].notna())]
-                if not after.empty:
-                    csp = float(after.iloc[0]["_spins"])
-                    post[key]["cens_spins"].append(csp)
-                    post[size]["cens_spins"].append(csp)
+                    post[size]["spins"].append(float(c0["_spins"]))
 
         def _pack(cell):
             n = cell["n"]
@@ -1976,7 +1990,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 6  # pooled features + size/timing post-win
+SLOTS_DB_VERSION = 7  # fix post-win inflation + ranking penalties
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
