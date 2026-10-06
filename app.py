@@ -64,10 +64,9 @@ TAB_OPTIONS = [
     "🎯 Live Decision",
     "🃏 Gamble Analyzer",
     "📊 Today's Priority Board",
-    "📈 Overall Performance",
-    # "📝 Live Data Entry",
-    "🤖 Interactive AI Agent",
-    "🧺 Played Basket & Overrides"
+    "🧺 Session & Basket",
+    # Kept available via sidebar tools, not primary nav:
+    # "🤖 Interactive AI Agent",
 ]
 
 SUITS = ["Hearts", "Diamonds", "Clubs", "Spades"]
@@ -122,7 +121,10 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.session_start_bankroll = 1000.0
     st.session_state.current_bankroll = 1000.0
     st.session_state.session_target = 1800.0
-    st.session_state.active_tab = "🃏 Gamble Analyzer"
+    st.session_state.stop_win = 400.0          # lock profit / soft stop when +this
+    st.session_state.stop_loss = 300.0         # hard stop when -this
+    st.session_state.fade_gamble = True        # default ON – model has been anti-predictive
+    st.session_state.active_tab = "🎯 Live Decision"
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
     st.session_state.selected_day = datetime.now().strftime("%A")
@@ -133,6 +135,41 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.ai_gamble_suggestion = None
     if wipe_persisted:
         persist_session_state()
+
+
+def session_profit_status():
+    """Return locked profit and traffic-light status for the session."""
+    start = float(st.session_state.get("session_start_bankroll", 1000) or 1000)
+    current = float(st.session_state.get("current_bankroll", 1000) or 1000)
+    target = float(st.session_state.get("session_target", 1800) or 1800)
+    stop_win = float(st.session_state.get("stop_win", 400) or 400)
+    stop_loss = float(st.session_state.get("stop_loss", 300) or 300)
+    pnl = current - start
+    if pnl <= -stop_loss:
+        status = "STOP_LOSS"
+        message = f"Stop-loss hit (−${abs(pnl):.0f}). Walk. Session over."
+    elif pnl >= stop_win:
+        status = "LOCK_PROFIT"
+        message = f"Profit lock zone (+${pnl:.0f}). Only A-tier machines or leave."
+    elif current >= target:
+        status = "TARGET_HIT"
+        message = f"Target reached (${current:.0f}). Strongly consider leaving."
+    elif pnl > 0:
+        status = "AHEAD"
+        message = f"Ahead +${pnl:.0f}. Protect it — no hero calls."
+    else:
+        status = "BEHIND"
+        message = f"Behind ${pnl:.0f}. Stick to plan; do not chase."
+    return {
+        "pnl": pnl,
+        "status": status,
+        "message": message,
+        "start": start,
+        "current": current,
+        "target": target,
+        "stop_win": stop_win,
+        "stop_loss": stop_loss,
+    }
 
 if "played_basket" not in st.session_state:
     restored = load_persisted_state()
@@ -166,6 +203,12 @@ if "active_tab" not in st.session_state:
     st.session_state.active_tab = "🃏 Gamble Analyzer"
 if "ai_gamble_suggestion" not in st.session_state:
     st.session_state.ai_gamble_suggestion = None
+if "stop_win" not in st.session_state:
+    st.session_state.stop_win = 400.0
+if "stop_loss" not in st.session_state:
+    st.session_state.stop_loss = 300.0
+if "fade_gamble" not in st.session_state:
+    st.session_state.fade_gamble = True
 if "ai_priority_result" not in st.session_state:
     st.session_state.ai_priority_result = None
 
@@ -1341,10 +1384,38 @@ def _suggest_core(sequence: list, df: pd.DataFrame):
         "color_strength": 50.0,
     }
 
-def get_gamble_suggestion(sequence: list):
-    """Public API used by the UI – Variable-Order Markov."""
+def get_gamble_suggestion(sequence: list, fade_color: bool = False):
+    """
+    Public API – Variable-Order Markov.
+    If fade_color=True, invert the recommended colour (and pick the most common
+    suit of the opposite colour from the same context counts when possible).
+    This exists because live suit accuracy has been anti-predictive (~20%).
+    """
     df = load_gamble_data()
-    return _suggest_core(sequence, df)
+    sug = _suggest_core(sequence, df)
+    if not fade_color:
+        sug["faded"] = False
+        return sug
+
+    # Invert colour
+    raw_color = sug.get("color") or "Red"
+    faded_color = "Black" if raw_color == "Red" else "Red"
+    # Prefer a suit of the faded colour that appeared in outcomes; else any of that colour
+    outcomes = sug.get("outcomes") or {}
+    opposite_suits = [s for s in SUITS if SUIT_COLOR[s] == faded_color]
+    best_suit, best_n = opposite_suits[0], -1
+    for s in opposite_suits:
+        n = outcomes.get(s, 0)
+        if n > best_n:
+            best_suit, best_n = s, n
+    sug = dict(sug)
+    sug["color"] = faded_color
+    sug["suit"] = best_suit
+    sug["faded"] = True
+    sug["raw_color_before_fade"] = raw_color
+    note = sug.get("note", "")
+    sug["note"] = f"FADED (opposite of model). Model said {raw_color}. " + note
+    return sug
 
 
 @st.cache_data(ttl=60)
@@ -1401,8 +1472,11 @@ def backtest_gamble_accuracy(window: int = 50):
                     break
             if pred is None:
                 pred = base.most_common(1)[0][0] if base else "Hearts"
+            pred_color = SUIT_COLOR[pred]
+            actual_color = SUIT_COLOR[actual]
             records.append({
-                "color_correct": SUIT_COLOR[pred] == SUIT_COLOR[actual],
+                "color_correct": pred_color == actual_color,
+                "fade_color_correct": pred_color != actual_color,  # opposite colour wins
                 "suit_correct": pred == actual,
                 "matched": matched,
                 "grade": grade,
@@ -1434,8 +1508,10 @@ def backtest_gamble_accuracy(window: int = 50):
         "n_recent": len(recent),
         "overall_color_acc": acc(bt, "color_correct"),
         "overall_suit_acc": acc(bt, "suit_correct"),
+        "overall_fade_color_acc": acc(bt, "fade_color_correct"),
         "recent_color_acc": acc(recent, "color_correct"),
         "recent_suit_acc": acc(recent, "suit_correct"),
+        "recent_fade_color_acc": acc(recent, "fade_color_correct"),
         "n_matched": len(matched_df),
         "matched_suit_acc": acc(matched_df, "suit_correct"),
         "matched_color_acc": acc(matched_df, "color_correct"),
@@ -1869,18 +1945,41 @@ for tab_name in TAB_OPTIONS:
         st.rerun()
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("💰 Bankroll & Risk")
+st.sidebar.subheader("💰 Bankroll & Profit Lock")
 with st.sidebar.form("bankroll_form"):
     new_start = st.number_input("Starting Bankroll ($)", value=float(st.session_state.session_start_bankroll), step=50.0)
     new_current = st.number_input("Current Bankroll ($)", value=float(st.session_state.current_bankroll), step=25.0)
     new_target = st.number_input("Target Bankroll ($)", value=float(st.session_state.session_target), step=100.0)
+    new_stop_win = st.number_input("Stop-Win / Lock at +($)", value=float(st.session_state.stop_win), step=50.0)
+    new_stop_loss = st.number_input("Stop-Loss at −($)", value=float(st.session_state.stop_loss), step=50.0)
     bankroll_submit = st.form_submit_button("💾 Update & Save")
     if bankroll_submit:
         st.session_state.session_start_bankroll = new_start
         st.session_state.current_bankroll = new_current
         st.session_state.session_target = new_target
+        st.session_state.stop_win = new_stop_win
+        st.session_state.stop_loss = new_stop_loss
         persist_session_state()
         st.rerun()
+
+_sp = session_profit_status()
+st.sidebar.metric("Locked P&L", f"${_sp['pnl']:+.0f}")
+if _sp["status"] in ("STOP_LOSS",):
+    st.sidebar.error(_sp["message"])
+elif _sp["status"] in ("LOCK_PROFIT", "TARGET_HIT"):
+    st.sidebar.success(_sp["message"])
+elif _sp["status"] == "AHEAD":
+    st.sidebar.info(_sp["message"])
+else:
+    st.sidebar.warning(_sp["message"])
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🃏 Gamble mode")
+st.session_state.fade_gamble = st.sidebar.checkbox(
+    "Fade statistical colour (recommend opposite)",
+    value=bool(st.session_state.fade_gamble),
+    help="Turn ON when the model is anti-predictive. You have been winning by taking the opposite colour.",
+)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("✅ Quick Mark Played")
@@ -1894,6 +1993,21 @@ if st.sidebar.button("Mark as Played", use_container_width=True):
 # ==========================================
 # 5. DASHBOARD VIEWS
 # ==========================================
+
+# Persistent session banner (every tab)
+_sp = session_profit_status()
+_b1, _b2, _b3 = st.columns(3)
+_b1.metric("Bankroll", f"${_sp['current']:.0f}", f"{_sp['pnl']:+.0f} vs start")
+_b2.metric("Profit lock at", f"+${_sp['stop_win']:.0f}")
+_b3.metric("Stop-loss at", f"−${_sp['stop_loss']:.0f}")
+if _sp["status"] == "STOP_LOSS":
+    st.error(f"🛑 {_sp['message']}")
+elif _sp["status"] in ("LOCK_PROFIT", "TARGET_HIT"):
+    st.success(f"🔒 {_sp['message']}")
+elif _sp["status"] == "AHEAD":
+    st.info(f"✅ {_sp['message']}")
+else:
+    st.warning(f"📉 {_sp['message']}")
 
 if st.session_state.active_tab == "🎯 Live Decision":
     st.subheader("🎯 Live Decision Engine")
@@ -2020,14 +2134,20 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         bt = backtest_gamble_accuracy(window=50)
         perf = compute_ai_vs_stat_performance(window=50)
 
-        st.markdown("**Statistical engine** (honest walk-forward on full log)")
+        st.markdown("**Statistical engine** (honest walk-forward)")
         if bt is None:
             st.info("Need ~45+ logged rows for statistical backtest.")
         else:
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Suit (all)", _fmt_pct(bt["overall_suit_acc"]), f"vs 25% random")
-            c2.metric(f"Suit (last {bt['n_recent']})", _fmt_pct(bt["recent_suit_acc"]))
-            c3.metric("Colour (all)", _fmt_pct(bt.get("overall_color_acc")))
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Colour (all)", _fmt_pct(bt.get("overall_color_acc")), "vs 50%")
+            c2.metric("FADE colour (all)", _fmt_pct(bt.get("overall_fade_color_acc")), "opposite of model")
+            c3.metric(f"FADE colour (last {bt['n_recent']})", _fmt_pct(bt.get("recent_fade_color_acc")))
+            c4.metric("Suit (all)", _fmt_pct(bt["overall_suit_acc"]), "vs 25%")
+            if (bt.get("overall_fade_color_acc") or 0) > (bt.get("overall_color_acc") or 0) + 5:
+                st.warning(
+                    "Model colour is anti-predictive on this log. **Fade mode is recommended** "
+                    "(sidebar → Gamble mode). You bet the opposite colour."
+                )
 
         st.markdown("**AI suggestions** (from rows you logged with Source = AI)")
         if perf is None or (perf.get("ai_n_all") or 0) == 0:
@@ -2067,19 +2187,23 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.info("Tap the four suits above to build the sequence.")
 
     if len(seq) == 5:
-        sug = get_gamble_suggestion(seq)
+        fade_on = bool(st.session_state.get("fade_gamble", True))
+        sug = get_gamble_suggestion(seq, fade_color=fade_on)
         df_full = load_gamble_data()
         recent = df_full.tail(100) if len(df_full) > 100 else df_full
         extended = _build_extended_sequence(seq, recent)
 
-        # ---- Statistical card ----
-        st.markdown("### Statistical suggestion")
+        # ---- Statistical card (colour-first; optional fade) ----
+        mode_label = "Statistical (FADED – bet opposite colour)" if sug.get("faded") else "Statistical suggestion"
+        st.markdown(f"### {mode_label}")
         st.markdown('<div class="sug-card stat">', unsafe_allow_html=True)
         st.markdown(
-            f"**Colour** &nbsp; {color_html(sug['color'])}<br>"
-            f"**Suit** &nbsp;&nbsp;&nbsp;&nbsp; {suit_html(sug['suit'])}",
+            f"**Colour to play** &nbsp; {color_html(sug['color'])}<br>"
+            f"**Suit (optional)** &nbsp; {suit_html(sug['suit'])}",
             unsafe_allow_html=True
         )
+        if sug.get("faded"):
+            st.caption(f"Raw model colour was **{sug.get('raw_color_before_fade')}** — faded because model has been anti-predictive.")
         conf = sug.get("confidence", "None")
         note = sug.get("note", "")
         match_len = sug.get("match_len", 0) or 0
@@ -2524,7 +2648,7 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.session_state.pending_rerun = False
             st.rerun()
 
-elif st.session_state.active_tab == "🧺 Played Basket & Overrides":
+elif st.session_state.active_tab in ("🧺 Session & Basket", "🧺 Played Basket & Overrides"):
     st.subheader("🧺 Played Basket")
     if not st.session_state.played_basket:
         st.info("No machines marked as played yet today.")
