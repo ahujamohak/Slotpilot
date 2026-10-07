@@ -327,7 +327,7 @@ TIER_LABEL = {
     5: "Deprioritise / skip",
 }
 
-TIER_RANK_MULT = {1: 1.25, 2: 1.10, 3: 1.00, 4: 0.55, 5: 0.25}
+TIER_RANK_MULT = {1: 1.60, 2: 1.15, 3: 1.00, 4: 0.50, 5: 0.20}
 
 # Manual + data-backed play notes per slot.
 # Each note: (text, confidence) confidence = High | Medium | Low
@@ -844,19 +844,24 @@ def get_spins_for_hit(slot_name, family_name, live_df, hit_number=1, percentile=
     value = int(round(value * 1.20))
     return value
 
-def get_recommended_checkin(spin_1st):
+def get_recommended_checkin(spin_1st, slot_name=None):
+    """Prefer firm playbook check-in; else spin-budget heuristic."""
+    if slot_name:
+        pb = get_playbook(slot_name)
+        if pb.get("checkin"):
+            return int(pb["checkin"])
     if spin_1st is None:
-        return 300
+        return 250
     if spin_1st <= 40:
+        return 175
+    elif spin_1st <= 55:
+        return 225
+    elif spin_1st <= 70:
         return 300
-    elif spin_1st <= 60:
-        return 350
-    elif spin_1st <= 80:
-        return 400
-    elif spin_1st <= 100:
-        return 450
+    elif spin_1st <= 90:
+        return 375
     else:
-        return 500
+        return 400
 
 def parse_session_log_data(live_df, slot_name, family_name):
     if live_df.empty:
@@ -2490,7 +2495,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 9  # day_factor applied to composite ranking
+SLOTS_DB_VERSION = 10  # stronger tier weights + playbook check-in on board
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3048,7 +3053,10 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             "Budget 3rd": int(b3) if b3 is not None else "—",
             "Post-Big Note": item.get("post_big_note", "—"),
             "Sample": item.get("sample_quality", "—"),
-            "Check-in $": get_recommended_checkin(b1 if b1 is not None else item.get("spin_1st")),
+            "Check-in $": get_recommended_checkin(
+                b1 if b1 is not None else item.get("spin_1st"),
+                item.get("slot"),
+            ),
         })
 
     df_priority = pd.DataFrame(table_data)
