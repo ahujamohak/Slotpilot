@@ -1194,6 +1194,8 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             # Verified priority tiers (Oct-6 autopsy + log)
             tier = PRIORITY_TIER.get(slot, 3)
             composite *= TIER_RANK_MULT.get(tier, 1.0)
+            # Day-of-week factor (was computed but not applied — fixed)
+            composite *= float(day_factor) if day_factor else 1.0
             play_style = TIER_LABEL.get(tier, play_style)
 
             slot_scores.append({
@@ -2488,7 +2490,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 8  # priority tiers from Oct-6 autopsy
+SLOTS_DB_VERSION = 9  # day_factor applied to composite ranking
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -2622,7 +2624,7 @@ if st.session_state.active_tab == "🎯 Live Decision":
             + (" (leave now)" if _pb['after_small'] == 0 else "")
             + f". After medium (20–50x): max {_pb['after_med']} spins. "
             f"After large (50x+): max {_pb['after_large']} spins. "
-            f"Stay on one denom for the hunt."
+            f"Denom: up to 3 denoms, about $75 each, then leave if dead. Prefer historically strong denoms for this slot."
         )
         if _tier >= 5:
             st.warning("Deprioritised slot — skip unless nothing else is available.")
@@ -3051,10 +3053,11 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
     df_priority = pd.DataFrame(table_data)
 
-    st.markdown("### Priority ranking (EV + verified tiers)")
+    st.markdown(f"### Priority ranking for **{st.session_state.selected_day}**")
     st.caption(
+        "Changes when you change Filter Target Day in the sidebar. "
         "Tier 1 = primary · 2 = core · 3 = situational · 4 = only if up · 5 = skip. "
-        "From full log + 6 Oct dry-run. Live Decision has max spins / check-in notes."
+        "Day weighting is applied to the score."
     )
     if df_priority.empty:
         st.info("No slots with enough data.")
