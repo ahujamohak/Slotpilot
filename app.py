@@ -360,6 +360,7 @@ SLOT_NOTES = {
             ("Max spins with no feature: 70.", "High"),
             ("Check-in: $300 at $5 (~15% line wins assumed).", "High"),
             ("After feature <20×: leave (no second hunt). After ≥50× early: max second 30.", "High"),
+            ("Watched AU $10 session (2026-10-08): feature at 165 (46×) and later 163× after heavy reloads. Late big pays exist — do NOT extend our max spins 70 or dig with reloads. Gamble lost multiple feature/line wins.", "High"),
         ],
     },
     "Minotaur’s Treasure": {
@@ -568,6 +569,7 @@ SLOT_NOTES = {
     "Emperor's Choice": {
         "family": "Fortune Hearts",
         "notes": [
+            ("Watched AU 2026-10-08: 41+ at $10 on $2, weak line wins, exit ~half check-in. Dry path is real.", "Medium"),
             ("Max spins with no feature: 80.", "Medium"),
             ("Check-in: $350 at $5 (~15% line wins assumed).", "Medium"),
             ("Multi ~50%. Related family to Lunar — don't use as recovery when red.", "Medium"),
@@ -631,6 +633,10 @@ SLOT_NOTES = {
 # Session learnings / knowledge base
 
 VERIFIED_CLAIMS = [
+    {"claim": "Lunar can pay after 100+ spins so extend max spins", "source": "Watched AU 2026-10-08", "verdict": "PARTLY TRUE but REJECT for our plan", "evidence": "46x at 165 and 163x at 65 after heavy reloads. Late/large pays exist. For $5 profit-lock play, max spins 70 and no dig still stand — hunting the tail requires bankroll we refuse.", "confidence": "High"},
+    {"claim": "Gamble after feature locks profit", "source": "Watched AU 2026-10-08", "verdict": "INCORRECT", "evidence": "Lost $20, $300, and other gambles after features/line wins. Only log wins you keep.", "confidence": "High"},
+    {"claim": "Emperor's Choice can dry ~40 spins with weak lines", "source": "Watched AU 2026-10-08", "verdict": "CORRECT", "evidence": "41+ at $10, check-in $500 → ~$270, no feature.", "confidence": "Medium"},
+
     {"claim": "Forever Emperor: keep playing through 4 small features to find a big one", "source": "You session", "verdict": "INCORRECT", "evidence": "21×, 21×, 2×, 14× then dry — checkout $0. After 3 features if not ahead, leave.", "confidence": "High"},
 
     {"claim": "Deprioritise Amazon Hearts (more walks than hits)", "source": "You", "verdict": "CORRECT", "evidence": "Hit rate ~44%, multi ~22%, no late feature window. Keep last on the list or skip.", "confidence": "High"},
@@ -694,6 +700,18 @@ LEARNINGS = [
      "detail": "Player habit: $50–75 on $1 then 10c/1c/5c. Verify per slot; Minotaur favors 10c and $1 in log, not 5c.", "confidence": "Medium"},
     {"date": "2026-10-06", "status": "Incorrect", "topic": "Battle Drum 4x at spin 56", "detail": "4x is noise and late for this slot (median feature ~29). Should not fund a meaningful second hunt.", "confidence": "High"},
     {"date": "2026-10-06", "status": "Correct", "topic": "Enchanted two mediums then 20+ leave", "detail": "39×@16 and 31×@15 then 20+. Net profit on cabinet. Had back-to-back mediums (normal for this slot); leaving at 20+ was correct.", "confidence": "High"},
+        {"date": "2026-10-08", "status": "Observation", "topic": "Emperor's Choice 41+ walk at $10 (watched AU)",
+     "detail": "Flat $10 on $2 denom, check-in $500 → ~$270 exit at 41 spins, no feature, weak line wins. Confirms dry path exists; line wins cannot be assumed to fund long hunts.", "confidence": "Medium"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Lunar Dragon late 46x at spin 165 (watched AU $10)",
+     "detail": "Feature can land very late (165) at 46x after heavy drain. Does NOT justify our $5 player grinding past max spins 70 — required large reloads. Late pay exists; expected session result of hunting it is still poor for profit-lock style.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Lunar Dragon 2x after long hunt then gamble loss",
+     "detail": "82 spins to 2x scatter on 5c; gambled and lost. Small feature after long cost is pure damage. Matches rule: after <20x leave, do not gamble to recover.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Lunar 30x orb gambled away",
+     "detail": "25 spins to 30x ($300 at $10); gambled and lost full amount. Feature win ≠ locked profit if gamble is on.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Lunar 163x at spin 65 after multiple reloads",
+     "detail": "Massive 1632 win ($10 bet) after prior blanks and reloads (~$500+). Shows high-vol upside is real AND that dig-out strategy needs bankroll we do not recommend. Not a template for $5 profit-lock play.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Incorrect", "topic": "Deep reload ladder on Lunar while bleeding",
+     "detail": "Watched player reloaded 400/300/500/500 while balance repeatedly hit near zero. Classic dig. Our rule: Lunar only if session up; no recovery ladder.", "confidence": "High"},
     {"date": "2026-10-06", "status": "Observation", "topic": "Net profit over feature count",
      "detail": "Machines can hit and still lose the buy-in. Score the day on cash, not scatters.", "confidence": "High"},
 ]
