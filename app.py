@@ -710,6 +710,60 @@ def get_slot_notes(slot_name: str) -> dict:
             return v
     return {}
 
+
+# Firm playbook — single numbers only (drives Live Decision card; no conflicting KM defaults)
+# max_spins = leave if no feature by this count
+# checkin = dollars at $5 with ~15% line wins
+# after_small / after_med / after_large = max second-hunt spins after that size feature
+SLOT_PLAYBOOK = {
+    "Maximus Money": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 35, "after_large": 35, "tier": 2},
+    "El Matador": {"max_spins": 55, "checkin": 225, "after_small": 15, "after_med": 25, "after_large": 20, "tier": 1},
+    "Glitter & Glitz": {"max_spins": 45, "checkin": 200, "after_small": 25, "after_med": 25, "after_large": 25, "tier": 4},
+    "Lunar Dragon": {"max_spins": 70, "checkin": 300, "after_small": 0, "after_med": 30, "after_large": 30, "tier": 4},
+    "Minotaur’s Treasure": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 1},
+    "Battle Drum": {"max_spins": 60, "checkin": 250, "after_small": 0, "after_med": 15, "after_large": 15, "tier": 4},
+    "Outback Gold": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
+    "Amazon Hearts": {"max_spins": 35, "checkin": 150, "after_small": 15, "after_med": 15, "after_large": 15, "tier": 5},
+    "Shaolin Style": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 4},
+    "Enchanted Palace": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 20, "after_large": 15, "tier": 2},
+    "Khan of Khans": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
+    "Cleopatra’s Kingdom": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
+    "Ragnar the Great": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
+    "Jelly Jams": {"max_spins": 50, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 5},
+    "Forever Emperor": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 4},
+    "Fire Mountain": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 1},
+    "Sun Shots": {"max_spins": 75, "checkin": 325, "after_small": 25, "after_med": 25, "after_large": 25, "tier": 1},
+    "Autumn Moon": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
+    "Panda Magic": {"max_spins": 70, "checkin": 300, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 2},
+    "Grand Toro": {"max_spins": 65, "checkin": 275, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
+    "Master Warrior": {"max_spins": 65, "checkin": 275, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 2},
+    "Royal Emperor": {"max_spins": 40, "checkin": 175, "after_small": 15, "after_med": 20, "after_large": 20, "tier": 3},
+    "New York Nights": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
+    "Golden Gong": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 2},
+    "Peace & Long Life": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
+    "Magic Touch": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 3},
+    "Shadow Clan": {"max_spins": 40, "checkin": 175, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
+    "Treasure Oasis": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
+    "Emperor's Choice": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
+    "Golden Century": {"max_spins": 40, "checkin": 175, "after_small": 15, "after_med": 20, "after_large": 20, "tier": 3},
+    "Come one, Come all": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
+    "King Samurai": {"max_spins": 75, "checkin": 325, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
+    "Inca Diamonds": {"max_spins": 80, "checkin": 350, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
+    "Fire Legend": {"max_spins": 75, "checkin": 325, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
+    "Go West": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
+}
+
+def get_playbook(slot_name: str) -> dict:
+    if not slot_name:
+        return {}
+    key = str(slot_name).strip()
+    if key in SLOT_PLAYBOOK:
+        return SLOT_PLAYBOOK[key]
+    for k, v in SLOT_PLAYBOOK.items():
+        if k.lower() == key.lower():
+            return v
+    return {}
+
 # ==========================================
 # 2. SHEET DATA INSPECTION & METRICS ENGINE
 # ==========================================
@@ -1560,10 +1614,13 @@ def decide_next_action(family_name, slot_name, attempt_num, spins_so_far, last_m
     median = pooled.get("median") or hn_info.get("median")
     max_walkoff = pooled.get("max_walkoff")
 
-    # Upper bound: KM (uses + walk-offs) preferred
+    # Firm playbook max spins overrides KM when we have a verified number
+    _pb = get_playbook(slot_name)
     upper = km85 or p85 or p75 or median
+    if _pb.get("max_spins"):
+        upper = int(_pb["max_spins"])
     if upper is None:
-        upper = 80
+        upper = 60
 
     # If we have long walk-offs beyond upper, note them (do not auto-extend past KM)
     event_spins = pooled.get("event_spins") or hn_info.get("event_spins", [])
@@ -2532,45 +2589,34 @@ if st.session_state.active_tab == "🎯 Live Decision":
         slot_opts = SLOT_MASTER_LIST.get(sel_family, [])
         sel_slot = st.selectbox("Slot", options=slot_opts, key="ld_slot")
 
-    _notes = get_slot_notes(sel_slot)
-    if _notes and _notes.get("notes"):
-        with st.expander(f"Play notes — {sel_slot}", expanded=True):
-            for text, conf in _notes["notes"]:
-                st.markdown(f"- {text}")
-                st.caption(f"Confidence: {conf}")
-    else:
-        st.caption("No saved play notes for this slot yet.")
-
-    # Pre-sit card: check-in, spin limit, bet, get-up rules (from pooled profile + notes)
-    with st.spinner("Loading pre-sit card…"):
-        _prof = build_slot_behaviour_profile(sel_family, sel_slot, live_sheet_df)
-    st.markdown("#### Pre-sit card (read before you sit)")
-    if _prof.get("ok"):
-        _p = _prof.get("pooled", {})
-        _km = _p.get("km_p85") or _p.get("p85") or _p.get("p75") or 80
-        _med = _p.get("median") or 40
-        # Check-in ≈ bet * min(spin budget, 40) style, capped
-        _bet_default = 5.0
-        _spin_limit = int(min(max(_km, 40), 90))
-        _checkin = int(min(500, max(100, round(_spin_limit * _bet_default / 25) * 25)))  # rough band
-        # Prefer note-driven tighter limits via simple heuristics
-        if _spin_limit > 80:
-            _checkin = min(_checkin, 200)
-        st.markdown(
-            f"**Bet:** ${_bet_default:.0f} (default)  \n"
-            f"**Suggested check-in:** about **${_checkin}** "
-            f"(covers ~{_spin_limit} spins at ${_bet_default:.0f} with room to leave early)  \n"
-            f"**Empty spin limit (get up):** **{_spin_limit}** spins "
-            f"(median feature ~{_med}, KM/p85 ~{_km})  \n"
-            f"**After small feature (&lt;20×):** leave or ≤30 spin second hunt  \n"
-            f"**After solid feature (≥30–50×):** short second hunt only — see notes  \n"
-            f"**Denom:** see slot notes; if none, stay on one denom for the full hunt "
-            f"(hopping every $50–75 is optional, not proven edge on most slots)"
+    # One firm card — playbook numbers only (no competing KM defaults)
+    _pb = get_playbook(sel_slot)
+    _tier = PRIORITY_TIER.get(sel_slot, _pb.get("tier", 3))
+    st.markdown("#### Play plan")
+    if _pb:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Bet", "$5")
+        c2.metric("Check-in", f"${_pb['checkin']}")
+        c3.metric("Max spins (no feature)", f"{_pb['max_spins']}")
+        st.write(
+            f"Tier {_tier}: {TIER_LABEL.get(_tier, 'Standard')}. "
+            f"After small feature (under 20x): max {_pb['after_small']} spins more then leave"
+            + (" (leave now)" if _pb['after_small'] == 0 else "")
+            + f". After medium (20–50x): max {_pb['after_med']} spins. "
+            f"After large (50x+): max {_pb['after_large']} spins. "
+            f"Stay on one denom for the hunt."
         )
-        if _prof.get("sample_quality") == "Low":
-            st.warning("Low sample — treat limits as soft.")
+        if _tier >= 5:
+            st.warning("Deprioritised slot — skip unless nothing else is available.")
+        elif _tier == 4:
+            st.info("Only play if session is flat or up. Strict caps.")
     else:
-        st.info("Not enough history for a pre-sit card. Use $100–150 check-in and 60–80 spin empty stop.")
+        st.info("No firm playbook for this slot yet. Use check-in $200 and max spins 60.")
+    _extra = get_slot_notes(sel_slot)
+    if _extra and _extra.get("notes"):
+        with st.expander("More detail"):
+            for text, conf in _extra["notes"]:
+                st.write(f"{text} ({conf})")
 
     st.markdown("#### Current situation at the machine")
     c1, c2, c3, c4 = st.columns(4)
