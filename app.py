@@ -55,8 +55,7 @@ TAB_OPTIONS = [
     "🃏 Gamble Analyzer",
     "📊 Today's Priority Board",
     "🧺 Session & Basket",
-    # Kept available via sidebar tools, not primary nav:
-    # "🤖 Interactive AI Agent",
+    "📚 Learnings",
 ]
 
 SUITS = ["Hearts", "Diamonds", "Clubs", "Spades"]
@@ -275,21 +274,441 @@ SLOT_MASTER_LIST = {
     "Wild Rumble": ["Shen Shan"]
 }
 
-UPSIDE_BOOST = {
-    "Shadow Clan": 2.10,
-    "Emperor's Choice": 2.00,
-    "Minotaur’s Treasure": 1.70,
-    "Maximus Money": 1.55,
-    "Battle Drum": 1.40,
-    "Aztec Thunder": 1.25,
+# Priority tiers from Oct-6 autopsy + full-log verification (1=best, 5=avoid)
+# Applied to Priority Board ranking and play_style labels.
+PRIORITY_TIER = {
+    # Tier 1 — primary targets
+    "Fire Mountain": 1,
+    "Sun Shots": 1,
+    "Autumn Moon": 1,
+    "Ragnar the Great": 1,
+    "El Matador": 1,
+    "Minotaur’s Treasure": 1,
+    # Tier 2 — strong / core volume
+    "Maximus Money": 2,
+    "Grand Toro": 2,
+    "Enchanted Palace": 2,
+    "Khan of Khans": 2,
+    "Outback Gold": 2,
+    "Peace & Long Life": 2,
+    "Panda Magic": 2,
+    "Master Warrior": 2,
+    "Golden Gong": 2,
+    "Cleopatra’s Kingdom": 2,
+    # Tier 3 — situational
+    "New York Nights": 3,
+    "Magic Touch": 3,
+    "King Samurai": 3,
+    "Shadow Clan": 3,
+    "Treasure Oasis": 3,
+    "Come one, Come all": 3,
+    "Royal Emperor": 3,
+    "Golden Century": 3,
+    "Fire Legend": 3,
+    "Inca Diamonds": 3,
+    "Go West": 3,
+    "Emperor's Choice": 3,
+    # Tier 4 — only if session up / strict caps
+    "Lunar Dragon": 4,
+    "Shaolin Style": 4,
+    "Battle Drum": 4,
+    "Glitter & Glitz": 4,
+    "Forever Emperor": 4,
+    # Tier 5 — deprioritise / skip
+    "Amazon Hearts": 5,
+    "Jelly Jams": 5,
 }
 
-GRINDER_PENALTY = {
-    "Amazon Hearts": 0.58,
-    "Cleopatra’s Kingdom": 0.62,
-    "Sands of Fortunes": 0.65,
-    "Lunar Dragon": 0.72,
+TIER_LABEL = {
+    1: "Primary target",
+    2: "Strong — core list",
+    3: "Situational",
+    4: "Only if session up / strict cap",
+    5: "Deprioritise / skip",
 }
+
+TIER_RANK_MULT = {1: 1.25, 2: 1.10, 3: 1.00, 4: 0.55, 5: 0.25}
+
+# Manual + data-backed play notes per slot.
+# Each note: (text, confidence) confidence = High | Medium | Low
+SLOT_NOTES = {
+    "Maximus Money": {
+        "family": "Bull Rush Blitz 2 Multi",
+        "notes": [
+            ("Max spins with no feature: 60. By then ~78% of historical features have already landed. Past 60, net+ rate collapses (~20%).", "High"),
+            ("Check-in: $250 at $5 (assumes ~15% back in line wins → effective ~$4.25/spin).", "High"),
+            ("After feature ≥30×: max spins on second hunt: 35. Then leave.", "High"),
+            ("After feature <20×: max spins on second hunt: 20. Prefer leave.", "Medium"),
+            ("89+ and 110+ blanks exceeded max spins — incorrect.", "High"),
+            ("Denom: prefer 10c or $1 for the full hunt.", "Medium"),
+        ],
+    },
+    "El Matador": {
+        "family": "Bull Rush Blitz 3 Multi",
+        "notes": [
+            ("Max spins with no feature: 55.", "High"),
+            ("Check-in: $225 at $5 (~15% line wins assumed).", "High"),
+            ("After mega/large early (≥70×): max spins second hunt: 20. Then leave.", "High"),
+            ("After medium early (~25–40×): max spins second hunt: 25. Leaving at 11 after 31× is conservative/OK.", "Medium"),
+            ("After small (<20×): max spins second hunt: 15. Prefer leave.", "Medium"),
+        ],
+    },
+    "Lunar Dragon": {
+        "family": "Fortune Hearts",
+        "notes": [
+            ("High risk / slow. Do not open when session is losing.", "High"),
+            ("Max spins with no feature: 70.", "High"),
+            ("Check-in: $300 at $5 (~15% line wins assumed).", "High"),
+            ("After feature <20×: leave (no second hunt). After ≥50× early: max second 30.", "High"),
+        ],
+    },
+    "Minotaur’s Treasure": {
+        "family": "Bull Rush Stampede",
+        "notes": [
+            ("After LARGE (>~55× e.g. 69×): rehit ~30%; max second hunt 20. Then leave.", "High"),
+            ("Max spins with no feature: 70.", "High"),
+            ("Check-in: $300 at $5 (~15% line wins assumed).", "High"),
+            ("Denom: prefer 10c or $1.", "Medium"),
+        ],
+    },
+    "Battle Drum": {
+        "family": "Dragon Rush",
+        "notes": [
+            ("Max spins with no feature: 60.", "Medium"),
+            ("Check-in: $250 at $5 (~15% line wins assumed).", "Medium"),
+            ("Feature <15× (e.g. 4×): leave — no real second hunt.", "High"),
+            ("Denom: max 3 denoms, ~$75 each; prefer 10c/$1.", "Medium"),
+        ],
+    },
+    "Enchanted Palace": {
+        "family": "Mystery of the Lamp",
+        "notes": [
+            ("Max spins with no feature: 55.", "High"),
+            ("Check-in: $225 at $5 (~15% line wins assumed).", "High"),
+            ("Back-to-back mediums normal. After two mediums: max third hunt 20.", "High"),
+        ],
+    },
+    "Shaolin Style": {
+        "family": "Dragon Rush",
+        "notes": [
+            ("Max spins with no feature: 60.", "High"),
+            ("Check-in: $250 at $5 (~15% line wins assumed).", "High"),
+            ("Line wins do not raise max spins above 60. No recovery extension.", "High"),
+        ],
+    },
+    "Outback Gold": {
+        "family": "Go for Grand",
+        "notes": [
+            ("Max spins with no feature: 45.", "Medium"),
+            ("Check-in: $200 at $5 (~15% line wins assumed).", "Medium"),
+            ("After ~30–40×: max second 25; lowering bet to protect profit is CORRECT.", "High"),
+        ],
+    },
+    "Amazon Hearts": {
+        "family": "Thunder Empire",
+        "notes": [
+            ("Deprioritise — more walks than hits. Max spins: 35. No features after 35 in log.", "High"),
+            ("Check-in: $150 at $5 (~15% line wins assumed). Skip if session red.", "High"),
+            ("After any feature: max second 15. No 300-spin ladder.", "High"),
+        ],
+    },
+    "Cleopatra’s Kingdom": {
+        "family": "Cash Horns",
+        "notes": [
+            ("Max spins with no feature: 90. Can run late — not like Amazon.", "High"),
+            ("Check-in: $375 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Ragnar the Great": {
+        "family": "Cash Horns",
+        "notes": [
+            ("Max spins with no feature: 90. Workhorse; hit rate ~75%.", "High"),
+            ("Check-in: $375 at $5 (~15% line wins assumed).", "High"),
+            ("After ≥40×: max second hunt 40.", "High"),
+        ],
+    },
+    "Khan of Khans": {
+        "family": "Shenlong Unleashed",
+        "notes": [
+            ("Max spins with no feature: 55.", "High"),
+            ("Check-in: $225 at $5 (~15% line wins assumed).", "High"),
+            ("After ~50×: max second 25; prefer leave if ahead. Tuesday 51×@25 + ~21 leave = CORRECT.", "High"),
+        ],
+    },
+    "Jelly Jams": {
+        "family": "Fat Fortunes",
+        "notes": [
+            ("Very thin sample (n≈4). Treat as low confidence.", "High"),
+            ("Max spins with no feature: 50.", "Low"),
+            ("Check-in: $200 at $5 (~15% line wins assumed).", "Low"),
+            ("Tuesday 102+ blank: exceeded any reasonable max spins — INCORRECT.", "High"),
+        ],
+    },
+    "Forever Emperor": {
+        "family": "Dragon Train",
+        "notes": [
+            ("Max spins with no feature: 55 (all features by 60 in log; p85 ~45).", "High"),
+            ("Check-in: $225 at $5 (~15% line wins assumed).", "High"),
+            ("Historical features often solid (median ~51×). Tuesday’s chain of small pays (21, 21, 2, 14) still lost the $250 buy-in — feature count ≠ profit.", "High"),
+            ("After 3 features: if cabinet not ahead, leave. Do not run attempt 4–5 on crumbs.", "High"),
+            ("After single feature <20×: max second hunt 20. Prefer leave.", "Medium"),
+            ("Tuesday checkout $0 after multi small features: INCORRECT to stay through 5 attempts.", "High"),
+        ],
+    },
+    "Fire Mountain": {
+        "family": "Bull Rush Stampede",
+        "notes": [
+            ("Best EV in the log historically. Primary target when bankroll healthy.", "High"),
+            ("Max spins with no feature: 60.", "High"),
+            ("Check-in: $250 at $5 (~15% line wins assumed).", "High"),
+            ("After large feature: max second hunt 35. Multi ~64%.", "High"),
+        ],
+    },
+    "Sun Shots": {
+        "family": "Dragon Train",
+        "notes": [
+            ("High avg mult (~70×) but multi only ~44%. Strong first feature, weaker chains.", "High"),
+            ("Max spins with no feature: 75.", "High"),
+            ("Check-in: $325 at $5 (~15% line wins assumed).", "High"),
+            ("After big feature: max second 25 — multi is selective.", "Medium"),
+        ],
+    },
+    "Autumn Moon": {
+        "family": "Dragon Link",
+        "notes": [
+            ("Strong multi ~77%. Good continue-after-feature slot.", "High"),
+            ("Max spins with no feature: 60.", "High"),
+            ("Check-in: $250 at $5 (~15% line wins assumed).", "High"),
+            ("After ≥25×: max second hunt 40.", "High"),
+        ],
+    },
+    "Panda Magic": {
+        "family": "Dragon Link",
+        "notes": [
+            ("Hit rate ~50%, multi ~71% when you get there. Medium priority.", "High"),
+            ("Max spins with no feature: 70.", "High"),
+            ("Check-in: $300 at $5 (~15% line wins assumed).", "High"),
+        ],
+    },
+    "Grand Toro": {
+        "family": "Cash Horns",
+        "notes": [
+            ("Solid Cash Horns volume. Hit ~69%, multi ~73%.", "High"),
+            ("Max spins with no feature: 65.", "High"),
+            ("Check-in: $275 at $5 (~15% line wins assumed).", "High"),
+            ("After ≥40×: max second 40.", "Medium"),
+        ],
+    },
+    "Master Warrior": {
+        "family": "Cash Horns",
+        "notes": [
+            ("Volume machine. Median mult modest (~24×) — need size for profit.", "High"),
+            ("Max spins with no feature: 65.", "High"),
+            ("Check-in: $275 at $5 (~15% line wins assumed).", "High"),
+        ],
+    },
+    "Royal Emperor": {
+        "family": "Grand Legends",
+        "notes": [
+            ("Fast features (med spin ~14) but low median mult (~10×). Easy to hit, hard to profit big.", "High"),
+            ("Max spins with no feature: 40.", "High"),
+            ("Check-in: $175 at $5 (~15% line wins assumed).", "High"),
+            ("After small feature: leave or max second 15.", "High"),
+        ],
+    },
+    "New York Nights": {
+        "family": "Bull Rush Blitz 2 Multi",
+        "notes": [
+            ("High avg mult (~77×) but multi only ~33%. Hunt feature, limited repeat.", "High"),
+            ("Max spins with no feature: 70.", "Medium"),
+            ("Check-in: $300 at $5 (~15% line wins assumed).", "Medium"),
+            ("After feature: max second 25.", "Medium"),
+        ],
+    },
+    "Golden Gong": {
+        "family": "Dragon Link",
+        "notes": [
+            ("Hit ~73%, multi ~67%. Decent Dragon Link.", "Medium"),
+            ("Max spins with no feature: 55.", "Medium"),
+            ("Check-in: $225 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Peace & Long Life": {
+        "family": "Dragon Link",
+        "notes": [
+            ("Early features (med ~17), multi ~77%.", "High"),
+            ("Max spins with no feature: 60.", "High"),
+            ("Check-in: $250 at $5 (~15% line wins assumed).", "High"),
+        ],
+    },
+    "Magic Touch": {
+        "family": "Fabulous Hold & Spin Jackpot",
+        "notes": [
+            ("High hit rate ~76% but can run longer (p85 ~91). Multi ~67%.", "High"),
+            ("Max spins with no feature: 90.", "Medium"),
+            ("Check-in: $375 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Shadow Clan": {
+        "family": "Dragon Rush",
+        "notes": [
+            ("Features by 60 almost always (95%). Max spins: 40.", "High"),
+            ("Check-in: $175 at $5 (~15% line wins assumed).", "High"),
+            ("Multi ~55%. Medium priority.", "Medium"),
+        ],
+    },
+    "Treasure Oasis": {
+        "family": "Mystery of the Lamp",
+        "notes": [
+            ("Median mult healthy (~49×). Can run longer.", "Medium"),
+            ("Max spins with no feature: 80.", "Medium"),
+            ("Check-in: $350 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Emperor's Choice": {
+        "family": "Fortune Hearts",
+        "notes": [
+            ("Max spins with no feature: 80.", "Medium"),
+            ("Check-in: $350 at $5 (~15% line wins assumed).", "Medium"),
+            ("Multi ~50%. Related family to Lunar — don't use as recovery when red.", "Medium"),
+        ],
+    },
+    "Golden Century": {
+        "family": "Dragon Link",
+        "notes": [
+            ("Very early features (med ~11) but hit rate only 50% and low multi ~33%.", "High"),
+            ("Max spins with no feature: 40.", "High"),
+            ("Check-in: $175 at $5 (~15% line wins assumed).", "High"),
+        ],
+    },
+    "Come one, Come all": {
+        "family": "Fabulous Hold & Spin Jackpot",
+        "notes": [
+            ("Max spins with no feature: 55.", "Medium"),
+            ("Check-in: $225 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "King Samurai": {
+        "family": "Thunder Empire",
+        "notes": [
+            ("Avg mult solid (~53×). Max spins: 75.", "Medium"),
+            ("Check-in: $325 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Inca Diamonds": {
+        "family": "Thunder Empire",
+        "notes": [
+            ("Max spins with no feature: 80.", "Medium"),
+            ("Check-in: $350 at $5 (~15% line wins assumed).", "Medium"),
+            ("Multi only ~40% — limited repeat.", "Medium"),
+        ],
+    },
+    "Fire Legend": {
+        "family": "Thunder Empire",
+        "notes": [
+            ("Max spins with no feature: 75.", "Medium"),
+            ("Check-in: $325 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Go West": {
+        "family": "All Aboard The Lucky Link",
+        "notes": [
+            ("Max spins with no feature: 45.", "Medium"),
+            ("Check-in: $200 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Glitter & Glitz": {
+        "family": "Fabulous Hold & Spin Jackpot",
+        "notes": [
+            ("Most features SMALL (~70% under 30×). Feature hit ≠ profit.", "High"),
+            ("Max spins with no feature: 45 (~90% of features by 40).", "High"),
+            ("Check-in: $200 at $5 (~15% line wins assumed).", "High"),
+            ("After small (<20×): max second hunt 25. After two smalls: stop.", "Medium"),
+        ],
+    },
+}
+
+# Session learnings / knowledge base
+
+VERIFIED_CLAIMS = [
+    {"claim": "Forever Emperor: keep playing through 4 small features to find a big one", "source": "You session", "verdict": "INCORRECT", "evidence": "21×, 21×, 2×, 14× then dry — checkout $0. After 3 features if not ahead, leave.", "confidence": "High"},
+
+    {"claim": "Deprioritise Amazon Hearts (more walks than hits)", "source": "You", "verdict": "CORRECT", "evidence": "Hit rate ~44%, multi ~22%, no late feature window. Keep last on the list or skip.", "confidence": "High"},
+    {"claim": "Khan of Khans Tuesday 51×@25 then ~21 leave", "source": "You session", "verdict": "CORRECT", "evidence": "Solid early medium-large; short second; locked profit (~+$86). Matches weak post-40–70× rehit sample.", "confidence": "High"},
+
+    {"claim": "Amazon Hearts: reverse style — 300 spins at $5 then cluster and JJ", "source": "You theory", "verdict": "INCORRECT", "evidence": "0 features after spin 40 in log; only 2 second-features ever; no 3+ clusters. 300 spins funds walks, not a late cluster window.", "confidence": "High"},
+    {"claim": "Cleopatra and Ragnar behave like Amazon Hearts (extreme dry then cluster)", "source": "You theory", "verdict": "INCORRECT", "evidence": "Cleo hit~71% with late features and multi-chains; Ragnar hit~75% with deep multi-hit. Different profile from Amazon 44% / no late features.", "confidence": "High"},
+
+    {"claim": "Amazon Hearts needs ~200 spins / ladder bet up", "source": "You idea", "verdict": "INCORRECT", "evidence": "All 11 features in log by spin 35. Walks are long. Laddering into 100–200 spins is paying for dry spells, not a delayed feature window.", "confidence": "High"},
+    {"claim": "Amazon Hearts: only $50 probe because high risk / low multi", "source": "You session", "verdict": "CORRECT", "evidence": "Hit rate ~44%, multi ~22%. Small check-in is the right size.", "confidence": "High"},
+    {"claim": "Amazon Hearts pays early at $10 then goes quiet", "source": "You feel", "verdict": "NOT PROVEN", "evidence": "Almost no high-bet rows in log. Early-when-it-hits is true at $5; bet-size effect unknown.", "confidence": "Low"},
+
+    {"claim": "Outback Gold: after 35× lower bet to $2.50 and ~23 spins to lock $100", "source": "You session", "verdict": "CORRECT", "evidence": "Early medium already profit. Seconds after medium often smaller. Lower bet + capped second hunt protects cash.", "confidence": "High"},
+
+    {"claim": "El Matador: 31× on spin 1 then only 11 more spins", "source": "You session", "verdict": "CORRECT (conservative)", "evidence": "Early medium already profit. Thin sample shows rehit possible over ~25 spins; 11 locks profit and is slightly short if hunting a second, but not wrong.", "confidence": "Medium"},
+    {"claim": "Maximus max spins 60", "source": "Data", "verdict": "CORRECT", "evidence": "78% features by 60; net+ after 60 ~20%. 89+ and 110+ exceeded max spins.", "confidence": "High"},
+
+    {"claim": "Shaolin Style: stay past 100 spins because of big line wins", "source": "You session", "verdict": "INCORRECT", "evidence": "72% features by spin 40; late features (100+) in log were small (4–28×). Line wins cut burn but did not justify 124+; still −$400 no feature.", "confidence": "High"},
+
+    {"claim": "Enchanted Palace: after two medium features, short third or leave (~39×, ~31×) at ~20 third spins", "source": "You session", "verdict": "CORRECT", "evidence": "Cabinet was already +EV. Third-attempt sample tiny; grinding for a bigger third risks giving back. Back-to-back mediums are a normal pattern (med mult ~32×).", "confidence": "High"},
+
+    {"claim": "Maximus: most features by 50–60 spins; leave early", "source": "Partner", "verdict": "CORRECT", "evidence": "69% by 50, 78% by 60. Late (>60) net+ only 20% at $5 vs 62% early.", "confidence": "High"},
+    {"claim": "Maximus: late wins are loss-making", "source": "Partner", "verdict": "CORRECT (net profit)", "evidence": "Late avg mult similar (~50x) but after spin cost net+ collapses.", "confidence": "High"},
+    {"claim": "El Matador: short second hunt after mega/early big", "source": "You + notes", "verdict": "CORRECT (profit protect)", "evidence": "After >=70x rehit can still be high (~4/5 in log) but you already banked a mega — 15–25 spin second is enough; do not grind.", "confidence": "High"},
+    {"claim": "Glitter: small features are normal; 80-spin hunt is wrong", "source": "You session", "verdict": "CORRECT", "evidence": "70% of features <30x; 90% of features by spin 40.", "confidence": "High"},
+    {"claim": "Lunar: high risk / slow; do not play when already losing", "source": "Partner", "verdict": "CORRECT", "evidence": "Median feature ~38–49 spins; late features rarely net profit. Variance unsuitable for recovery play.", "confidence": "High"},
+    {"claim": "Lunar: after 10x do not grind 100+", "source": "You session", "verdict": "CORRECT that grind was wrong", "evidence": "10x at 30 spins already net-negative at $5; 102+ empty is outside profitable region.", "confidence": "High"},
+    {"claim": "Minotaur: after ~69x overall multi-hit ~53% applies", "source": "Earlier crude note", "verdict": "INCORRECT", "evidence": "After large (>$53x) rehit only ~29%; second avg ~32x. Size-conditional required.", "confidence": "High"},
+    {"claim": "Minotaur: leave after early big at ~17 spins", "source": "You session", "verdict": "CORRECT", "evidence": "Matches low rehit / modest second after large.", "confidence": "High"},
+    {"claim": "Battle Drum: 4x at spin 56 worth a real second hunt", "source": "You session", "verdict": "INCORRECT", "evidence": "Median feature ~29; 31% of features <15x; 4x is noise and late.", "confidence": "High"},
+    {"claim": "Denom: hop every 5–10 spins helps", "source": "You habit", "verdict": "NOT PROVEN", "evidence": "No spin-by-spin denom trail in log. Cannot confirm or deny hop speed.", "confidence": "Low"},
+    {"claim": "Denom: max 3 denoms ~$75 each then leave", "source": "Partner", "verdict": "PLAUSIBLE / good discipline", "evidence": "Not directly testable; aligns with not spraying weak denoms. Prefer slot top denoms.", "confidence": "Medium"},
+    {"claim": "Line wins mean big feature coming", "source": "You observation", "verdict": "NOT PROVEN / often false", "evidence": "Lunar had line wins then small feature. No line-win column to test globally. Do not extend budget on line wins alone.", "confidence": "Medium"},
+    {"claim": "Play machines that just paid others", "source": "Partner", "verdict": "NOT TESTABLE in log", "evidence": "No floor-context field. Soft signal only; size/spin rules still bind.", "confidence": "Low"},
+]
+
+LEARNINGS = [
+    {"date": "2026-10-06", "status": "Incorrect", "topic": "Shaolin 124+ on line wins", "detail": "124+ no feature; line wins ~$225 reduced burn but data says stop by 70–80. Late features historically small.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Incorrect", "topic": "Maximus empty hunt length",
+     "detail": "Played to 110+ with no feature. Data: ~78% features by spin 60. Hard-stop empty by 70–80.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Correct", "topic": "El Matador short second after mega",
+     "detail": "Big on spin 5 then ~20 spins leave. Matches 20–25 max after large early.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Correct", "topic": "Minotaur early 69x then short chase",
+     "detail": "Early solid feature then 17+ walk. Protect-early-profit rule.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Incorrect", "topic": "Glitter long hunt for tiny features",
+     "detail": "80 spins to 8x, then 15x, then 44 dry. 70% of features under 30x; 90% of features by spin 40.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Incorrect", "topic": "Lunar Dragon 10x then 102+ grind",
+     "detail": "10x at spin 30 already net-negative at $5; then 102+ empty. Partner: high risk, do not play when losing. Late features on this slot rarely profit.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Incorrect", "topic": "Lunar Dragon defending 10x",
+     "detail": "10x then 102+ empty. Small feature must not unlock a full second budget.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Incorrect", "topic": "Session stop-loss not enforced",
+     "detail": "Wanted +$300; finished about -$1250. After -$400–500 cut to tiny probes or leave.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Observation", "topic": "Partner: play machines that paid others",
+     "detail": "Opened Glitter on that signal; got small features only. Soft positive — size/spin rules still rule.", "confidence": "Medium"},
+    {"date": "2026-10-06", "status": "Observation", "topic": "Line wins vs feature quality",
+     "detail": "Lunar: early line wins ($40–50) then small feature — line activity did not mean big feature. Maximus: no line wins and no feature same day. Track both; do not extend spin budget only because of line wins unless slot note says so.", "confidence": "Medium"},
+    {"date": "2026-10-06", "status": "Correct", "topic": "Minotaur early 69x leave at 17+",
+     "detail": "Early big then short second hunt. Data: second features avg only ~27x — leaving was correct.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Observation", "topic": "Denom hop speed (partner vs you)", "detail": "VERIFIED LIMIT: log only has Winning Denom on feature rows — cannot prove 5–10 spin hops vs $75/denom from data. VERIFIED: features spread across denoms; per-slot top denoms exist (e.g. Maximus 10c/$1, Minotaur 10c/$1 not 5c, Battle Drum 10c). Partner discipline (max 3 denoms, ~$75 each) is reasonable; avoid weak denoms for that slot.", "confidence": "Medium"},
+    {"date": "2026-10-06", "status": "Observation", "topic": "Denom hop $50–75 then switch",
+     "detail": "Player habit: $50–75 on $1 then 10c/1c/5c. Verify per slot; Minotaur favors 10c and $1 in log, not 5c.", "confidence": "Medium"},
+    {"date": "2026-10-06", "status": "Incorrect", "topic": "Battle Drum 4x at spin 56", "detail": "4x is noise and late for this slot (median feature ~29). Should not fund a meaningful second hunt.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Correct", "topic": "Enchanted two mediums then 20+ leave", "detail": "39×@16 and 31×@15 then 20+. Net profit on cabinet. Had back-to-back mediums (normal for this slot); leaving at 20+ was correct.", "confidence": "High"},
+    {"date": "2026-10-06", "status": "Observation", "topic": "Net profit over feature count",
+     "detail": "Machines can hit and still lose the buy-in. Score the day on cash, not scatters.", "confidence": "High"},
+]
+
+def get_slot_notes(slot_name: str) -> dict:
+    """Return notes dict for a slot (case-insensitive), or empty."""
+    if not slot_name:
+        return {}
+    key = str(slot_name).strip()
+    if key in SLOT_NOTES:
+        return SLOT_NOTES[key]
+    for k, v in SLOT_NOTES.items():
+        if k.lower() == key.lower():
+            return v
+    return {}
 
 # ==========================================
 # 2. SHEET DATA INSPECTION & METRICS ENGINE
@@ -700,12 +1119,15 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
                 elif multi_rate < 40:
                     composite *= 0.88
 
-            # Manual tilts disabled for ranking — data only
-            # (UPSIDE_BOOST / GRINDER_PENALTY kept in file for reference but not applied)
+            # Verified priority tiers (Oct-6 autopsy + log)
+            tier = PRIORITY_TIER.get(slot, 3)
+            composite *= TIER_RANK_MULT.get(tier, 1.0)
+            play_style = TIER_LABEL.get(tier, play_style)
 
             slot_scores.append({
                 "family": fam,
                 "slot": slot,
+                "tier": tier,
                 "rvi": rvi_score,
                 "composite": round(composite, 3),
                 "source_proof": source_proof,
@@ -756,6 +1178,7 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             "multi_hit_rate": item["multi_hit_rate"],
             "jj_tendency": item["jj_tendency"],
             "play_style": item["play_style"],
+            "tier": item.get("tier", 3),
             "post_big_note": item["post_big_note"],
             "sample_quality": item["sample_quality"],
             "behaviour_profile": item["behaviour_profile"],
@@ -1990,7 +2413,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 7  # fix post-win inflation + ranking penalties
+SLOTS_DB_VERSION = 8  # priority tiers from Oct-6 autopsy
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -2108,6 +2531,46 @@ if st.session_state.active_tab == "🎯 Live Decision":
     with col_b:
         slot_opts = SLOT_MASTER_LIST.get(sel_family, [])
         sel_slot = st.selectbox("Slot", options=slot_opts, key="ld_slot")
+
+    _notes = get_slot_notes(sel_slot)
+    if _notes and _notes.get("notes"):
+        with st.expander(f"Play notes — {sel_slot}", expanded=True):
+            for text, conf in _notes["notes"]:
+                st.markdown(f"- {text}")
+                st.caption(f"Confidence: {conf}")
+    else:
+        st.caption("No saved play notes for this slot yet.")
+
+    # Pre-sit card: check-in, spin limit, bet, get-up rules (from pooled profile + notes)
+    with st.spinner("Loading pre-sit card…"):
+        _prof = build_slot_behaviour_profile(sel_family, sel_slot, live_sheet_df)
+    st.markdown("#### Pre-sit card (read before you sit)")
+    if _prof.get("ok"):
+        _p = _prof.get("pooled", {})
+        _km = _p.get("km_p85") or _p.get("p85") or _p.get("p75") or 80
+        _med = _p.get("median") or 40
+        # Check-in ≈ bet * min(spin budget, 40) style, capped
+        _bet_default = 5.0
+        _spin_limit = int(min(max(_km, 40), 90))
+        _checkin = int(min(500, max(100, round(_spin_limit * _bet_default / 25) * 25)))  # rough band
+        # Prefer note-driven tighter limits via simple heuristics
+        if _spin_limit > 80:
+            _checkin = min(_checkin, 200)
+        st.markdown(
+            f"**Bet:** ${_bet_default:.0f} (default)  \n"
+            f"**Suggested check-in:** about **${_checkin}** "
+            f"(covers ~{_spin_limit} spins at ${_bet_default:.0f} with room to leave early)  \n"
+            f"**Empty spin limit (get up):** **{_spin_limit}** spins "
+            f"(median feature ~{_med}, KM/p85 ~{_km})  \n"
+            f"**After small feature (&lt;20×):** leave or ≤30 spin second hunt  \n"
+            f"**After solid feature (≥30–50×):** short second hunt only — see notes  \n"
+            f"**Denom:** see slot notes; if none, stay on one denom for the full hunt "
+            f"(hopping every $50–75 is optional, not proven edge on most slots)"
+        )
+        if _prof.get("sample_quality") == "Low":
+            st.warning("Low sample — treat limits as soft.")
+    else:
+        st.info("Not enough history for a pre-sit card. Use $100–150 check-in and 60–80 spin empty stop.")
 
     st.markdown("#### Current situation at the machine")
     c1, c2, c3, c4 = st.columns(4)
@@ -2510,6 +2973,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             "Rank": rank,
             "Family": item.get("family", "N/A"),
             "Slot": item.get("slot", "N/A"),
+            "Tier": item.get("tier", 3),
             "Play Style": item.get("play_style", "—"),
             "JJ Tendency": item.get("jj_tendency", "—"),
             "Multi-Hit %": f"{multi:.0f}%" if multi is not None else "—",
@@ -2523,7 +2987,11 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
     df_priority = pd.DataFrame(table_data)
 
-    st.markdown("### Statistical Ranking (enhanced)")
+    st.markdown("### Priority ranking (EV + verified tiers)")
+    st.caption(
+        "Tier 1 = primary · 2 = core · 3 = situational · 4 = only if up · 5 = skip. "
+        "From full log + 6 Oct dry-run. Live Decision has max spins / check-in notes."
+    )
     if df_priority.empty:
         st.info("No slots with enough data.")
     else:
@@ -2539,6 +3007,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "Rank": st.column_config.NumberColumn("Rank", width="small"),
                 "Family": st.column_config.TextColumn("Family", width="medium"),
                 "Slot": st.column_config.TextColumn("Slot", width="medium"),
+                "Tier": st.column_config.NumberColumn("Tier", width="small"),
                 "Play Style": st.column_config.TextColumn("Play Style", width="medium"),
                 "JJ Tendency": st.column_config.TextColumn("JJ Tendency", width="small"),
                 "Multi-Hit %": st.column_config.TextColumn("Multi-Hit %", width="small"),
@@ -2760,3 +3229,39 @@ elif st.session_state.active_tab in ("🧺 Session & Basket", "🧺 Played Baske
             st.session_state.played_basket = []
             persist_session_state()
             st.rerun()
+
+
+elif st.session_state.active_tab == "📚 Learnings":
+    st.subheader("📚 Learnings & knowledge base")
+    st.caption("Claims checked against Session Log where possible. Not every opinion is true.")
+    st.markdown("### Verified claims board")
+    for c in VERIFIED_CLAIMS:
+        st.markdown(f"**{c['claim']}**")
+        st.caption(f"Source: {c['source']} · Verdict: {c['verdict']} · Confidence: {c['confidence']}")
+        st.markdown(c['evidence'])
+        st.markdown("---")
+
+    for status, label in [
+        ("Incorrect", "Fix these"),
+        ("Correct", "Keep doing"),
+        ("Observation", "Soft signals"),
+    ]:
+        items = [x for x in LEARNINGS if x.get("status") == status]
+        if not items:
+            continue
+        st.markdown("#### " + label + " (" + status + ")")
+        for x in items:
+            topic = x.get("topic", "")
+            date = x.get("date", "")
+            conf = x.get("confidence", "")
+            detail = x.get("detail", "")
+            st.markdown(f"**{topic}** — {date} — confidence {conf}")
+            st.markdown(detail)
+            st.markdown("---")
+
+    st.markdown("### Slot notes library")
+    for slot, payload in SLOT_NOTES.items():
+        with st.expander(f"{payload.get('family', '')} — {slot}"):
+            for text, conf in payload.get("notes", []):
+                st.markdown(f"- {text}")
+                st.caption(f"Confidence: {conf}")
