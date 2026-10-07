@@ -329,6 +329,26 @@ TIER_LABEL = {
 
 TIER_RANK_MULT = {1: 1.60, 2: 1.15, 3: 1.00, 4: 0.50, 5: 0.20}
 
+# Fixed Friday sequence — no "or" options. Stop when +$500 profit hit.
+FRIDAY_PLAY_ORDER = [
+    "Fire Mountain",
+    "El Matador",
+    "Minotaur’s Treasure",
+    "Autumn Moon",
+    "Sun Shots",
+    "Ragnar the Great",
+    "Maximus Money",
+    "Grand Toro",
+    "Khan of Khans",
+    "Enchanted Palace",
+    "Outback Gold",
+    "Golden Gong",
+    "Peace & Long Life",
+    "Panda Magic",
+    "Master Warrior",
+]
+
+
 # Manual + data-backed play notes per slot.
 # Each note: (text, confidence) confidence = High | Medium | Low
 SLOT_NOTES = {
@@ -3062,6 +3082,22 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     df_priority = pd.DataFrame(table_data)
 
     st.markdown(f"### Priority ranking for **{st.session_state.selected_day}**")
+    if st.session_state.selected_day == "Friday":
+        st.success("Friday target: +$500 profit. Stop when hit. Sequence below is fixed — play in order.")
+        rows = []
+        for i, name in enumerate(FRIDAY_PLAY_ORDER, 1):
+            pb = get_playbook(name)
+            rows.append({
+                "Seq": i,
+                "Slot": name,
+                "Check-in": pb.get("checkin", "—"),
+                "Max spins": pb.get("max_spins", "—"),
+                "After small": pb.get("after_small", "—"),
+                "After med": pb.get("after_med", "—"),
+                "After large": pb.get("after_large", "—"),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
     st.caption(
         "Changes when you change Filter Target Day in the sidebar. "
         "Tier 1 = primary · 2 = core · 3 = situational · 4 = only if up · 5 = skip. "
