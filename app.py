@@ -112,7 +112,8 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.session_target = 1550.0
     st.session_state.stop_win = 300.0          # lock profit / soft stop when +this
     st.session_state.stop_loss = 1000.0        # hard stop when -this
-    st.session_state.fade_gamble = True        # default ON — user prefers opposite colour
+    st.session_state.fade_gamble = False       # legacy; adaptive mode owns this
+    st.session_state.gamble_fade_mode = "adaptive"  # adaptive | follow | fade
     st.session_state.active_tab = "🎯 Live Decision"
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
@@ -197,7 +198,9 @@ if "stop_win" not in st.session_state:
 if "stop_loss" not in st.session_state:
     st.session_state.stop_loss = 1000.0
 if "fade_gamble" not in st.session_state:
-    st.session_state.fade_gamble = True
+    st.session_state.fade_gamble = False
+if "gamble_fade_mode" not in st.session_state:
+    st.session_state.gamble_fade_mode = "adaptive"
 # Ensure bankroll defaults if somehow missing
 if "session_start_bankroll" not in st.session_state:
     st.session_state.session_start_bankroll = 1250.0
@@ -2066,7 +2069,6 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     Public API – Variable-Order Markov.
     If fade_color=True, invert the recommended colour (and pick the most common
     suit of the opposite colour from the same context counts when possible).
-    This exists because live suit accuracy has been anti-predictive (~20%).
     """
     df = load_gamble_data()
     sug = _suggest_core(sequence, df)
@@ -2093,6 +2095,59 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     note = sug.get("note", "")
     sug["note"] = f"FADED (opposite of model). Model said {raw_color}. " + note
     return sug
+
+
+def resolve_adaptive_fade(window: int = 40, fade_below: float = 45.0, follow_above: float = 55.0):
+    """
+    Decide whether to fade statistical colour from recent walk-forward accuracy.
+    - recent model colour acc >= follow_above → FOLLOW (fade=False)
+    - recent model colour acc <= fade_below → FADE (fade=True)
+    - in between → FOLLOW (slight historical edge)
+    Returns dict: fade, mode_label, recent_color_acc, recent_fade_acc, n, reason
+    """
+    bt = backtest_gamble_accuracy(window=window)
+    if bt is None or bt.get("recent_color_acc") is None:
+        return {
+            "fade": False,
+            "mode_label": "FOLLOW (insufficient data)",
+            "recent_color_acc": None,
+            "recent_fade_acc": None,
+            "n": 0,
+            "reason": "Need more logged rows for rolling accuracy. Default FOLLOW.",
+            "window": window,
+        }
+    acc = float(bt["recent_color_acc"])
+    fade_acc = bt.get("recent_fade_color_acc")
+    n = int(bt.get("n_recent") or 0)
+    if acc <= fade_below:
+        return {
+            "fade": True,
+            "mode_label": "FADE (model cold)",
+            "recent_color_acc": acc,
+            "recent_fade_acc": fade_acc,
+            "n": n,
+            "reason": f"Last {n} model colour {acc}% ≤ {fade_below}% → bet opposite colour.",
+            "window": window,
+        }
+    if acc >= follow_above:
+        return {
+            "fade": False,
+            "mode_label": "FOLLOW (model hot)",
+            "recent_color_acc": acc,
+            "recent_fade_acc": fade_acc,
+            "n": n,
+            "reason": f"Last {n} model colour {acc}% ≥ {follow_above}% → follow model colour.",
+            "window": window,
+        }
+    return {
+        "fade": False,
+        "mode_label": "FOLLOW (neutral band)",
+        "recent_color_acc": acc,
+        "recent_fade_acc": fade_acc,
+        "n": n,
+        "reason": f"Last {n} model colour {acc}% between {fade_below}–{follow_above}% → follow (slight edge).",
+        "window": window,
+    }
 
 
 @st.cache_data(ttl=60)
@@ -2652,11 +2707,30 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("🃏 Gamble mode")
-st.session_state.fade_gamble = st.sidebar.checkbox(
-    "Fade statistical colour (recommend opposite)",
-    value=bool(st.session_state.fade_gamble),
-    help="Turn ON when the model is anti-predictive. You have been winning by taking the opposite colour.",
+_fade_opts = ["adaptive", "follow", "fade"]
+_fade_labels = {
+    "adaptive": "Adaptive (auto 45/55)",
+    "follow": "Always FOLLOW model",
+    "fade": "Always FADE (opposite)",
+}
+_cur = st.session_state.get("gamble_fade_mode", "adaptive")
+if _cur not in _fade_opts:
+    _cur = "adaptive"
+_sel = st.sidebar.radio(
+    "Colour mode",
+    options=_fade_opts,
+    index=_fade_opts.index(_cur),
+    format_func=lambda x: _fade_labels[x],
+    help="Adaptive: fade if last ~40 model colour ≤45%; follow if ≥55%; else follow.",
 )
+st.session_state.gamble_fade_mode = _sel
+# Keep legacy flag in sync for any old references
+if _sel == "fade":
+    st.session_state.fade_gamble = True
+elif _sel == "follow":
+    st.session_state.fade_gamble = False
+else:
+    st.session_state.fade_gamble = resolve_adaptive_fade().get("fade", False)
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("✅ Quick Mark Played")
@@ -2837,19 +2911,21 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         perf = compute_ai_vs_stat_performance(window=50)
 
         st.markdown("**Statistical engine** (honest walk-forward)")
+        _adapt = resolve_adaptive_fade(window=40)
         if bt is None:
             st.info("Need ~45+ logged rows for statistical backtest.")
         else:
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("Colour (all)", _fmt_pct(bt.get("overall_color_acc")), "vs 50%")
-            c2.metric("FADE colour (all)", _fmt_pct(bt.get("overall_fade_color_acc")), "opposite of model")
-            c3.metric(f"FADE colour (last {bt['n_recent']})", _fmt_pct(bt.get("recent_fade_color_acc")))
+            c2.metric(f"Colour (last {bt['n_recent']})", _fmt_pct(bt.get("recent_color_acc")))
+            c3.metric(f"FADE (last {bt['n_recent']})", _fmt_pct(bt.get("recent_fade_color_acc")))
             c4.metric("Suit (all)", _fmt_pct(bt["overall_suit_acc"]), "vs 25%")
-            if (bt.get("overall_fade_color_acc") or 0) > (bt.get("overall_color_acc") or 0) + 5:
-                st.warning(
-                    "Model colour is anti-predictive on this log. **Fade mode is recommended** "
-                    "(sidebar → Gamble mode). You bet the opposite colour."
-                )
+            c5.metric("Adaptive now", _adapt["mode_label"].split(" ")[0])
+            st.caption(_adapt["reason"])
+            if _adapt["fade"]:
+                st.warning("Adaptive: **FADE** — bet the opposite of the model colour.")
+            else:
+                st.success("Adaptive: **FOLLOW** — bet the model colour.")
 
         st.markdown("**AI suggestions** (from rows you logged with Source = AI)")
         if perf is None or (perf.get("ai_n_all") or 0) == 0:
