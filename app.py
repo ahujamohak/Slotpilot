@@ -427,9 +427,11 @@ SLOT_NOTES = {
     "Outback Gold": {
         "family": "Go for Grand",
         "notes": [
-            ("Max spins with no feature: 45.", "Medium"),
-            ("Check-in: $200 at $5 (~15% line wins assumed).", "Medium"),
-            ("After ~30–40×: max second 25; lowering bet to protect profit is CORRECT.", "High"),
+            ("Max spins no feature: 55. Check-in: $225. Bet flat $5.", "Medium"),
+            ("Sample is thin. Watched first feature at 69 after reloads — outside profit-lock window. Do not dig to 70+ with reloads.", "High"),
+            ("When it hits in chain: mediums (14×/25×/18× watched) then leave. After small max 20, after med max 25.", "Medium"),
+            ("Denom: can show life on 2c then go quiet on $1. Prefer one sticky denom once chosen; max 2–3 total.", "Medium"),
+            ("Early good orbs/lines that die mid-seat is common — not a reason to reload.", "High"),
         ],
     },
     "Amazon Hearts": {
@@ -670,6 +672,8 @@ SLOT_NOTES = {
 # Session learnings / knowledge base
 
 VERIFIED_CLAIMS = [
+    {"claim": "Outback Gold: reload to 300 to catch feature at spin 69", "source": "Watched 2026-10-08", "verdict": "REJECT for our plan", "evidence": "Feature came at 69 after three $100 loads. We use max 55 / $225 once. Accept missing some late first features.", "confidence": "High"},
+
     {"claim": "Enchanted Palace: after 3 medium features keep hunting attempt 4 while orbs are frequent", "source": "Watched 2026-10-08", "verdict": "INCORRECT", "evidence": "22x/20x/39x then 70+ blank to zero. Leave while ahead after 2–3 mediums. Max first-hunt 55.", "confidence": "High"},
 
     {"claim": "Bull Rush: rotate 1/3/5 lines on $1 to find feature", "source": "Watched Minotaur", "verdict": "NOT A STRATEGY", "evidence": "~60 spin blank while rotating lines at $10. Play fixed full lines at planned bet.", "confidence": "Medium"},
@@ -757,6 +761,8 @@ LEARNINGS = [
     {"date": "2026-10-08", "status": "Observation", "topic": "Minotaur watched $10 $1 line-rotate ~60 blank", "detail": "Load 500, $1 denom rotating $2/$6/$10 via lines, teases at 6/25/43, left ~60 no feature. Tease≠pay.", "confidence": "Medium"},
     {"date": "2026-10-08", "status": "Observation", "topic": "Battle Drum watched 92 blank at $10", "detail": "10c then $1, frequent teases, big line win mid-way, still no feature by 92. Confirms not a Friday priority; leave at max 60.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Correct", "topic": "Shaolin early 36x then leave ~36 more", "detail": "10c $10 hit 36x@4; switched $1; left near spin 36 attempt 2 with profit. Matches short second after medium and no dig.", "confidence": "Medium"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Outback Gold first feature at 69 after reloads", "detail": "2c sticky after hops: 14x@69, 25x@24, 18x@11, leave attempt4. Late first needs dig we refuse. Max spins set 55.", "confidence": "Medium"},
+    {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace long blank 102 with denom hop", "detail": "Second EP video: orbs and lines, still 102 to zero. Confirms max 55 and no attempt-4 dig.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace attempt-4 dig after three mediums", "detail": "Active 22x@14, Active 20x@11, Jackpot 39x@33, then 70+ on $1 to $0. Orb frequency stayed high — still dead. Leave while ahead.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
         {"date": "2026-10-08", "status": "Correct", "topic": "Friday plan: short A-tier list beats long grind",
@@ -809,7 +815,7 @@ SLOT_PLAYBOOK = {
     "Lunar Dragon": {"max_spins": 70, "checkin": 300, "after_small": 0, "after_med": 30, "after_large": 30, "tier": 4},
     "Minotaur’s Treasure": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 1},
     "Battle Drum": {"max_spins": 60, "checkin": 250, "after_small": 0, "after_med": 15, "after_large": 15, "tier": 4},
-    "Outback Gold": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
+    "Outback Gold": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
     "Amazon Hearts": {"max_spins": 35, "checkin": 150, "after_small": 15, "after_med": 15, "after_large": 15, "tier": 5},
     "Shaolin Style": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 4},
     "Enchanted Palace": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 20, "after_large": 15, "tier": 2},
