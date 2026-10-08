@@ -331,21 +331,22 @@ TIER_RANK_MULT = {1: 1.60, 2: 1.15, 3: 1.00, 4: 0.50, 5: 0.20}
 
 # Fixed Friday sequence — no "or" options. Stop when +$500 profit hit.
 FRIDAY_PLAY_ORDER = [
+    # Refined from multi-Friday dry-runs (Aug–Oct 2026). Stop at +$500.
     "Fire Mountain",
     "El Matador",
     "Minotaur’s Treasure",
-    "Autumn Moon",
-    "Sun Shots",
-    "Ragnar the Great",
-    "Maximus Money",
-    "Grand Toro",
-    "Khan of Khans",
     "Enchanted Palace",
-    "Outback Gold",
-    "Golden Gong",
+    "Grand Toro",
+    "Autumn Moon",
+    "Ragnar the Great",
+    "Go West",
+    "Cleopatra’s Kingdom",
+    "King Samurai",
+    "Shadow Clan",
     "Peace & Long Life",
-    "Panda Magic",
-    "Master Warrior",
+    "Golden Gong",
+    "Outback Gold",
+    "Khan of Khans",
 ]
 
 
@@ -479,10 +480,14 @@ SLOT_NOTES = {
     "Fire Mountain": {
         "family": "Bull Rush Stampede",
         "notes": [
-            ("Best EV in the log historically. Primary target when bankroll healthy.", "High"),
-            ("Max spins with no feature: 60.", "High"),
-            ("Check-in: $250 at $5 (~15% line wins assumed).", "High"),
-            ("After large feature: max second hunt 35. Multi ~64%.", "High"),
+            ("Bet: flat $5. Do not ladder up from $1.25/$2.50. Big pays in log cluster on $1 at $3–$5.", "High"),
+            ("Denom order: start $1. If dead after 25 spins on $1, switch to 5c for up to 25 more. Max 2 denoms. Then leave if still blank (max spins 60 total).", "High"),
+            ("Max spins no feature: 60. Att1 features median ~32; walks often 60–70. Past 60 net+ collapses.", "High"),
+            ("Check-in: $250.", "High"),
+            ("After small (<20×): max 20 spins second hunt then leave. Seconds after small can be tiny.", "High"),
+            ("After medium (20–50×): max 30 second hunt.", "High"),
+            ("After large (50×+): max 35 second hunt. Rehit after large is common (~5/8 in log) but still cap it.", "High"),
+            ("Watched AU 2026-10-08: weak 2× on 5c then 80× on 5c; separate seat $1×3 hit 1291× at spin 89 then 98× at 24. $1 is the money denom. Denom hoppers exist — we still cap at 2 denoms / 60 spins.", "High"),
         ],
     },
     "Sun Shots": {
@@ -557,9 +562,12 @@ SLOT_NOTES = {
     "Peace & Long Life": {
         "family": "Dragon Link",
         "notes": [
-            ("Early features (med ~17), multi ~77%.", "High"),
-            ("Max spins with no feature: 60.", "High"),
-            ("Check-in: $250 at $5 (~15% line wins assumed).", "High"),
+            ("Max spins no feature: 60 (~91% of features by 60). Check-in: $250. Bet flat $5 on first hunt.", "High"),
+            ("Multi-hit is real (~10/15 after first). Clusters happen — but median feature only ~24×. Cluster ≠ big.", "High"),
+            ("Late first features (>=50 spins) in log are small/medium (4–41×), not jackpots. Do not treat a late first hit as a raise signal.", "High"),
+            ("After small (<20×) or late first: stay $5 or leave. Max second 20. Do not jump to $7.50/$10.", "High"),
+            ("After solid early first (>=30× and by spin ~40): max second 35 at $5. Optional one step to $7.50 only if session already up — not automatic $10.", "Medium"),
+            ("Denom: $1 and 10c fine. Max 2–3 denoms.", "Medium"),
         ],
     },
     "Magic Touch": {
@@ -653,6 +661,14 @@ SLOT_NOTES = {
 # Session learnings / knowledge base
 
 VERIFIED_CLAIMS = [
+    {"claim": "Friday: play many machines until tired", "source": "11 Sep pattern", "verdict": "INCORRECT", "evidence": "Marathon Fridays lose. Short A-tier + stop at +$500 wins (14 Aug, 18 Sep).", "confidence": "High"},
+    {"claim": "Fire Mountain max spins 70 better than 60", "source": "You question", "verdict": "NOT SUPPORTED", "evidence": "Fri sample identical 60 vs 70. Late pays usually small. Keep 60 / $250.", "confidence": "High"},
+
+    {"claim": "Peace & Long Life: late first feature still OK then raise to $7.50/$10 because of clusters", "source": "You theory", "verdict": "PARTLY WRONG", "evidence": "Multi-hit yes (~10/15). Late first features are small/medium (4–41x). Raise only after solid early first; first hunt stays $5 max spins 60.", "confidence": "High"},
+
+    {"claim": "Fire Mountain: extend max spins to 90 because of 1291x at spin 89", "source": "You question + log", "verdict": "REJECTED", "evidence": "Late hits (>=70) without 1291 avg ~23x med ~15x. Most late features lose at $5. 1291 is outlier.", "confidence": "High"},
+    {"claim": "Fire Mountain: leftover $50-75 after 60 spins means extend to 70-75", "source": "You question", "verdict": "NO as rule", "evidence": "Max spins 60 is spin-based not balance-based. Optional +10 only if active teases; else cash out runway.", "confidence": "High"},
+
     {"claim": "Lunar can pay after 100+ spins so extend max spins", "source": "Watched AU 2026-10-08", "verdict": "PARTLY TRUE but REJECT for our plan", "evidence": "46x at 165 and 163x at 65 after heavy reloads. Late/large pays exist. For $5 profit-lock play, max spins 70 and no dig still stand — hunting the tail requires bankroll we refuse.", "confidence": "High"},
     {"claim": "Gamble after feature locks profit", "source": "Watched AU 2026-10-08", "verdict": "INCORRECT", "evidence": "Lost $20, $300, and other gambles after features/line wins. Only log wins you keep.", "confidence": "High"},
     {"claim": "Emperor's Choice can dry ~40 spins with weak lines", "source": "Watched AU 2026-10-08", "verdict": "CORRECT", "evidence": "41+ at $10, check-in $500 → ~$270, no feature.", "confidence": "Medium"},
@@ -720,7 +736,18 @@ LEARNINGS = [
      "detail": "Player habit: $50–75 on $1 then 10c/1c/5c. Verify per slot; Minotaur favors 10c and $1 in log, not 5c.", "confidence": "Medium"},
     {"date": "2026-10-06", "status": "Incorrect", "topic": "Battle Drum 4x at spin 56", "detail": "4x is noise and late for this slot (median feature ~29). Should not fund a meaningful second hunt.", "confidence": "High"},
     {"date": "2026-10-06", "status": "Correct", "topic": "Enchanted two mediums then 20+ leave", "detail": "39×@16 and 31×@15 then 20+. Net profit on cabinet. Had back-to-back mediums (normal for this slot); leaving at 20+ was correct.", "confidence": "High"},
-        {"date": "2026-10-08", "status": "Observation", "topic": "Emperor's Choice 41+ walk at $10 (watched AU)",
+        {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
+        {"date": "2026-10-08", "status": "Correct", "topic": "Friday plan: short A-tier list beats long grind",
+     "detail": "18 Sep and 14 Aug style (few seats, hard exits) profit. 11 Sep marathon loses even with rules. Stop at +$500.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Correct", "topic": "Check-in sized to max spins not global 150 or 500",
+     "detail": "Partner half-right: avoid vague middle+reload. Wrong as only two amounts. Use playbook check-in per slot.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain max spins stays 60 not 70/90",
+     "detail": "Friday FM wins were early (1,6,44). 60 vs 70 identical on Fri sample. Late features usually small. Leftover $ after 60 = cash out not extend.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain denom $1 first then 5c",
+     "detail": "Big mults cluster on $1. Max 2 denoms. Flat $5. No ladder from $1.25.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Incorrect", "topic": "Peace & Long Life late first then raise to $7.50/$10",
+     "detail": "Multi real but late first features small/medium. First hunt flat $5 max 60. Raise only after solid early first if session up.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Emperor's Choice 41+ walk at $10 (watched AU)",
      "detail": "Flat $10 on $2 denom, check-in $500 → ~$270 exit at 41 spins, no feature, weak line wins. Confirms dry path exists; line wins cannot be assumed to fund long hunts.", "confidence": "Medium"},
     {"date": "2026-10-08", "status": "Observation", "topic": "Lunar Dragon late 46x at spin 165 (watched AU $10)",
      "detail": "Feature can land very late (165) at 46x after heavy drain. Does NOT justify our $5 player grinding past max spins 70 — required large reloads. Late pay exists; expected session result of hunting it is still poor for profit-lock style.", "confidence": "High"},
@@ -769,7 +796,7 @@ SLOT_PLAYBOOK = {
     "Ragnar the Great": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
     "Jelly Jams": {"max_spins": 50, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 5},
     "Forever Emperor": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 4},
-    "Fire Mountain": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 1},
+    "Fire Mountain": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 35, "tier": 1, "denoms": ["$1", "5c"], "bet": 5},
     "Sun Shots": {"max_spins": 75, "checkin": 325, "after_small": 25, "after_med": 25, "after_large": 25, "tier": 1},
     "Autumn Moon": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
     "Panda Magic": {"max_spins": 70, "checkin": 300, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 2},
@@ -778,7 +805,7 @@ SLOT_PLAYBOOK = {
     "Royal Emperor": {"max_spins": 40, "checkin": 175, "after_small": 15, "after_med": 20, "after_large": 20, "tier": 3},
     "New York Nights": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
     "Golden Gong": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 2},
-    "Peace & Long Life": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
+    "Peace & Long Life": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 35, "after_large": 40, "tier": 2},
     "Magic Touch": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 3},
     "Shadow Clan": {"max_spins": 40, "checkin": 175, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
     "Treasure Oasis": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
@@ -2515,7 +2542,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 10  # stronger tier weights + playbook check-in on board
+SLOTS_DB_VERSION = 11  # Friday sequence refined multi-Friday dry-runs
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3083,7 +3110,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
 
     st.markdown(f"### Priority ranking for **{st.session_state.selected_day}**")
     if st.session_state.selected_day == "Friday":
-        st.success("Friday target: +$500 profit. Stop when hit. Sequence below is fixed — play in order.")
+        st.success("Friday target: +$500 then STOP. Fixed sequence from multi-Friday dry-runs. Maximus/Panda/Master Warrior/Shaolin out. No dig. Max 3 denoms ~$75 each.")
         rows = []
         for i, name in enumerate(FRIDAY_PLAY_ORDER, 1):
             pb = get_playbook(name)
