@@ -390,7 +390,9 @@ SLOT_NOTES = {
             ("After LARGE (>~55× e.g. 69×): rehit ~30%; max second hunt 20. Then leave.", "High"),
             ("Max spins with no feature: 70.", "High"),
             ("Check-in: $300 at $5 (~15% line wins assumed).", "High"),
-            ("Denom: prefer 10c or $1.", "Medium"),
+            ("Bet: flat $5 full lines. On $1 denom Bull Rush is 1/3/5 lines only — play 5-line. Do not rotate 1/3/5 lines as a strategy.", "High"),
+            ("Denom: $1 or 10c. Max 2–3 denoms. Same family as Fire Mountain but treat as its own machine.", "Medium"),
+            ("Watched: $10 bet rotator on $1, ~60 spins blank, left. No feature data. Teases alone ≠ coming feature.", "Medium"),
         ],
     },
     "Battle Drum": {
@@ -405,9 +407,13 @@ SLOT_NOTES = {
     "Enchanted Palace": {
         "family": "Mystery of the Lamp",
         "notes": [
-            ("Max spins with no feature: 55.", "High"),
-            ("Check-in: $225 at $5 (~15% line wins assumed).", "High"),
-            ("Back-to-back mediums normal. After two mediums: max third hunt 20.", "High"),
+            ("Features are Double / Active / Jackpot orbs (not classic scatter+orb). Log all as orb. Usually 1–3 specials open the feature.", "High"),
+            ("Max spins no feature: 55. Check-in: $225. Bet flat $5.", "High"),
+            ("Median features often medium (~20–40×). Back-to-back mediums are normal.", "High"),
+            ("After small (<20×): max second 20. After medium (20–50×): max 20. After large (50×+): max 15. Then leave.", "High"),
+            ("After 2–3 mediums if cabinet is ahead: leave. Do not open attempt 4 into a long blank.", "High"),
+            ("Denom: 10c or $1 preferred at $5. Max 2–3 denoms. Watched hop 2c→5c→10c→$1 then 70+ dead on attempt 4 → zeroed a winning seat.", "High"),
+            ("High orb frequency / line wins without feature = tease zone, not a reason to pass max spins.", "High"),
         ],
     },
     "Shaolin Style": {
@@ -488,6 +494,9 @@ SLOT_NOTES = {
             ("After medium (20–50×): max 30 second hunt.", "High"),
             ("After large (50×+): max 35 second hunt. Rehit after large is common (~5/8 in log) but still cap it.", "High"),
             ("Watched AU 2026-10-08: weak 2× on 5c then 80× on 5c; separate seat $1×3 hit 1291× at spin 89 then 98× at 24. $1 is the money denom. Denom hoppers exist — we still cap at 2 denoms / 60 spins.", "High"),
+            ("Watched sticky $1×$5: 56×@36 then 143×@36 then noise 3×/3× then 65×@10; 200→1000. Staying on $1 paid. First hit inside max 60. After large, second at 36 is 1 spin past our cap 35 — keep cap; do not stretch to 70.", "High"),
+            ("Watched hopper 5c↔$1 with reloads: first 12×@42 then 52×@71; 300→200 loss. Long hunt + hop + reload underperformed sticky $1 plan.", "High"),
+            ("After a big chain, 3× scatter noise is exit signal — do not fund attempt 4–6 chasing another large.", "High"),
         ],
     },
     "Sun Shots": {
@@ -661,6 +670,13 @@ SLOT_NOTES = {
 # Session learnings / knowledge base
 
 VERIFIED_CLAIMS = [
+    {"claim": "Enchanted Palace: after 3 medium features keep hunting attempt 4 while orbs are frequent", "source": "Watched 2026-10-08", "verdict": "INCORRECT", "evidence": "22x/20x/39x then 70+ blank to zero. Leave while ahead after 2–3 mediums. Max first-hunt 55.", "confidence": "High"},
+
+    {"claim": "Bull Rush: rotate 1/3/5 lines on $1 to find feature", "source": "Watched Minotaur", "verdict": "NOT A STRATEGY", "evidence": "~60 spin blank while rotating lines at $10. Play fixed full lines at planned bet.", "confidence": "Medium"},
+
+    {"claim": "Fire Mountain: sticky $1 at $5 better than denom hop + reload", "source": "Watched 2026-10-08", "verdict": "CORRECT", "evidence": "Sticky $1 session 200→1000 with 56x/143x/65x. Hopper reload session 300→200 with 12x then 52x@71.", "confidence": "High"},
+    {"claim": "Fire Mountain: after large allow second hunt past 35 to catch 36-spin second", "source": "Watched 143x@36", "verdict": "NO rule change", "evidence": "One case 1 spin past cap. Stretching to 70 funds blanks. Keep after-large max 35.", "confidence": "Medium"},
+
     {"claim": "Friday: play many machines until tired", "source": "11 Sep pattern", "verdict": "INCORRECT", "evidence": "Marathon Fridays lose. Short A-tier + stop at +$500 wins (14 Aug, 18 Sep).", "confidence": "High"},
     {"claim": "Fire Mountain max spins 70 better than 60", "source": "You question", "verdict": "NOT SUPPORTED", "evidence": "Fri sample identical 60 vs 70. Late pays usually small. Keep 60 / $250.", "confidence": "High"},
 
@@ -736,7 +752,13 @@ LEARNINGS = [
      "detail": "Player habit: $50–75 on $1 then 10c/1c/5c. Verify per slot; Minotaur favors 10c and $1 in log, not 5c.", "confidence": "Medium"},
     {"date": "2026-10-06", "status": "Incorrect", "topic": "Battle Drum 4x at spin 56", "detail": "4x is noise and late for this slot (median feature ~29). Should not fund a meaningful second hunt.", "confidence": "High"},
     {"date": "2026-10-06", "status": "Correct", "topic": "Enchanted two mediums then 20+ leave", "detail": "39×@16 and 31×@15 then 20+. Net profit on cabinet. Had back-to-back mediums (normal for this slot); leaving at 20+ was correct.", "confidence": "High"},
-        {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
+        {"date": "2026-10-08", "status": "Correct", "topic": "Fire Mountain sticky $1 $5 session 200→1000", "detail": "56x@36, 143x@36, then 3x noise, 65x@10. No denom hop. Supports $1 primary and max 60 for first hit.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Incorrect", "topic": "Fire Mountain hop denoms + reload to force feature", "detail": "5c then $1 reloads; 12x@42 and 52x@71; checkout below check-in. Worse than sticky plan.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Minotaur watched $10 $1 line-rotate ~60 blank", "detail": "Load 500, $1 denom rotating $2/$6/$10 via lines, teases at 6/25/43, left ~60 no feature. Tease≠pay.", "confidence": "Medium"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Battle Drum watched 92 blank at $10", "detail": "10c then $1, frequent teases, big line win mid-way, still no feature by 92. Confirms not a Friday priority; leave at max 60.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Correct", "topic": "Shaolin early 36x then leave ~36 more", "detail": "10c $10 hit 36x@4; switched $1; left near spin 36 attempt 2 with profit. Matches short second after medium and no dig.", "confidence": "Medium"},
+    {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace attempt-4 dig after three mediums", "detail": "Active 22x@14, Active 20x@11, Jackpot 39x@33, then 70+ on $1 to $0. Orb frequency stayed high — still dead. Leave while ahead.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
         {"date": "2026-10-08", "status": "Correct", "topic": "Friday plan: short A-tier list beats long grind",
      "detail": "18 Sep and 14 Aug style (few seats, hard exits) profit. 11 Sep marathon loses even with rules. Stop at +$500.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Correct", "topic": "Check-in sized to max spins not global 150 or 500",
