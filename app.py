@@ -1996,7 +1996,8 @@ def _build_extended_sequence(current_seq: list, recent_df: pd.DataFrame) -> list
 # Uses a context only when it has been observed at least MIN_N times.
 # This is the algorithm that achieved ~62% in-sample suit accuracy on the log.
 # ---------------------------------------------------------------------------
-MIN_N_BY_ORDER = {5: 2, 4: 2, 3: 2, 2: 3, 1: 4, 0: 1}
+# Raised after 9 Oct log: n=2 "100%" patterns were coin-flips (~50% live)
+MIN_N_BY_ORDER = {5: 3, 4: 3, 3: 3, 2: 4, 1: 5, 0: 1}
 
 def _build_markov_model(df: pd.DataFrame) -> dict:
     """Build frequency tables for every order 0..5 from the full log."""
@@ -2032,17 +2033,24 @@ def _decide_from_counts(counts: Counter):
     return top, k_top, total, counts
 
 def _grade(n_seen: int, k_top: int, order: int) -> str:
+    """
+    Grade signal strength. Thin samples (n<=2) must stay Weak even at 100% —
+    9 Oct live: several 100% patterns with n=2 hit ~50%.
+    """
     if n_seen == 0:
         return "None"
     share = k_top / n_seen
-    if order >= 4 and n_seen >= 3 and share >= 0.70:
+    # Strong: need real sample size, not 2/2 or 3/3 luck
+    if order >= 4 and n_seen >= 5 and share >= 0.70:
         return "Strong"
-    if order >= 3 and n_seen >= 4 and share >= 0.60:
+    if order >= 3 and n_seen >= 6 and share >= 0.65:
         return "Strong"
-    if n_seen >= 5 and share >= 0.55:
+    # Moderate: decent sample
+    if n_seen >= 6 and share >= 0.55:
         return "Moderate"
-    if n_seen >= 3 and share >= 0.45:
+    if n_seen >= 8 and share >= 0.50:
         return "Moderate"
+    # Everything else Weak (includes all n<=2 and noisy 3–5)
     return "Weak"
 
 def _suggest_core(sequence: list, df: pd.DataFrame):
@@ -2139,13 +2147,14 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     if not fade_color:
         return sug
 
-    # Do not fade a strong local colour signal (e.g. 3/4 Diamonds = 75% Red)
+    # Do not fade a strong local colour signal with adequate sample
     rate = _pattern_color_rate(sug)
     conf = (sug.get("confidence") or "")
-    if conf == "Strong" and rate >= 70:
+    n_ctx = int(sug.get("match_count") or 0)
+    if conf == "Strong" and rate >= 70 and n_ctx >= 5:
         sug["fade_blocked"] = True
         sug["note"] = (
-            f"FOLLOW kept — Strong pattern {rate:.0f}% {sug.get('color')}. "
+            f"FOLLOW kept — Strong pattern {rate:.0f}% {sug.get('color')} (n={n_ctx}). "
             + (sug.get("note") or "")
         )
         return sug
@@ -3093,6 +3102,9 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             st.warning(f"**Weak {len_tag}** – {note}")
         else:
             st.caption(f"No signal – {note}")
+        _mc = int(sug.get("match_count") or 0)
+        if _mc and _mc < 3:
+            st.caption(f"Thin sample (n={_mc}) — treat near coin-flip; prefer skip or colour-only small.")
         if sug.get("outcomes"):
             breakdown = ", ".join(f"{s} ×{c}" for s, c in sorted(sug["outcomes"].items(), key=lambda x: -x[1]))
             st.caption(f"Seen {sug.get('match_count', 0)}× · Followed by: {breakdown}")
