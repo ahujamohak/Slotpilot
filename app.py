@@ -2064,22 +2064,46 @@ def _suggest_core(sequence: list, df: pd.DataFrame):
         "color_strength": 50.0,
     }
 
+def _pattern_color_rate(sug: dict) -> float:
+    """Fraction of context outcomes that match the suggested colour (0–100)."""
+    outcomes = sug.get("outcomes") or {}
+    total = sum(outcomes.values()) or 0
+    if total <= 0:
+        return 0.0
+    color = sug.get("color") or ""
+    same = sum(n for s, n in outcomes.items() if SUIT_COLOR.get(s) == color)
+    return 100.0 * same / total
+
+
 def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     """
     Public API – Variable-Order Markov.
-    If fade_color=True, invert the recommended colour (and pick the most common
-    suit of the opposite colour from the same context counts when possible).
+    If fade_color=True, invert the recommended colour — UNLESS the local pattern
+    is Strong with ≥70% one colour (do not fade a clear signal).
     """
     df = load_gamble_data()
     sug = _suggest_core(sequence, df)
+    sug = dict(sug)
+    sug["faded"] = False
+    sug["fade_blocked"] = False
+
     if not fade_color:
-        sug["faded"] = False
+        return sug
+
+    # Do not fade a strong local colour signal (e.g. 3/4 Diamonds = 75% Red)
+    rate = _pattern_color_rate(sug)
+    conf = (sug.get("confidence") or "")
+    if conf == "Strong" and rate >= 70:
+        sug["fade_blocked"] = True
+        sug["note"] = (
+            f"FOLLOW kept — Strong pattern {rate:.0f}% {sug.get('color')}. "
+            + (sug.get("note") or "")
+        )
         return sug
 
     # Invert colour
     raw_color = sug.get("color") or "Red"
     faded_color = "Black" if raw_color == "Red" else "Red"
-    # Prefer a suit of the faded colour that appeared in outcomes; else any of that colour
     outcomes = sug.get("outcomes") or {}
     opposite_suits = [s for s in SUITS if SUIT_COLOR[s] == faded_color]
     best_suit, best_n = opposite_suits[0], -1
@@ -2087,7 +2111,6 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
         n = outcomes.get(s, 0)
         if n > best_n:
             best_suit, best_n = s, n
-    sug = dict(sug)
     sug["color"] = faded_color
     sug["suit"] = best_suit
     sug["faded"] = True
@@ -2965,15 +2988,38 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.info("Tap the four suits above to build the sequence.")
 
     if len(seq) == 5:
-        fade_on = bool(st.session_state.get("fade_gamble", True))
+        _mode = st.session_state.get("gamble_fade_mode", "adaptive")
+        _adapt = resolve_adaptive_fade(window=40)
+        if _mode == "fade":
+            fade_on = True
+            _why = "Manual: always FADE"
+        elif _mode == "follow":
+            fade_on = False
+            _why = "Manual: always FOLLOW"
+        else:
+            fade_on = bool(_adapt.get("fade"))
+            _why = _adapt.get("reason", "Adaptive")
+        st.session_state.fade_gamble = fade_on
+
         sug = get_gamble_suggestion(seq, fade_color=fade_on)
+        # If strong pattern blocked fade, show FOLLOW even when adaptive wanted fade
+        if sug.get("fade_blocked"):
+            fade_on = False
+            st.session_state.fade_gamble = False
+            _why = f"Strong local pattern — FOLLOW (blocked fade). " + _why
+
         df_full = load_gamble_data()
         recent = df_full.tail(100) if len(df_full) > 100 else df_full
         extended = _build_extended_sequence(seq, recent)
 
-        # ---- Statistical card (colour-first; optional fade) ----
-        mode_label = "Statistical (FADED – bet opposite colour)" if sug.get("faded") else "Statistical suggestion"
+        # ---- Statistical card (colour-first; adaptive fade) ----
+        _roll = _adapt.get("recent_color_acc")
+        _roll_s = f"{_roll}%" if _roll is not None else "n/a"
+        mode_label = "Statistical (FADED – bet opposite colour)" if sug.get("faded") else "Statistical (FOLLOW model colour)"
         st.markdown(f"### {mode_label}")
+        st.caption(
+            f"Mode: **{_mode}** · Rolling model colour (last ~{_adapt.get('window', 40)}): **{_roll_s}** · {_why}"
+        )
         st.markdown('<div class="sug-card stat">', unsafe_allow_html=True)
         st.markdown(
             f"**Colour to play** &nbsp; {color_html(sug['color'])}<br>"
@@ -2981,7 +3027,11 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             unsafe_allow_html=True
         )
         if sug.get("faded"):
-            st.caption(f"Raw model colour was **{sug.get('raw_color_before_fade')}** — faded because model has been anti-predictive.")
+            st.caption(
+                f"Raw model colour was **{sug.get('raw_color_before_fade')}** — recommending opposite."
+            )
+        elif sug.get("fade_blocked"):
+            st.caption("Strong pattern kept — not faded even if adaptive was cold.")
         conf = sug.get("confidence", "None")
         note = sug.get("note", "")
         match_len = sug.get("match_len", 0) or 0
