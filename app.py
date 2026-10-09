@@ -1904,6 +1904,55 @@ def append_gamble_record(record: dict):
         st.error(f"Failed to write Gamble Log: {e}")
         return False
 
+
+def build_gamble_log_record(
+    seq,
+    suggested_color,
+    suggested_suit,
+    actual_suit,
+    source,
+    *,
+    faded=False,
+    raw_model_color="",
+    confidence="",
+    match_len="",
+    match_count="",
+    pattern_pct="",
+    fade_mode="",
+    rolling_color_acc="",
+    note="",
+    provider="",
+):
+    """Full gamble row for later threshold / mode analysis."""
+    now = datetime.now()
+    act = str(actual_suit).strip().title()
+    return {
+        "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "Date": now.strftime("%m/%d/%Y"),
+        "Day": now.strftime("%A"),
+        "Card1": seq[0],
+        "Card2": seq[1],
+        "Card3": seq[2],
+        "Card4": seq[3],
+        "Card5": seq[4],
+        "Sequence": "-".join(seq),
+        "Suggested_Color": suggested_color,
+        "Suggested_Suit": suggested_suit,
+        "Actual_Next": act,
+        "Actual_Color": SUIT_COLOR.get(act, ""),
+        "Source": source,
+        "Faded": "Y" if faded else "N",
+        "Raw_Model_Color": raw_model_color or "",
+        "Confidence": confidence or "",
+        "Match_Len": match_len if match_len != "" else "",
+        "Match_Count": match_count if match_count != "" else "",
+        "Pattern_Pct": pattern_pct if pattern_pct != "" else "",
+        "Fade_Mode": fade_mode or "",
+        "Rolling_Color_Acc": rolling_color_acc if rolling_color_acc != "" else "",
+        "Provider": provider or "",
+        "Note": (note or "")[:200],
+    }
+
 def delete_gamble_records(timestamps_to_delete: list):
     """Delete specific rows from the Gamble Log by Timestamp and update the Google Sheet."""
     try:
@@ -3051,19 +3100,23 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
 
         if st.button("✅ Correct – Log Statistical", key="quick_correct", use_container_width=True, type="primary"):
             actual = sug["suit"]
-            now = datetime.now()
-            record = {
-                "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-                "Date": now.strftime("%m/%d/%Y"),
-                "Day": now.strftime("%A"),
-                "Card1": seq[0], "Card2": seq[1], "Card3": seq[2], "Card4": seq[3], "Card5": seq[4],
-                "Sequence": "-".join(seq),
-                "Suggested_Color": sug["color"],
-                "Suggested_Suit": sug["suit"],
-                "Actual_Next": actual,
-                "Actual_Color": SUIT_COLOR[actual],
-                "Source": "Statistical",
-            }
+            _pct = round(_pattern_color_rate(sug), 1)
+            record = build_gamble_log_record(
+                seq,
+                sug["color"],
+                sug["suit"],
+                actual,
+                "Statistical",
+                faded=bool(sug.get("faded")),
+                raw_model_color=sug.get("raw_color_before_fade") or sug.get("color") or "",
+                confidence=sug.get("confidence") or "",
+                match_len=sug.get("match_len") or "",
+                match_count=sug.get("match_count") or "",
+                pattern_pct=_pct,
+                fade_mode=_mode,
+                rolling_color_acc=_adapt.get("recent_color_acc") or "",
+                note=sug.get("note") or "",
+            )
             if append_gamble_record(record):
                 st.session_state.gamble_sequence = seq[1:] + [actual]
                 st.session_state.ai_gamble_suggestion = None
@@ -3106,19 +3159,23 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             if parsed.get("ok"):
                 if st.button("✅ Correct – Log AI", key="quick_correct_ai", use_container_width=True, type="primary"):
                     actual = parsed["suit"]
-                    now = datetime.now()
-                    record = {
-                        "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-                        "Date": now.strftime("%m/%d/%Y"),
-                        "Day": now.strftime("%A"),
-                        "Card1": seq[0], "Card2": seq[1], "Card3": seq[2], "Card4": seq[3], "Card5": seq[4],
-                        "Sequence": "-".join(seq),
-                        "Suggested_Color": parsed["color"],
-                        "Suggested_Suit": parsed["suit"],
-                        "Actual_Next": actual,
-                        "Actual_Color": SUIT_COLOR[actual],
-                        "Source": "AI",
-                    }
+                    record = build_gamble_log_record(
+                        seq,
+                        parsed["color"],
+                        parsed["suit"],
+                        actual,
+                        "AI",
+                        faded=False,
+                        raw_model_color=parsed.get("color") or "",
+                        confidence="AI",
+                        match_len="",
+                        match_count="",
+                        pattern_pct="",
+                        fade_mode=_mode,
+                        rolling_color_acc=_adapt.get("recent_color_acc") or "",
+                        note=(parsed.get("reason") or "")[:200],
+                        provider=str(provider or ""),
+                    )
                     if append_gamble_record(record):
                         st.session_state.gamble_sequence = seq[1:] + [actual]
                         st.session_state.ai_gamble_suggestion = None
@@ -3141,31 +3198,36 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             )
             submitted = st.form_submit_button("💾 Log & roll forward", use_container_width=True)
             if submitted:
-                now = datetime.now()
-                # Prefer AI parsed suit as "suggested" if attributing to AI and we have it
                 if source_choice == "AI" and st.session_state.ai_gamble_suggestion:
                     packed = st.session_state.ai_gamble_suggestion
-                    parsed = packed[2] if len(packed) == 3 else parse_ai_gamble_response(packed[0])
-                    sug_color = parsed.get("color") or sug["color"]
-                    sug_suit = parsed.get("suit") or sug["suit"]
+                    parsed_m = packed[2] if len(packed) == 3 else parse_ai_gamble_response(packed[0])
+                    sug_color = parsed_m.get("color") or sug["color"]
+                    sug_suit = parsed_m.get("suit") or sug["suit"]
                     src = "AI"
-                elif source_choice == "Statistical":
-                    sug_color, sug_suit, src = sug["color"], sug["suit"], "Statistical"
+                    conf = "AI"
+                    mlen = mc = pp = ""
+                    faded_f = False
+                    raw_c = sug_color
                 else:
                     sug_color, sug_suit, src = sug["color"], sug["suit"], "Statistical"
-
-                record = {
-                    "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
-                    "Date": now.strftime("%m/%d/%Y"),
-                    "Day": now.strftime("%A"),
-                    "Card1": seq[0], "Card2": seq[1], "Card3": seq[2], "Card4": seq[3], "Card5": seq[4],
-                    "Sequence": "-".join(seq),
-                    "Suggested_Color": sug_color,
-                    "Suggested_Suit": sug_suit,
-                    "Actual_Next": actual,
-                    "Actual_Color": SUIT_COLOR[actual],
-                    "Source": src,
-                }
+                    conf = sug.get("confidence") or ""
+                    mlen = sug.get("match_len") or ""
+                    mc = sug.get("match_count") or ""
+                    pp = round(_pattern_color_rate(sug), 1)
+                    faded_f = bool(sug.get("faded"))
+                    raw_c = sug.get("raw_color_before_fade") or sug.get("color") or ""
+                record = build_gamble_log_record(
+                    seq, sug_color, sug_suit, actual, src,
+                    faded=faded_f,
+                    raw_model_color=raw_c,
+                    confidence=conf,
+                    match_len=mlen,
+                    match_count=mc,
+                    pattern_pct=pp,
+                    fade_mode=_mode,
+                    rolling_color_acc=_adapt.get("recent_color_acc") or "",
+                    note="",
+                )
                 if append_gamble_record(record):
                     st.session_state.gamble_sequence = seq[1:] + [actual]
                     st.session_state.ai_gamble_suggestion = None
@@ -3177,8 +3239,13 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.markdown("### Recent log (last 12)")
     gdf = load_gamble_data()
     if not gdf.empty:
-        show_cols = [c for c in ["Timestamp", "Sequence", "Suggested_Suit", "Actual_Next", "Source"] if c in gdf.columns]
-        # ensure Source column visible even if missing historically
+        show_cols = [
+            c for c in [
+                "Timestamp", "Sequence", "Suggested_Color", "Suggested_Suit",
+                "Actual_Next", "Source", "Faded", "Confidence", "Pattern_Pct",
+                "Fade_Mode", "Rolling_Color_Acc",
+            ] if c in gdf.columns
+        ]
         if "Source" not in gdf.columns:
             gdf = gdf.copy()
             gdf["Source"] = "Statistical"
