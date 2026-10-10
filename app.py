@@ -558,6 +558,7 @@ SLOT_NOTES = {
     "Grand Toro": {
         "family": "Cash Horns",
         "notes": [
+            ("Watched 10 Oct (Bris): sticky 10c×2.5 — 18×@22 then 187×@4 (all 3 special bulls). Third hunt switched 20c→$1, flat, 52+ blank. Cluster on same denom; after large leave — do not dig third.", "High"),
             ("Solid Cash Horns volume. Hit ~69%, multi ~73%.", "High"),
             ("Max spins with no feature: 65.", "High"),
             ("Check-in: $275 at $5 (~15% line wins assumed).", "High"),
@@ -799,7 +800,8 @@ LEARNINGS = [
     {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace attempt-4 dig after three mediums", "detail": "Active 22x@14, Active 20x@11, Jackpot 39x@33, then 70+ on $1 to $0. Orb frequency stayed high — still dead. Leave while ahead.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
             {"date": "2026-10-04", "status": "Incorrect", "topic": "Saturday long grind / digs (Master Warrior 242, Khan 137, Peace 81+)", "detail": "Many seats past max; reloads; Master Warrior dig to zero. Contrast Fri 9 Oct short list + exit.", "confidence": "High"},
-        {"date": "2026-10-10", "status": "Observation", "topic": "VIP floor positions logged", "detail": "Enchanted far-left vs middle; Treasure Oasis far-right same bank. El Matador: near Fortune Hearts (~2) vs near Dragon Train/Go for Grand (~6 Bull Rush). Fire Mountain unique on floor.", "confidence": "High"},
+        {"date": "2026-10-10", "status": "Correct", "topic": "Grand Toro sticky denom cluster then leave after large", "detail": "Bris watch: 18x@22 then 187x@4 on sticky 10c; third 52+ blank after hop. Same-denom cluster; no third dig after mega.", "confidence": "High"},
+    {"date": "2026-10-10", "status": "Observation", "topic": "VIP floor positions logged", "detail": "Enchanted far-left vs middle; Treasure Oasis far-right same bank. El Matador: near Fortune Hearts (~2) vs near Dragon Train/Go for Grand (~6 Bull Rush). Fire Mountain unique on floor.", "confidence": "High"},
     {"date": "2026-10-10", "status": "Observation", "topic": "After mega still hits next day (not skip)",
      "detail": "Within 1-2 days after >=150x: day2 hit 82% (n=22). Fire Mountain 1291x Oct8 then 243x Oct9. Mega does not mean sit out.", "confidence": "High"},
     {"date": "2026-10-10", "status": "Observation", "topic": "Hit→Hit dominates consecutive days",
@@ -1327,6 +1329,22 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             composite *= TIER_RANK_MULT.get(tier, 1.0)
             # Day-of-week factor (was computed but not applied — fixed)
             composite *= float(day_factor) if day_factor else 1.0
+            # Tactical day lists (hand-tuned) — boost ordered seats so board matches floor plan
+            day_l = (target_day or "").strip().lower()
+            if day_l == "saturday" and "SATURDAY_PLAY_ORDER" in globals():
+                try:
+                    idx = SATURDAY_PLAY_ORDER.index(slot)
+                    composite *= 1.35 - 0.02 * idx  # #1 highest boost
+                except ValueError:
+                    if slot in ("Maximus Money", "Master Warrior", "Panda Magic", "Shaolin Style", "Lunar Dragon"):
+                        composite *= 0.55
+            elif day_l == "friday" and "FRIDAY_PLAY_ORDER" in globals():
+                try:
+                    idx = FRIDAY_PLAY_ORDER.index(slot)
+                    composite *= 1.35 - 0.02 * idx
+                except ValueError:
+                    if slot in ("Maximus Money", "Master Warrior", "Panda Magic", "Shaolin Style", "Lunar Dragon"):
+                        composite *= 0.55
             play_style = TIER_LABEL.get(tier, play_style)
 
             slot_scores.append({
@@ -2754,7 +2772,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 14  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 15  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
