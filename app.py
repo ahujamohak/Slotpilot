@@ -2090,11 +2090,19 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
 
     conf = (sug.get("confidence") or "")
     n_ctx = int(sug.get("match_count") or 0)
-    # Do not fade a strong local colour signal with adequate sample
-    if conf == "Strong" and raw_rate >= 70 and n_ctx >= 5:
+    # Do not fade a clear local COLOUR signal — adaptive cold streak must not
+    # invert 80%+ context just because recent global accuracy is soft.
+    # Strong grade OR high colour share with decent n.
+    block_fade = (
+        (conf == "Strong" and raw_rate >= 70 and n_ctx >= 5)
+        or (raw_rate >= 75 and n_ctx >= 8)
+        or (raw_rate >= 80 and n_ctx >= 6)
+    )
+    if block_fade:
         sug["fade_blocked"] = True
         sug["note"] = (
-            f"FOLLOW kept — Strong pattern {raw_rate:.0f}% {sug.get('color')} (n={n_ctx}). "
+            f"FOLLOW kept — local colour {raw_rate:.0f}% {sug.get('color')} "
+            f"(n={n_ctx}, {conf}). Adaptive fade blocked. "
             + (sug.get("note") or "")
         )
         return sug
@@ -2656,7 +2664,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 18  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 19  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
