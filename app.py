@@ -132,7 +132,7 @@ def session_profit_status():
     start = float(st.session_state.get("session_start_bankroll", 1000) or 1000)
     current = float(st.session_state.get("current_bankroll", 1000) or 1000)
     target = float(st.session_state.get("session_target", 1800) or 1800)
-    stop_win = float(st.session_state.get("stop_win", 400) or 400)
+    stop_win = float(st.session_state.get("stop_win", 300) or 300)
     stop_loss = float(st.session_state.get("stop_loss", 300) or 300)
     pnl = current - start
     if pnl <= -stop_loss:
@@ -388,17 +388,7 @@ SLOT_NOTES = {
             ("Denom: prefer 10c or $1 for the full hunt.", "Medium"),
         ],
     },
-    "El Matador": {
-        "family": "Bull Rush Blitz 3 Multi",
-        "notes": [
-            ("Floor (VIP): two El Matadors. (1) Second room FAR RIGHT near Fortune Hearts — only ~2 machines nearby (Fri 9 Oct blank was here). (2) FAR RIGHT near Dragon Train + Go for Grand — in a bank of ~6 Bull Rush family.", "High"),
-            ("Max spins no feature: 55. Check-in: $225. Bet flat $5. Get up at 55 — do not stretch to 59+.", "High"),
-            ("Denom path per attempt: 1st $1 (~20 spins) → 2nd 10c (~20) → 3rd 5c (rest to 55). Full 5-line on $1.", "High"),
-            ("After mega/large early (≥70×): max second hunt 20. After medium (~25–40×): max 25. After small (<20×): max 15.", "High"),
-            ("Fri 9 Oct: 59+ blank. Occasional orbs on $1; teases at 31 (10c) and 43 ($1). Not active — correct to leave; was 4 spins past max.", "High"),
-            ("Early hits (spin 1–5) common when it pays. Blank seats stay blank — no reload.", "High"),
-        ],
-    },
+    "El Matador": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 1},
     "Lunar Dragon": {
         "family": "Fortune Hearts",
         "notes": [
@@ -409,17 +399,7 @@ SLOT_NOTES = {
             ("Watched AU $10 session (2026-10-08): feature at 165 (46×) and later 163× after heavy reloads. Late big pays exist — do NOT extend our max spins 70 or dig with reloads. Gamble lost multiple feature/line wins.", "High"),
         ],
     },
-    "Minotaur’s Treasure": {
-        "family": "Bull Rush Stampede",
-        "notes": [
-            ("After LARGE (>~55× e.g. 69×): rehit ~30%; max second hunt 20. Then leave.", "High"),
-            ("Max spins with no feature: 70.", "High"),
-            ("Check-in: $300 at $5 (~15% line wins assumed).", "High"),
-            ("Bet: flat $5 full lines. On $1 denom Bull Rush is 1/3/5 lines only — play 5-line. Do not rotate 1/3/5 lines as a strategy.", "High"),
-            ("Denom: $1 or 10c. Max 2–3 denoms. Same family as Fire Mountain but treat as its own machine.", "Medium"),
-            ("Watched: $10 bet rotator on $1, ~60 spins blank, left. No feature data. Teases alone ≠ coming feature.", "Medium"),
-        ],
-    },
+    "Minotaur’s Treasure": {"max_spins": 75, "checkin": 300, "after_small": 25, "after_med": 30, "after_large": 25, "tier": 1},
     "Battle Drum": {
         "family": "Dragon Rush",
         "notes": [
@@ -429,19 +409,7 @@ SLOT_NOTES = {
             ("Denom: max 3 denoms, ~$75 each; prefer 10c/$1.", "Medium"),
         ],
     },
-    "Enchanted Palace": {
-        "family": "Mystery of the Lamp",
-        "notes": [
-            ("Floor (VIP): two Enchanted Palace. Fri 9 Oct played FAR LEFT. Other is MIDDLE. Far RIGHT of that bank is Treasure Oasis (same Mystery of the Lamp family).", "High"),
-            ("Features: Double / Active / Jackpot orbs (log as orb). Usually 1–3 specials open feature.", "High"),
-            ("Max spins no feature: 55. Check-in: $225. Bet flat $5.", "High"),
-            ("Denom path: 1st 10c or $1 → 2nd 5c → 3rd other. Fri 9 Oct paid 83× on 5c after $1 felt very active.", "High"),
-            ("After small (<20×): max 20. After medium (20–50×): max 20. After large (50×+): max 15. Then leave.", "High"),
-            ("Fri 9 Oct: 83× @49 (minor~$200 on 5c $5), second 15+ leave, checkout +238. Correct — after large short second.", "High"),
-            ("After 2–3 mediums if ahead: leave. Do not open attempt 4 dig. High orb frequency ≠ stay past max.", "High"),
-            ("Gamble stream can run opposite statistical for stretches — use adaptive fade; colour only.", "Medium"),
-        ],
-    },
+    "Enchanted Palace": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 15, "tier": 2},
     "Shaolin Style": {
         "family": "Dragon Rush",
         "notes": [
@@ -450,16 +418,7 @@ SLOT_NOTES = {
             ("Line wins do not raise max spins above 60. No recovery extension.", "High"),
         ],
     },
-    "Outback Gold": {
-        "family": "Go for Grand",
-        "notes": [
-            ("Max spins no feature: 55. Check-in: $225. Bet flat $5.", "Medium"),
-            ("Sample is thin. Watched first feature at 69 after reloads — outside profit-lock window. Do not dig to 70+ with reloads.", "High"),
-            ("When it hits in chain: mediums (14×/25×/18× watched) then leave. After small max 20, after med max 25.", "Medium"),
-            ("Denom: can show life on 2c then go quiet on $1. Prefer one sticky denom once chosen; max 2–3 total.", "Medium"),
-            ("Early good orbs/lines that die mid-seat is common — not a reason to reload.", "High"),
-        ],
-    },
+    "Outback Gold": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
     "Amazon Hearts": {
         "family": "Thunder Empire",
         "notes": [
@@ -468,29 +427,9 @@ SLOT_NOTES = {
             ("After any feature: max second 15. No 300-spin ladder.", "High"),
         ],
     },
-    "Cleopatra’s Kingdom": {
-        "family": "Cash Horns",
-        "notes": [
-            ("Max spins with no feature: 90. Can run late — not like Amazon.", "High"),
-            ("Check-in: $375 at $5 (~15% line wins assumed).", "Medium"),
-        ],
-    },
-    "Ragnar the Great": {
-        "family": "Cash Horns",
-        "notes": [
-            ("Max spins with no feature: 90. Workhorse; hit rate ~75%.", "High"),
-            ("Check-in: $375 at $5 (~15% line wins assumed).", "High"),
-            ("After ≥40×: max second hunt 40.", "High"),
-        ],
-    },
-    "Khan of Khans": {
-        "family": "Shenlong Unleashed",
-        "notes": [
-            ("Max spins with no feature: 55.", "High"),
-            ("Check-in: $225 at $5 (~15% line wins assumed).", "High"),
-            ("After ~50×: max second 25; prefer leave if ahead. Tuesday 51×@25 + ~21 leave = CORRECT.", "High"),
-        ],
-    },
+    "Cleopatra’s Kingdom": {"max_spins": 90, "checkin": 350, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
+    "Ragnar the Great": {"max_spins": 90, "checkin": 350, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
+    "Khan of Khans": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 35, "after_large": 25, "tier": 2},
     "Jelly Jams": {
         "family": "Fat Fortunes",
         "notes": [
@@ -511,24 +450,7 @@ SLOT_NOTES = {
             ("Tuesday checkout $0 after multi small features: INCORRECT to stay through 5 attempts.", "High"),
         ],
     },
-    "Fire Mountain": {
-        "family": "Bull Rush Stampede",
-        "notes": [
-            ("Floor (VIP): ONLY ONE Fire Mountain on the entire floor.", "High"),
-            ("Bet: flat $5. Do not ladder up from $1.25/$2.50. Big pays in log cluster on $1 at $3–$5.", "High"),
-            ("Denom order: start $1. If dead after 25 spins on $1, switch to 5c for up to 25 more. Max 2 denoms. Then leave if still blank (max spins 60 total).", "High"),
-            ("Max spins no feature: 60. Att1 features median ~32; walks often 60–70. Past 60 net+ collapses.", "High"),
-            ("Check-in: $250.", "High"),
-            ("After small (<20×): max 20 spins second hunt then leave. Seconds after small can be tiny.", "High"),
-            ("After medium (20–50×): max 30 second hunt.", "High"),
-            ("After large (50×+): max 35 second hunt. Rehit after large is common (~5/8 in log) but still cap it.", "High"),
-            ("Watched AU 2026-10-08: weak 2× on 5c then 80× on 5c; separate seat $1×3 hit 1291× at spin 89 then 98× at 24. $1 is the money denom. Denom hoppers exist — we still cap at 2 denoms / 60 spins.", "High"),
-            ("Watched sticky $1×$5: 56×@36 then 143×@36 then noise 3×/3× then 65×@10; 200→1000. Staying on $1 paid. First hit inside max 60. After large, second at 36 is 1 spin past our cap 35 — keep cap; do not stretch to 70.", "High"),
-            ("Fri 9 Oct real: $1 ~20 spins quiet → switch 5c → 243× @23 (scatter+orbs, mega). Second only 8 spins then leave. Checkout ~1300. Path $1→5c confirmed.", "High"),
-            ("Watched hopper 5c↔$1 with reloads: first 12×@42 then 52×@71; 300→200 loss. Long hunt + hop + reload underperformed sticky $1 plan.", "High"),
-            ("After a big chain, 3× scatter noise is exit signal — do not fund attempt 4–6 chasing another large.", "High"),
-        ],
-    },
+    "Fire Mountain": {"max_spins": 65, "checkin": 250, "after_small": 25, "after_med": 30, "after_large": 35, "tier": 1},
     "Sun Shots": {
         "family": "Dragon Train",
         "notes": [
@@ -538,15 +460,7 @@ SLOT_NOTES = {
             ("After big feature: max second 25 — multi is selective.", "Medium"),
         ],
     },
-    "Autumn Moon": {
-        "family": "Dragon Link",
-        "notes": [
-            ("Strong multi ~77%. Good continue-after-feature slot.", "High"),
-            ("Max spins with no feature: 60.", "High"),
-            ("Check-in: $250 at $5 (~15% line wins assumed).", "High"),
-            ("After ≥25×: max second hunt 40.", "High"),
-        ],
-    },
+    "Autumn Moon": {"max_spins": 65, "checkin": 250, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 1},
     "Panda Magic": {
         "family": "Dragon Link",
         "notes": [
@@ -555,24 +469,8 @@ SLOT_NOTES = {
             ("Check-in: $300 at $5 (~15% line wins assumed).", "High"),
         ],
     },
-    "Grand Toro": {
-        "family": "Cash Horns",
-        "notes": [
-            ("Watched 10 Oct (Bris): sticky 10c×2.5 — 18×@22 then 187×@4 (all 3 special bulls). Third hunt switched 20c→$1, flat, 52+ blank. Cluster on same denom; after large leave — do not dig third.", "High"),
-            ("Solid Cash Horns volume. Hit ~69%, multi ~73%.", "High"),
-            ("Max spins with no feature: 65.", "High"),
-            ("Check-in: $275 at $5 (~15% line wins assumed).", "High"),
-            ("After ≥40×: max second 40.", "Medium"),
-        ],
-    },
-    "Master Warrior": {
-        "family": "Cash Horns",
-        "notes": [
-            ("Volume machine. Median mult modest (~24×) — need size for profit.", "High"),
-            ("Max spins with no feature: 65.", "High"),
-            ("Check-in: $275 at $5 (~15% line wins assumed).", "High"),
-        ],
-    },
+    "Grand Toro": {"max_spins": 75, "checkin": 300, "after_small": 30, "after_med": 40, "after_large": 35, "tier": 2},
+    "Master Warrior": {"max_spins": 55, "checkin": 250, "after_small": 15, "after_med": 25, "after_large": 20, "tier": 4},
     "Royal Emperor": {
         "family": "Grand Legends",
         "notes": [
@@ -591,25 +489,8 @@ SLOT_NOTES = {
             ("After feature: max second 25.", "Medium"),
         ],
     },
-    "Golden Gong": {
-        "family": "Dragon Link",
-        "notes": [
-            ("Hit ~73%, multi ~67%. Decent Dragon Link.", "Medium"),
-            ("Max spins with no feature: 55.", "Medium"),
-            ("Check-in: $225 at $5 (~15% line wins assumed).", "Medium"),
-        ],
-    },
-    "Peace & Long Life": {
-        "family": "Dragon Link",
-        "notes": [
-            ("Max spins no feature: 60 (~91% of features by 60). Check-in: $250. Bet flat $5 on first hunt.", "High"),
-            ("Multi-hit is real (~10/15 after first). Clusters happen — but median feature only ~24×. Cluster ≠ big.", "High"),
-            ("Late first features (>=50 spins) in log are small/medium (4–41×), not jackpots. Do not treat a late first hit as a raise signal.", "High"),
-            ("After small (<20×) or late first: stay $5 or leave. Max second 20. Do not jump to $7.50/$10.", "High"),
-            ("After solid early first (>=30× and by spin ~40): max second 35 at $5. Optional one step to $7.50 only if session already up — not automatic $10.", "Medium"),
-            ("Denom: $1 and 10c fine. Max 2–3 denoms.", "Medium"),
-        ],
-    },
+    "Golden Gong": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 2},
+    "Peace & Long Life": {"max_spins": 65, "checkin": 250, "after_small": 40, "after_med": 40, "after_large": 30, "tier": 2},
     "Magic Touch": {
         "family": "Fabulous Hold & Spin Jackpot",
         "notes": [
@@ -618,14 +499,7 @@ SLOT_NOTES = {
             ("Check-in: $375 at $5 (~15% line wins assumed).", "Medium"),
         ],
     },
-    "Shadow Clan": {
-        "family": "Dragon Rush",
-        "notes": [
-            ("Features by 60 almost always (95%). Max spins: 40.", "High"),
-            ("Check-in: $175 at $5 (~15% line wins assumed).", "High"),
-            ("Multi ~55%. Medium priority.", "Medium"),
-        ],
-    },
+    "Shadow Clan": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
     "Treasure Oasis": {
         "family": "Mystery of the Lamp",
         "notes": [
@@ -659,14 +533,7 @@ SLOT_NOTES = {
             ("Check-in: $225 at $5 (~15% line wins assumed).", "Medium"),
         ],
     },
-    "King Samurai": {
-        "family": "Thunder Empire",
-        "notes": [
-            ("Denom path: 1st 10c → 2nd $1 → 3rd 20c/2c. Fri 9 Oct paid both on 10c.", "Medium"),
-            ("Avg mult solid (~53×). Max spins: 75.", "Medium"),
-            ("Check-in: $325 at $5 (~15% line wins assumed).", "Medium"),
-        ],
-    },
+    "King Samurai": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
     "Inca Diamonds": {
         "family": "Thunder Empire",
         "notes": [
@@ -682,13 +549,7 @@ SLOT_NOTES = {
             ("Check-in: $325 at $5 (~15% line wins assumed).", "Medium"),
         ],
     },
-    "Go West": {
-        "family": "All Aboard The Lucky Link",
-        "notes": [
-            ("Max spins with no feature: 45.", "Medium"),
-            ("Check-in: $200 at $5 (~15% line wins assumed).", "Medium"),
-        ],
-    },
+    "Go West": {"max_spins": 50, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
     "Glitter & Glitz": {
         "family": "Fabulous Hold & Spin Jackpot",
         "notes": [
@@ -864,42 +725,48 @@ def get_slot_notes(slot_name: str) -> dict:
 # checkin = dollars at $5 with ~15% line wins
 # after_small / after_med / after_large = max second-hunt spins after that size feature
 SLOT_PLAYBOOK = {
+    # Bull Rush
+    "El Matador": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 1},
+    "Minotaur’s Treasure": {"max_spins": 75, "checkin": 300, "after_small": 25, "after_med": 30, "after_large": 25, "tier": 1},
+    "Fire Mountain": {"max_spins": 65, "checkin": 250, "after_small": 25, "after_med": 30, "after_large": 35, "tier": 1},
     "Maximus Money": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 35, "after_large": 35, "tier": 2},
-    "El Matador": {"max_spins": 55, "checkin": 225, "after_small": 15, "after_med": 25, "after_large": 20, "tier": 1},
+    "New York Nights": {"max_spins": 55, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
+    # Cash Horns
+    "Grand Toro": {"max_spins": 75, "checkin": 300, "after_small": 30, "after_med": 40, "after_large": 35, "tier": 2},
+    "Ragnar the Great": {"max_spins": 90, "checkin": 350, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
+    "Cleopatra’s Kingdom": {"max_spins": 90, "checkin": 350, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
+    "Master Warrior": {"max_spins": 55, "checkin": 250, "after_small": 15, "after_med": 25, "after_large": 20, "tier": 4},
+    # Dragon / Train / Link
+    "Autumn Moon": {"max_spins": 65, "checkin": 250, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 1},
+    "Peace & Long Life": {"max_spins": 65, "checkin": 250, "after_small": 40, "after_med": 40, "after_large": 30, "tier": 2},
+    "Golden Gong": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 2},
+    "Shadow Clan": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
+    "Sun Shots": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 30, "after_large": 25, "tier": 1},
+    "Panda Magic": {"max_spins": 70, "checkin": 300, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
+    "Golden Century": {"max_spins": 55, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
+    "Forever Emperor": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 4},
+    # Mystery / Go for Grand / Thunder
+    "Enchanted Palace": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 15, "tier": 2},
+    "Treasure Oasis": {"max_spins": 70, "checkin": 300, "after_small": 25, "after_med": 30, "after_large": 25, "tier": 3},
+    "Outback Gold": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
+    "Go West": {"max_spins": 50, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
+    "King Samurai": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
+    "Inca Diamonds": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
+    "Khan of Khans": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 35, "after_large": 25, "tier": 2},
+    # Other
     "Glitter & Glitz": {"max_spins": 45, "checkin": 200, "after_small": 25, "after_med": 25, "after_large": 25, "tier": 4},
     "Lunar Dragon": {"max_spins": 70, "checkin": 300, "after_small": 0, "after_med": 30, "after_large": 30, "tier": 4},
-    "Minotaur’s Treasure": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 1},
     "Battle Drum": {"max_spins": 60, "checkin": 250, "after_small": 0, "after_med": 15, "after_large": 15, "tier": 4},
-    "Outback Gold": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
     "Amazon Hearts": {"max_spins": 35, "checkin": 150, "after_small": 15, "after_med": 15, "after_large": 15, "tier": 5},
     "Shaolin Style": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 4},
-    "Enchanted Palace": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 20, "after_large": 15, "tier": 2},
-    "Khan of Khans": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
-    "Cleopatra’s Kingdom": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
-    "Ragnar the Great": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
-    "Jelly Jams": {"max_spins": 50, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 5},
-    "Forever Emperor": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 4},
-    "Fire Mountain": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 35, "tier": 1, "denoms": ["$1", "5c"], "bet": 5},
-    "Sun Shots": {"max_spins": 75, "checkin": 325, "after_small": 25, "after_med": 25, "after_large": 25, "tier": 1},
-    "Autumn Moon": {"max_spins": 60, "checkin": 250, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 1},
-    "Panda Magic": {"max_spins": 70, "checkin": 300, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 2},
-    "Grand Toro": {"max_spins": 65, "checkin": 275, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 2},
-    "Master Warrior": {"max_spins": 65, "checkin": 275, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 2},
-    "Royal Emperor": {"max_spins": 40, "checkin": 175, "after_small": 15, "after_med": 20, "after_large": 20, "tier": 3},
-    "New York Nights": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
-    "Golden Gong": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 2},
-    "Peace & Long Life": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 35, "after_large": 40, "tier": 2},
-    "Magic Touch": {"max_spins": 90, "checkin": 375, "after_small": 25, "after_med": 40, "after_large": 40, "tier": 3},
-    "Shadow Clan": {"max_spins": 40, "checkin": 175, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
-    "Treasure Oasis": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
-    "Emperor's Choice": {"max_spins": 80, "checkin": 350, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
-    "Golden Century": {"max_spins": 40, "checkin": 175, "after_small": 15, "after_med": 20, "after_large": 20, "tier": 3},
-    "Come one, Come all": {"max_spins": 55, "checkin": 225, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
-    "King Samurai": {"max_spins": 75, "checkin": 325, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
-    "Inca Diamonds": {"max_spins": 80, "checkin": 350, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
-    "Fire Legend": {"max_spins": 75, "checkin": 325, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
-    "Go West": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
+    "Magic Touch": {"max_spins": 70, "checkin": 350, "after_small": 25, "after_med": 30, "after_large": 25, "tier": 3},
+    "Come one, Come all": {"max_spins": 55, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 3},
+    "Royal Emperor": {"max_spins": 50, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 3},
+    "Jelly Jams": {"max_spins": 55, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 4},
+    "Emperor's Choice": {"max_spins": 70, "checkin": 350, "after_small": 20, "after_med": 30, "after_large": 25, "tier": 3},
+    "Fire Legend": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 25, "tier": 3},
 }
+
 
 def get_playbook(slot_name: str) -> dict:
     if not slot_name:
@@ -1994,8 +1861,9 @@ def build_gamble_log_record(
     """Full gamble row for later threshold / mode analysis."""
     now = datetime.now()
     act = str(actual_suit).strip().title()
+    ts = now.strftime("%Y-%m-%d %H:%M:%S.") + f"{now.microsecond:06d}"
     return {
-        "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "Timestamp": ts,
         "Date": now.strftime("%m/%d/%Y"),
         "Day": now.strftime("%A"),
         "Card1": seq[0],
@@ -2205,29 +2073,33 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     Public API – Variable-Order Markov.
     If fade_color=True, invert the recommended colour — UNLESS the local pattern
     is Strong with ≥70% one colour (do not fade a clear signal).
+    Pattern_Pct always refers to the RAW model colour share (before fade).
     """
     df = load_gamble_data()
     sug = _suggest_core(sequence, df)
     sug = dict(sug)
     sug["faded"] = False
     sug["fade_blocked"] = False
+    # Freeze raw model colour rate BEFORE any fade (UI/log must not invert this)
+    raw_rate = _pattern_color_rate(sug)
+    sug["raw_pattern_pct"] = round(raw_rate, 1)
+    sug["raw_color_before_fade"] = sug.get("color") or ""
 
     if not fade_color:
         return sug
 
-    # Do not fade a strong local colour signal with adequate sample
-    rate = _pattern_color_rate(sug)
     conf = (sug.get("confidence") or "")
     n_ctx = int(sug.get("match_count") or 0)
-    if conf == "Strong" and rate >= 70 and n_ctx >= 5:
+    # Do not fade a strong local colour signal with adequate sample
+    if conf == "Strong" and raw_rate >= 70 and n_ctx >= 5:
         sug["fade_blocked"] = True
         sug["note"] = (
-            f"FOLLOW kept — Strong pattern {rate:.0f}% {sug.get('color')} (n={n_ctx}). "
+            f"FOLLOW kept — Strong pattern {raw_rate:.0f}% {sug.get('color')} (n={n_ctx}). "
             + (sug.get("note") or "")
         )
         return sug
 
-    # Invert colour
+    # Invert colour for play; keep raw_* fields for honesty in the log
     raw_color = sug.get("color") or "Red"
     faded_color = "Black" if raw_color == "Red" else "Red"
     outcomes = sug.get("outcomes") or {}
@@ -2240,9 +2112,11 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     sug["color"] = faded_color
     sug["suit"] = best_suit
     sug["faded"] = True
-    sug["raw_color_before_fade"] = raw_color
     note = sug.get("note", "")
-    sug["note"] = f"FADED (opposite of model). Model said {raw_color}. " + note
+    sug["note"] = (
+        f"FADED (opposite of model). Model said {raw_color} ({raw_rate:.0f}% of context). "
+        + note
+    )
     return sug
 
 
@@ -2640,11 +2514,19 @@ def compute_ai_vs_stat_performance(window: int = 50):
             return None, None, 0
         suit_ok = (sub["Suggested_Suit"].astype(str).str.strip().str.title() ==
                    sub["Actual_Next"].astype(str).str.strip().str.title())
-        # colour from suit if needed
-        def _col(s):
+        def _col_from_suit(s):
             s = str(s).strip().title()
             return SUIT_COLOR.get(s, "")
-        color_ok = sub["Suggested_Suit"].map(_col) == sub["Actual_Next"].map(_col)
+        # Prefer Suggested_Color column (correct when faded); else derive from suit
+        if "Suggested_Color" in sub.columns:
+            sug_c = sub["Suggested_Color"].astype(str).str.strip().str.title()
+            act_c = sub["Actual_Next"].map(_col_from_suit)
+            # fill blanks from suit
+            blank = sug_c.isin(["", "Nan", "None", "NaN"])
+            sug_c = sug_c.where(~blank, sub["Suggested_Suit"].map(_col_from_suit))
+            color_ok = sug_c == act_c
+        else:
+            color_ok = sub["Suggested_Suit"].map(_col_from_suit) == sub["Actual_Next"].map(_col_from_suit)
         n = len(sub)
         return (
             round(float(suit_ok.mean()) * 100, 1) if n else None,
@@ -2774,7 +2656,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 16  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 18  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3158,6 +3040,11 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             )
         elif sug.get("fade_blocked"):
             st.caption("Strong pattern kept — not faded even if adaptive was cold.")
+        if sug.get("faded") and sug.get("raw_color_before_fade"):
+            st.caption(
+                f"Model raw: **{sug.get('raw_color_before_fade')}** "
+                f"({sug.get('raw_pattern_pct', '?')}% of context) → playing opposite."
+            )
         conf = sug.get("confidence", "None")
         note = sug.get("note", "")
         match_len = sug.get("match_len", 0) or 0
@@ -3180,7 +3067,9 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
 
         if st.button("✅ Correct – Log Statistical", key="quick_correct", use_container_width=True, type="primary"):
             actual = sug["suit"]
-            _pct = round(_pattern_color_rate(sug), 1)
+            _pct = sug.get("raw_pattern_pct")
+            if _pct == "" or _pct is None:
+                _pct = round(_pattern_color_rate({**sug, "color": sug.get("raw_color_before_fade") or sug.get("color")}), 1)
             record = build_gamble_log_record(
                 seq,
                 sug["color"],
@@ -3278,40 +3167,88 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             )
             submitted = st.form_submit_button("💾 Log & roll forward", use_container_width=True)
             if submitted:
-                if source_choice == "AI" and st.session_state.ai_gamble_suggestion:
+                records = []
+                # Statistical row
+                def _stat_record():
+                    _pct = sug.get("raw_pattern_pct")
+                    if _pct == "" or _pct is None:
+                        _pct = round(_pattern_color_rate({**sug, "color": sug.get("raw_color_before_fade") or sug.get("color")}), 1)
+                    return build_gamble_log_record(
+                        seq, sug["color"], sug["suit"], actual, "Statistical",
+                        faded=bool(sug.get("faded")),
+                        raw_model_color=sug.get("raw_color_before_fade") or sug.get("color") or "",
+                        confidence=sug.get("confidence") or "",
+                        match_len=sug.get("match_len") or "",
+                        match_count=sug.get("match_count") or "",
+                        pattern_pct=_pct,
+                        fade_mode=_mode,
+                        rolling_color_acc=_adapt.get("recent_color_acc") or "",
+                        note=sug.get("note") or "",
+                    )
+                # AI row if available
+                def _ai_record():
                     packed = st.session_state.ai_gamble_suggestion
+                    if not packed:
+                        return None
+                    provider = packed[1] if len(packed) > 1 else ""
                     parsed_m = packed[2] if len(packed) == 3 else parse_ai_gamble_response(packed[0])
-                    sug_color = parsed_m.get("color") or sug["color"]
-                    sug_suit = parsed_m.get("suit") or sug["suit"]
-                    src = "AI"
-                    conf = "AI"
-                    mlen = mc = pp = ""
-                    faded_f = False
-                    raw_c = sug_color
+                    if not parsed_m.get("ok") and not parsed_m.get("color"):
+                        return None
+                    return build_gamble_log_record(
+                        seq,
+                        parsed_m.get("color") or "",
+                        parsed_m.get("suit") or "",
+                        actual,
+                        "AI",
+                        faded=False,
+                        raw_model_color=parsed_m.get("color") or "",
+                        confidence="AI",
+                        match_len="",
+                        match_count="",
+                        pattern_pct="",
+                        fade_mode=_mode,
+                        rolling_color_acc=_adapt.get("recent_color_acc") or "",
+                        note=(parsed_m.get("reason") or "")[:200],
+                        provider=str(provider or ""),
+                    )
+                if source_choice == "Statistical":
+                    records.append(_stat_record())
+                elif source_choice == "AI":
+                    r = _ai_record()
+                    if r:
+                        records.append(r)
+                    else:
+                        st.warning("No AI suggestion in session — logged Statistical instead.")
+                        records.append(_stat_record())
                 else:
-                    sug_color, sug_suit, src = sug["color"], sug["suit"], "Statistical"
-                    conf = sug.get("confidence") or ""
-                    mlen = sug.get("match_len") or ""
-                    mc = sug.get("match_count") or ""
-                    pp = round(_pattern_color_rate(sug), 1)
-                    faded_f = bool(sug.get("faded"))
-                    raw_c = sug.get("raw_color_before_fade") or sug.get("color") or ""
-                record = build_gamble_log_record(
-                    seq, sug_color, sug_suit, actual, src,
-                    faded=faded_f,
-                    raw_model_color=raw_c,
-                    confidence=conf,
-                    match_len=mlen,
-                    match_count=mc,
-                    pattern_pct=pp,
-                    fade_mode=_mode,
-                    rolling_color_acc=_adapt.get("recent_color_acc") or "",
-                    note="",
-                )
-                if append_gamble_record(record):
+                    # Both / Unknown — one row each so both trackers update
+                    records.append(_stat_record())
+                    r = _ai_record()
+                    if r:
+                        records.append(r)
+                    else:
+                        st.caption("AI suggestion not available — only Statistical row written.")
+                ok = True
+                # Force unique timestamps when logging both engines
+                seen_ts = set()
+                for rec in records:
+                    ts = str(rec.get("Timestamp", ""))
+                    while ts in seen_ts:
+                        try:
+                            base, frac = ts.rsplit(".", 1)
+                            frac_i = int(frac) + 1000
+                            ts = f"{base}.{frac_i:06d}"
+                            rec["Timestamp"] = ts
+                        except Exception:
+                            rec["Timestamp"] = ts + "1"
+                            ts = rec["Timestamp"]
+                    seen_ts.add(ts)
+                    if not append_gamble_record(rec):
+                        ok = False
+                if ok and records:
                     st.session_state.gamble_sequence = seq[1:] + [actual]
                     st.session_state.ai_gamble_suggestion = None
-                    st.success("Logged. Sequence rolled forward.")
+                    st.success(f"Logged {len(records)} row(s). Sequence rolled forward.")
                     st.rerun()
 
     # ---- Recent log ----
