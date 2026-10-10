@@ -333,6 +333,27 @@ TIER_LABEL = {
 TIER_RANK_MULT = {1: 1.60, 2: 1.15, 3: 1.00, 4: 0.50, 5: 0.20}
 
 # Fixed Friday sequence — no "or" options. Stop when +$500 profit hit.
+
+# Saturday order — not a copy of Friday. After-mega seats OK but not forced first.
+# Fri 9 Oct was late night (23:00–01:00). Blanks Fri (El Matador, Outback) eligible flip.
+SATURDAY_PLAY_ORDER = [
+    "Minotaur’s Treasure",   # strong weekend / not on Fri list top
+    "El Matador",            # Fri blank — flip candidate
+    "Enchanted Palace",      # Fri paid large — short rules only
+    "Grand Toro",
+    "Autumn Moon",
+    "Ragnar the Great",
+    "Go West",
+    "Outback Gold",          # Fri blank
+    "King Samurai",
+    "Peace & Long Life",
+    "Fire Mountain",         # Fri mega — still playable per log; lower priority today
+    "Cleopatra’s Kingdom",
+    "Shadow Clan",
+    "Golden Gong",
+    "Khan of Khans",
+]
+
 FRIDAY_PLAY_ORDER = [
     # Refined from multi-Friday dry-runs (Aug–Oct 2026). Stop at +$500.
     "Fire Mountain",
@@ -370,6 +391,7 @@ SLOT_NOTES = {
     "El Matador": {
         "family": "Bull Rush Blitz 3 Multi",
         "notes": [
+            ("Floor (VIP): two El Matadors. (1) Second room FAR RIGHT near Fortune Hearts — only ~2 machines nearby (Fri 9 Oct blank was here). (2) FAR RIGHT near Dragon Train + Go for Grand — in a bank of ~6 Bull Rush family.", "High"),
             ("Max spins no feature: 55. Check-in: $225. Bet flat $5. Get up at 55 — do not stretch to 59+.", "High"),
             ("Denom path per attempt: 1st $1 (~20 spins) → 2nd 10c (~20) → 3rd 5c (rest to 55). Full 5-line on $1.", "High"),
             ("After mega/large early (≥70×): max second hunt 20. After medium (~25–40×): max 25. After small (<20×): max 15.", "High"),
@@ -410,6 +432,7 @@ SLOT_NOTES = {
     "Enchanted Palace": {
         "family": "Mystery of the Lamp",
         "notes": [
+            ("Floor (VIP): two Enchanted Palace. Fri 9 Oct played FAR LEFT. Other is MIDDLE. Far RIGHT of that bank is Treasure Oasis (same Mystery of the Lamp family).", "High"),
             ("Features: Double / Active / Jackpot orbs (log as orb). Usually 1–3 specials open feature.", "High"),
             ("Max spins no feature: 55. Check-in: $225. Bet flat $5.", "High"),
             ("Denom path: 1st 10c or $1 → 2nd 5c → 3rd other. Fri 9 Oct paid 83× on 5c after $1 felt very active.", "High"),
@@ -491,6 +514,7 @@ SLOT_NOTES = {
     "Fire Mountain": {
         "family": "Bull Rush Stampede",
         "notes": [
+            ("Floor (VIP): ONLY ONE Fire Mountain on the entire floor.", "High"),
             ("Bet: flat $5. Do not ladder up from $1.25/$2.50. Big pays in log cluster on $1 at $3–$5.", "High"),
             ("Denom order: start $1. If dead after 25 spins on $1, switch to 5c for up to 25 more. Max 2 denoms. Then leave if still blank (max spins 60 total).", "High"),
             ("Max spins no feature: 60. Att1 features median ~32; walks often 60–70. Past 60 net+ collapses.", "High"),
@@ -604,6 +628,7 @@ SLOT_NOTES = {
     "Treasure Oasis": {
         "family": "Mystery of the Lamp",
         "notes": [
+            ("Floor (VIP): far RIGHT of Mystery of the Lamp bank (Enchanted left/middle, Oasis right).", "Medium"),
             ("Median mult healthy (~49×). Can run longer.", "Medium"),
             ("Max spins with no feature: 80.", "Medium"),
             ("Check-in: $350 at $5 (~15% line wins assumed).", "Medium"),
@@ -773,7 +798,15 @@ LEARNINGS = [
     {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace long blank 102 with denom hop", "detail": "Second EP video: orbs and lines, still 102 to zero. Confirms max 55 and no attempt-4 dig.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace attempt-4 dig after three mediums", "detail": "Active 22x@14, Active 20x@11, Jackpot 39x@33, then 70+ on $1 to $0. Orb frequency stayed high — still dead. Leave while ahead.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
-            {"date": "2026-10-09", "status": "Correct", "topic": "Friday +$675: hard exits + stop at target",
+            {"date": "2026-10-04", "status": "Incorrect", "topic": "Saturday long grind / digs (Master Warrior 242, Khan 137, Peace 81+)", "detail": "Many seats past max; reloads; Master Warrior dig to zero. Contrast Fri 9 Oct short list + exit.", "confidence": "High"},
+        {"date": "2026-10-10", "status": "Observation", "topic": "VIP floor positions logged", "detail": "Enchanted far-left vs middle; Treasure Oasis far-right same bank. El Matador: near Fortune Hearts (~2) vs near Dragon Train/Go for Grand (~6 Bull Rush). Fire Mountain unique on floor.", "confidence": "High"},
+    {"date": "2026-10-10", "status": "Observation", "topic": "After mega still hits next day (not skip)",
+     "detail": "Within 1-2 days after >=150x: day2 hit 82% (n=22). Fire Mountain 1291x Oct8 then 243x Oct9. Mega does not mean sit out.", "confidence": "High"},
+    {"date": "2026-10-10", "status": "Observation", "topic": "Hit→Hit dominates consecutive days",
+     "detail": "Gap<=2d: Hit→Hit 174, Hit→Miss 58, Miss→Hit 39, Miss→Miss 19. Working seat can work again; blank can flip.", "confidence": "High"},
+    {"date": "2026-10-09", "status": "Observation", "topic": "Fri 9 Oct session window late night Adelaide",
+     "detail": "Played ~23:00–01:00. Profit +675. Note time-of-day for future human-flow comparison.", "confidence": "High"},
+    {"date": "2026-10-09", "status": "Correct", "topic": "Friday +$675: hard exits + stop at target",
      "detail": "El Matador blank, Enchanted 83x leave 15, Peace 31x leave 20, Outback 51+, King Samurai no 3rd, Fire Mountain 243x leave 8. Target hit. Walk.", "confidence": "High"},
     {"date": "2026-10-09", "status": "Incorrect", "topic": "El Matador past max spins to 59+",
      "detail": "Max 55. Left at 59+. Denom path unclear on pocket card — need 1st/2nd/3rd denom explicit.", "confidence": "High"},
@@ -2721,7 +2754,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 12  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 14  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
