@@ -2068,6 +2068,49 @@ def _pattern_color_rate(sug: dict) -> float:
     return 100.0 * same / total
 
 
+
+def _gamble_action(sug: dict) -> dict:
+    """
+    Always returns a colour to play. Never SKIP.
+    Weak / thin sample only appears in the note so logging continues.
+    """
+    conf = (sug.get("confidence") or "None")
+    n = int(sug.get("match_count") or 0)
+    try:
+        pct = float(sug.get("raw_pattern_pct"))
+    except (TypeError, ValueError):
+        pct = _pattern_color_rate({**sug, "color": sug.get("raw_color_before_fade") or sug.get("color")})
+    color = sug.get("color") or "Red"
+    faded = bool(sug.get("faded"))
+    parts = []
+    if faded:
+        parts.append("faded")
+    if conf == "Strong":
+        parts.append("strong")
+    elif conf == "Moderate":
+        parts.append("moderate")
+    elif conf == "Weak":
+        parts.append("weak")
+    if n < 5:
+        parts.append(f"low history n={n}")
+    elif pct < 60:
+        parts.append(f"soft {pct:.0f}%")
+    tag = "PLAY"
+    if parts:
+        tag = f"PLAY ({', '.join(parts)})"
+    detail = f"{conf} · model context {pct:.0f}% · n={n}"
+    if faded:
+        detail += f" · raw was {sug.get('raw_color_before_fade')}"
+    if conf == "Weak" or n < 5:
+        detail += " · low confidence — still play colour; keep logging"
+    return {
+        "action": "PLAY",
+        "action_label": f"{tag} {color.upper()}",
+        "play_color": color,
+        "detail": detail,
+    }
+
+
 def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     """
     Public API – Variable-Order Markov.
@@ -2128,12 +2171,14 @@ def get_gamble_suggestion(sequence: list, fade_color: bool = False):
     return sug
 
 
-def resolve_adaptive_fade(window: int = 40, fade_below: float = 45.0, follow_above: float = 55.0):
+def resolve_adaptive_fade(window: int = 80, fade_below: float = 40.0, follow_above: float = 50.0):
     """
     Decide whether to fade statistical colour from recent walk-forward accuracy.
-    - recent model colour acc >= follow_above → FOLLOW (fade=False)
-    - recent model colour acc <= fade_below → FADE (fade=True)
-    - in between → FOLLOW (slight historical edge)
+    Evidence (last 80 stat rows): when FADED, played colour hit 33% while RAW model
+    would have hit 67%. So fade only when model is clearly cold.
+    - recent model colour acc >= follow_above → FOLLOW
+    - recent model colour acc <= fade_below → FADE
+    - in between → FOLLOW (do not invert on soft data)
     Returns dict: fade, mode_label, recent_color_acc, recent_fade_acc, n, reason
     """
     bt = backtest_gamble_accuracy(window=window)
@@ -2157,7 +2202,7 @@ def resolve_adaptive_fade(window: int = 40, fade_below: float = 45.0, follow_abo
             "recent_color_acc": acc,
             "recent_fade_acc": fade_acc,
             "n": n,
-            "reason": f"Last {n} model colour {acc}% ≤ {fade_below}% → bet opposite colour.",
+            "reason": f"Last {n} model colour {acc}% ≤ {fade_below}% (fade only when clearly cold) → bet opposite colour.",
             "window": window,
         }
     if acc >= follow_above:
@@ -2664,7 +2709,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 19  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 22  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -2945,12 +2990,12 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         return "n/a" if v is None else f"{v}%"
 
     # ---- Performance: Statistical (walk-forward) + AI (logged Source) ----
-    with st.expander("📉 Accuracy — Statistical vs AI", expanded=True):
+    with st.expander("📉 Accuracy — Statistical vs AI", expanded=False):
         bt = backtest_gamble_accuracy(window=50)
         perf = compute_ai_vs_stat_performance(window=50)
 
         st.markdown("**Statistical engine** (honest walk-forward)")
-        _adapt = resolve_adaptive_fade(window=40)
+        _adapt = resolve_adaptive_fade(window=80)
         if bt is None:
             st.info("Need ~45+ logged rows for statistical backtest.")
         else:
@@ -3005,7 +3050,7 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
 
     if len(seq) == 5:
         _mode = st.session_state.get("gamble_fade_mode", "adaptive")
-        _adapt = resolve_adaptive_fade(window=40)
+        _adapt = resolve_adaptive_fade(window=80)
         if _mode == "fade":
             fade_on = True
             _why = "Manual: always FADE"
@@ -3037,6 +3082,9 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             f"Mode: **{_mode}** · Rolling model colour (last ~{_adapt.get('window', 40)}): **{_roll_s}** · {_why}"
         )
         st.markdown('<div class="sug-card stat">', unsafe_allow_html=True)
+        _act = _gamble_action(sug)
+        st.success(f"### {_act['action_label']}")
+        st.caption(_act["detail"])
         st.markdown(
             f"**Colour to play** &nbsp; {color_html(sug['color'])}<br>"
             f"**Suit (optional)** &nbsp; {suit_html(sug['suit'])}",
@@ -3063,11 +3111,12 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             st.info(f"**Moderate {len_tag}** – {note}")
         elif conf == "Weak":
             st.warning(f"**Weak {len_tag}** – {note}")
+            st.caption("Low confidence — play the colour above and keep logging so the engine learns.")
         else:
             st.caption(f"No signal – {note}")
         _mc = int(sug.get("match_count") or 0)
         if _mc and _mc < 3:
-            st.caption(f"Thin sample (n={_mc}) — treat near coin-flip; prefer skip or colour-only small.")
+            st.caption(f"Thin sample (n={_mc}) — still play colour above; log result to build history.")
         if sug.get("outcomes"):
             breakdown = ", ".join(f"{s} ×{c}" for s, c in sorted(sug["outcomes"].items(), key=lambda x: -x[1]))
             st.caption(f"Seen {sug.get('match_count', 0)}× · Followed by: {breakdown}")
