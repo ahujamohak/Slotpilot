@@ -370,11 +370,11 @@ SLOT_NOTES = {
     "El Matador": {
         "family": "Bull Rush Blitz 3 Multi",
         "notes": [
-            ("Max spins with no feature: 55.", "High"),
-            ("Check-in: $225 at $5 (~15% line wins assumed).", "High"),
-            ("After mega/large early (≥70×): max spins second hunt: 20. Then leave.", "High"),
-            ("After medium early (~25–40×): max spins second hunt: 25. Leaving at 11 after 31× is conservative/OK.", "Medium"),
-            ("After small (<20×): max spins second hunt: 15. Prefer leave.", "Medium"),
+            ("Max spins no feature: 55. Check-in: $225. Bet flat $5. Get up at 55 — do not stretch to 59+.", "High"),
+            ("Denom path per attempt: 1st $1 (~20 spins) → 2nd 10c (~20) → 3rd 5c (rest to 55). Full 5-line on $1.", "High"),
+            ("After mega/large early (≥70×): max second hunt 20. After medium (~25–40×): max 25. After small (<20×): max 15.", "High"),
+            ("Fri 9 Oct: 59+ blank. Occasional orbs on $1; teases at 31 (10c) and 43 ($1). Not active — correct to leave; was 4 spins past max.", "High"),
+            ("Early hits (spin 1–5) common when it pays. Blank seats stay blank — no reload.", "High"),
         ],
     },
     "Lunar Dragon": {
@@ -410,13 +410,13 @@ SLOT_NOTES = {
     "Enchanted Palace": {
         "family": "Mystery of the Lamp",
         "notes": [
-            ("Features are Double / Active / Jackpot orbs (not classic scatter+orb). Log all as orb. Usually 1–3 specials open the feature.", "High"),
+            ("Features: Double / Active / Jackpot orbs (log as orb). Usually 1–3 specials open feature.", "High"),
             ("Max spins no feature: 55. Check-in: $225. Bet flat $5.", "High"),
-            ("Median features often medium (~20–40×). Back-to-back mediums are normal.", "High"),
-            ("After small (<20×): max second 20. After medium (20–50×): max 20. After large (50×+): max 15. Then leave.", "High"),
-            ("After 2–3 mediums if cabinet is ahead: leave. Do not open attempt 4 into a long blank.", "High"),
-            ("Denom: 10c or $1 preferred at $5. Max 2–3 denoms. Watched hop 2c→5c→10c→$1 then 70+ dead on attempt 4 → zeroed a winning seat.", "High"),
-            ("High orb frequency / line wins without feature = tease zone, not a reason to pass max spins.", "High"),
+            ("Denom path: 1st 10c or $1 → 2nd 5c → 3rd other. Fri 9 Oct paid 83× on 5c after $1 felt very active.", "High"),
+            ("After small (<20×): max 20. After medium (20–50×): max 20. After large (50×+): max 15. Then leave.", "High"),
+            ("Fri 9 Oct: 83× @49 (minor~$200 on 5c $5), second 15+ leave, checkout +238. Correct — after large short second.", "High"),
+            ("After 2–3 mediums if ahead: leave. Do not open attempt 4 dig. High orb frequency ≠ stay past max.", "High"),
+            ("Gamble stream can run opposite statistical for stretches — use adaptive fade; colour only.", "Medium"),
         ],
     },
     "Shaolin Style": {
@@ -500,6 +500,7 @@ SLOT_NOTES = {
             ("After large (50×+): max 35 second hunt. Rehit after large is common (~5/8 in log) but still cap it.", "High"),
             ("Watched AU 2026-10-08: weak 2× on 5c then 80× on 5c; separate seat $1×3 hit 1291× at spin 89 then 98× at 24. $1 is the money denom. Denom hoppers exist — we still cap at 2 denoms / 60 spins.", "High"),
             ("Watched sticky $1×$5: 56×@36 then 143×@36 then noise 3×/3× then 65×@10; 200→1000. Staying on $1 paid. First hit inside max 60. After large, second at 36 is 1 spin past our cap 35 — keep cap; do not stretch to 70.", "High"),
+            ("Fri 9 Oct real: $1 ~20 spins quiet → switch 5c → 243× @23 (scatter+orbs, mega). Second only 8 spins then leave. Checkout ~1300. Path $1→5c confirmed.", "High"),
             ("Watched hopper 5c↔$1 with reloads: first 12×@42 then 52×@71; 300→200 loss. Long hunt + hop + reload underperformed sticky $1 plan.", "High"),
             ("After a big chain, 3× scatter noise is exit signal — do not fund attempt 4–6 chasing another large.", "High"),
         ],
@@ -635,6 +636,7 @@ SLOT_NOTES = {
     "King Samurai": {
         "family": "Thunder Empire",
         "notes": [
+            ("Denom path: 1st 10c → 2nd $1 → 3rd 20c/2c. Fri 9 Oct paid both on 10c.", "Medium"),
             ("Avg mult solid (~53×). Max spins: 75.", "Medium"),
             ("Check-in: $325 at $5 (~15% line wins assumed).", "Medium"),
         ],
@@ -675,6 +677,9 @@ SLOT_NOTES = {
 # Session learnings / knowledge base
 
 VERIFIED_CLAIMS = [
+    {"claim": "El Matador: stretch past 55 if teases appear", "source": "Fri 9 Oct", "verdict": "INCORRECT", "evidence": "59+ blank after teases at 31/43. Max 55 hard stop.", "confidence": "High"},
+    {"claim": "Pocket notes need 1st/2nd/3rd denom per slot", "source": "Fri 9 Oct El Matador confusion", "verdict": "CORRECT", "evidence": "Player used wrong denom path without explicit order on card.", "confidence": "High"},
+
     {"claim": "Outback Gold: reload to 300 to catch feature at spin 69", "source": "Watched 2026-10-08", "verdict": "REJECT for our plan", "evidence": "Feature came at 69 after three $100 loads. We use max 55 / $225 once. Accept missing some late first features.", "confidence": "High"},
 
     {"claim": "Enchanted Palace: after 3 medium features keep hunting attempt 4 while orbs are frequent", "source": "Watched 2026-10-08", "verdict": "INCORRECT", "evidence": "22x/20x/39x then 70+ blank to zero. Leave while ahead after 2–3 mediums. Max first-hunt 55.", "confidence": "High"},
@@ -768,7 +773,17 @@ LEARNINGS = [
     {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace long blank 102 with denom hop", "detail": "Second EP video: orbs and lines, still 102 to zero. Confirms max 55 and no attempt-4 dig.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace attempt-4 dig after three mediums", "detail": "Active 22x@14, Active 20x@11, Jackpot 39x@33, then 70+ on $1 to $0. Orb frequency stayed high — still dead. Leave while ahead.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
-        {"date": "2026-10-08", "status": "Correct", "topic": "Friday plan: short A-tier list beats long grind",
+            {"date": "2026-10-09", "status": "Correct", "topic": "Friday +$675: hard exits + stop at target",
+     "detail": "El Matador blank, Enchanted 83x leave 15, Peace 31x leave 20, Outback 51+, King Samurai no 3rd, Fire Mountain 243x leave 8. Target hit. Walk.", "confidence": "High"},
+    {"date": "2026-10-09", "status": "Incorrect", "topic": "El Matador past max spins to 59+",
+     "detail": "Max 55. Left at 59+. Denom path unclear on pocket card — need 1st/2nd/3rd denom explicit.", "confidence": "High"},
+    {"date": "2026-10-09", "status": "Correct", "topic": "Enchanted after large max 15 second",
+     "detail": "83x @49 on 5c; second 15+ leave; +238. Large-win short second works.", "confidence": "High"},
+    {"date": "2026-10-09", "status": "Correct", "topic": "Fire Mountain $1 then 5c real session",
+     "detail": "$1 quiet ~20; 5c hit 243x @23; second 8 only. Denom path correct.", "confidence": "High"},
+    {"date": "2026-10-09", "status": "Correct", "topic": "King Samurai no third after 30x then 16x",
+     "detail": "Barely +22 on 350. No third. Locked small profit.", "confidence": "High"},
+    {"date": "2026-10-08", "status": "Correct", "topic": "Friday plan: short A-tier list beats long grind",
      "detail": "18 Sep and 14 Aug style (few seats, hard exits) profit. 11 Sep marathon loses even with rules. Stop at +$500.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Correct", "topic": "Check-in sized to max spins not global 150 or 500",
      "detail": "Partner half-right: avoid vague middle+reload. Wrong as only two amounts. Use playbook check-in per slot.", "confidence": "High"},
@@ -2706,7 +2721,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 11  # Friday sequence refined multi-Friday dry-runs
+SLOTS_DB_VERSION = 12  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
