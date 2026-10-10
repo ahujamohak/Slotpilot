@@ -800,7 +800,9 @@ LEARNINGS = [
     {"date": "2026-10-08", "status": "Incorrect", "topic": "Enchanted Palace attempt-4 dig after three mediums", "detail": "Active 22x@14, Active 20x@11, Jackpot 39x@33, then 70+ on $1 to $0. Orb frequency stayed high — still dead. Leave while ahead.", "confidence": "High"},
     {"date": "2026-10-08", "status": "Observation", "topic": "Fire Mountain late features usually small", "detail": "Spin 70+ features mostly 2-59x except one 1291 outlier. Max spins stays 60. $1 denom primary, 5c secondary.", "confidence": "High"},
             {"date": "2026-10-04", "status": "Incorrect", "topic": "Saturday long grind / digs (Master Warrior 242, Khan 137, Peace 81+)", "detail": "Many seats past max; reloads; Master Warrior dig to zero. Contrast Fri 9 Oct short list + exit.", "confidence": "High"},
-        {"date": "2026-10-10", "status": "Correct", "topic": "Grand Toro sticky denom cluster then leave after large", "detail": "Bris watch: 18x@22 then 187x@4 on sticky 10c; third 52+ blank after hop. Same-denom cluster; no third dig after mega.", "confidence": "High"},
+        {"date": "2026-10-10", "status": "Observation", "topic": "Master Warrior 74 orb then 84+ blank", "detail": "Watched: low orbs early; 13x@74 on 10c then second hunt hop 20c→$1 dead 84+. Small first is not a green light to dig.", "confidence": "Medium"},
+    {"date": "2026-10-10", "status": "Incorrect", "topic": "Grand Toro long dig after two small scatters", "detail": "Watched: 17x@8 and 11x@10 on 1c then 148+ blank with heavy denom hop and reloads. Two small early ≠ volume licence. Leave or short third only.", "confidence": "High"},
+    {"date": "2026-10-10", "status": "Correct", "topic": "Grand Toro sticky denom cluster then leave after large", "detail": "Bris watch: 18x@22 then 187x@4 on sticky 10c; third 52+ blank after hop. Same-denom cluster; no third dig after mega.", "confidence": "High"},
     {"date": "2026-10-10", "status": "Observation", "topic": "VIP floor positions logged", "detail": "Enchanted far-left vs middle; Treasure Oasis far-right same bank. El Matador: near Fortune Hearts (~2) vs near Dragon Train/Go for Grand (~6 Bull Rush). Fire Mountain unique on floor.", "confidence": "High"},
     {"date": "2026-10-10", "status": "Observation", "topic": "After mega still hits next day (not skip)",
      "detail": "Within 1-2 days after >=150x: day2 hit 82% (n=22). Fire Mountain 1291x Oct8 then 243x Oct9. Mega does not mean sit out.", "confidence": "High"},
@@ -2772,7 +2774,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 15  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 16  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3412,6 +3414,21 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
         st.success("Friday target: +$500 then STOP. Fixed sequence from multi-Friday dry-runs. Maximus/Panda/Master Warrior/Shaolin out. No dig. Max 3 denoms ~$75 each.")
         rows = []
         for i, name in enumerate(FRIDAY_PLAY_ORDER, 1):
+            pb = get_playbook(name)
+            rows.append({
+                "Seq": i,
+                "Slot": name,
+                "Check-in": pb.get("checkin", "—"),
+                "Max spins": pb.get("max_spins", "—"),
+                "After small": pb.get("after_small", "—"),
+                "After med": pb.get("after_med", "—"),
+                "After large": pb.get("after_large", "—"),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    elif st.session_state.selected_day == "Saturday":
+        st.success("Saturday target: +$500 then STOP. Tactical sequence (not a copy of Friday). Post-mega FM demoted. Fri blanks eligible. Max 3 denoms. No dig.")
+        rows = []
+        for i, name in enumerate(SATURDAY_PLAY_ORDER, 1):
             pb = get_playbook(name)
             rows.append({
                 "Seq": i,
