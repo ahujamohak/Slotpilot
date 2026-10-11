@@ -2157,20 +2157,32 @@ def build_gamble_log_record(
     }
 
 def delete_gamble_records(timestamps_to_delete: list):
-    """Delete specific rows from the Gamble Log by Timestamp and update the Google Sheet."""
+    """Delete rows by Timestamp. Returns dict with ok + sequences of deleted rows (for UI rollback)."""
     try:
         existing = load_gamble_data()
         if existing.empty or "Timestamp" not in existing.columns:
-            return False
+            return {"ok": False, "sequences": []}
         ts_set = set(str(t).strip() for t in timestamps_to_delete)
-        mask = ~existing["Timestamp"].astype(str).str.strip().isin(ts_set)
-        updated = existing[mask].reset_index(drop=True)
+        ts_col = existing["Timestamp"].astype(str).str.strip()
+        deleted = existing[ts_col.isin(ts_set)].copy()
+        # Prefer chronological last deleted sequence for rollback
+        sequences = []
+        if "Sequence" in deleted.columns:
+            try:
+                deleted_sorted = deleted.sort_values("Timestamp")
+            except Exception:
+                deleted_sorted = deleted
+            for _, row in deleted_sorted.iterrows():
+                seq = _parse_sequence_str(str(row.get("Sequence", "")))
+                if len(seq) == 5:
+                    sequences.append(seq)
+        updated = existing[~ts_col.isin(ts_set)].reset_index(drop=True)
         conn.update(worksheet=GAMBLE_WORKSHEET, data=updated)
         st.cache_data.clear()
-        return True
+        return {"ok": True, "sequences": sequences}
     except Exception as e:
         st.error(f"Failed to delete from Gamble Log: {e}")
-        return False
+        return {"ok": False, "sequences": []}
 
 def _parse_sequence_str(seq_str: str) -> list:
     if not seq_str or not isinstance(seq_str, str):
@@ -2976,7 +2988,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 31  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 32  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3662,8 +3674,17 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
 
         if selected_timestamps:
             if st.button(f"🗑️ Delete {len(selected_timestamps)} selected", type="primary", key="delete_selected_gamble"):
-                if delete_gamble_records(selected_timestamps):
-                    st.success(f"Deleted {len(selected_timestamps)} record(s).")
+                result = delete_gamble_records(selected_timestamps)
+                if result.get("ok"):
+                    # Roll sequence back to the earliest deleted 5-card window (undo log)
+                    seqs = result.get("sequences") or []
+                    if seqs:
+                        st.session_state.gamble_sequence = list(seqs[0])
+                        st.session_state.ai_gamble_suggestion = None
+                    st.success(
+                        f"Deleted {len(selected_timestamps)} record(s)."
+                        + (" Sequence restored to pre-log cards." if seqs else "")
+                    )
                     st.rerun()
                 else:
                     st.error("Delete failed.")
