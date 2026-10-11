@@ -389,6 +389,132 @@ SUNDAY_PLAY_ORDER = [
     "Khan of Khans",
 ]
 
+# Per-slot Sunday detail: mult bands (slot-specific), denoms from log, attempt caps
+# S/M/L = after-feature max spins (band). Attempts: 2nd/3rd rules for Live Decision.
+SUNDAY_SLOT_DETAIL = {
+    "Minotaur’s Treasure": {
+        "bands": (25, 55),  # small <25, med 25-55, large >=55
+        "after": (25, 30, 20),
+        "max1": 70, "max2": 40, "max3": 25,
+        "attempt_rule": "2nd OK if first >=25x. 3rd only if seat down and first >=40x. No 4th.",
+        "denom": "$1 → 10c → 5c",
+        "pos": "Only 1 on VIP floor",
+    },
+    "Enchanted Palace": {
+        "bands": (25, 50),
+        "after": (20, 25, 15),
+        "max1": 65, "max2": 30, "max3": 15,
+        "attempt_rule": "2nd short. No 3rd if up. Never 4th.",
+        "denom": "$1 → 10c → 5c",
+        "pos": "2: far left / middle (Oasis = far right)",
+    },
+    "El Matador": {
+        "bands": (30, 60),
+        "after": (20, 25, 20),
+        "max1": 70, "max2": 30, "max3": 20,
+        "attempt_rule": "2nd OK. 3rd only if seat down. Prefer roulette-side machine.",
+        "denom": "$1 → 10c → 5c",
+        "pos": "2: near roulette (prefer) · near Fortune Hearts",
+    },
+    "Ragnar the Great": {
+        "bands": (20, 45),
+        "after": (25, 35, 30),
+        "max1": 80, "max2": 40, "max3": 20,
+        "attempt_rule": "2nd OK. Leave after 2 mediums if up. 3rd rare.",
+        "denom": "$1 → 10c → 20c",
+        "pos": "Only 1",
+    },
+    "Emperor's Choice": {
+        "bands": (20, 45),
+        "after": (20, 25, 20),
+        "max1": 65, "max2": 25, "max3": 15,
+        "attempt_rule": "2nd short after small. No 3rd if up.",
+        "denom": "10c → $1 → 5c",
+        "pos": "3: near Matador · entrance · escalator to non-VIP",
+    },
+    "Inca Diamonds": {
+        "bands": (20, 50),
+        "after": (20, 30, 25),
+        "max1": 60, "max2": 30, "max3": 15,
+        "attempt_rule": "2nd OK. 3rd only if down.",
+        "denom": "$1 → 10c → 5c",
+        "pos": "Main Thunder block",
+    },
+    "Great King": {
+        "bands": (18, 30),
+        "after": (20, 25, 20),
+        "max1": 55, "max2": 25, "max3": 15,
+        "attempt_rule": "2nd short. Med pays are modest — bank early.",
+        "denom": "10c → $1 → 5c",
+        "pos": "2 opposite: roulette · Bandit Link",
+    },
+    "Treasure Oasis": {
+        "bands": (30, 60),
+        "after": (20, 25, 20),
+        "max1": 65, "max2": 35, "max3": 20,
+        "attempt_rule": "2nd OK. 3rd if down only.",
+        "denom": "$1 → 10c → 2c",
+        "pos": "Only 1 (Mystery bank far right)",
+    },
+    "Shaolin Style": {
+        "bands": (22, 50),
+        "after": (20, 25, 20),
+        "max1": 60, "max2": 25, "max3": 15,
+        "attempt_rule": "Strict: 2nd short. No dig. No 4th.",
+        "denom": "10c → $1 → 5c",
+        "pos": "Only 1",
+    },
+    "Maximus Money": {
+        "bands": (25, 70),
+        "after": (20, 30, 25),
+        "max1": 70, "max2": 35, "max3": 20,
+        "attempt_rule": "2nd OK. No 4th. Stop at max — no reload dig.",
+        "denom": "10c → 5c → $1",
+        "pos": "2: between FM & Minotaur · near Fortune Hearts",
+    },
+    "King Samurai": {
+        "bands": (25, 65),
+        "after": (25, 35, 30),
+        "max1": 85, "max2": 35, "max3": 20,
+        "attempt_rule": "Volume OK Sun. 2 features + profit → leave. No 4th.",
+        "denom": "$1 → 10c → 20c",
+        "pos": "Main Thunder block",
+    },
+    "Amazon Hearts": {
+        "bands": (25, 70),
+        "after": (15, 20, 15),
+        "max1": 45, "max2": 20, "max3": 10,
+        "attempt_rule": "Only if session up. Short everything.",
+        "denom": "$1 → 10c",
+        "pos": "Main Thunder block",
+    },
+    "Outback Gold": {
+        "bands": (20, 40),
+        "after": (20, 25, 20),
+        "max1": 60, "max2": 25, "max3": 15,
+        "attempt_rule": "2nd short. Sticky when live.",
+        "denom": "$1 → 10c → 2c",
+        "pos": "Go for Grand bank",
+    },
+    "Peace & Long Life": {
+        "bands": (20, 45),
+        "after": (35, 40, 25),
+        "max1": 70, "max2": 40, "max3": 25,
+        "attempt_rule": "2nd allowed longer. JJ only after >=50x. 3rd if down.",
+        "denom": "$1 → 10c → 2c",
+        "pos": "Near roulette high-limit",
+    },
+    "Khan of Khans": {
+        "bands": (25, 55),
+        "after": (25, 35, 25),
+        "max1": 70, "max2": 40, "max3": 20,
+        "attempt_rule": "2 denoms only. 2nd OK. 3rd if down.",
+        "denom": "$1 → 10c only",
+        "pos": "Only 1",
+    },
+}
+
+
 
 FRIDAY_PLAY_ORDER = [
     # Refined from multi-Friday dry-runs (Aug–Oct 2026). Stop at +$500.
@@ -840,6 +966,23 @@ def get_playbook(slot_name: str, day: str | None = None) -> dict:
         out["checkin"] = int(round(out["checkin"] / 50.0) * 50)
     out["day_label"] = prof.get("label") or ""
     out["day_max_mult"] = mm
+    # Sunday per-slot detail overrides
+    if str(day).strip().title() == "Sunday" and "SUNDAY_SLOT_DETAIL" in globals():
+        det = SUNDAY_SLOT_DETAIL.get(slot_name) or {}
+        if det:
+            if det.get("max1"):
+                out["max_spins"] = int(det["max1"])
+            if det.get("after"):
+                out["after_small"], out["after_med"], out["after_large"] = det["after"]
+            if det.get("bands"):
+                out["band_small"], out["band_large"] = det["bands"]
+            out["max2"] = det.get("max2")
+            out["max3"] = det.get("max3")
+            out["attempt_rule"] = det.get("attempt_rule", "")
+            out["denom_path"] = det.get("denom", out.get("denom_path", "$1 → 10c → 5c"))
+            out["position"] = det.get("pos", "")
+            # check-in from max1
+            out["checkin"] = int(round(max(150, min(400, out["max_spins"] * 4.25)) / 50) * 50)
     return out
 
 
@@ -2768,7 +2911,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 28  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 29  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -2906,27 +3049,42 @@ if st.session_state.active_tab == "🎯 Live Decision":
         slot_opts = SLOT_MASTER_LIST.get(sel_family, [])
         sel_slot = st.selectbox("Slot", options=slot_opts, key="ld_slot")
 
-    # One firm card — playbook numbers only (no competing KM defaults)
-    _pb = get_playbook(sel_slot)
+    # One firm card — day-aware playbook (Sunday uses per-slot bands + attempt rules)
+    _day = st.session_state.get("selected_day")
+    _pb = get_playbook(sel_slot, _day)
     _tier = PRIORITY_TIER.get(sel_slot, _pb.get("tier", 3))
     st.markdown("#### Play plan")
     if _pb:
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Bet", "$5")
-        c2.metric("Check-in", f"${_pb['checkin']}")
-        c3.metric("Max spins (no feature)", f"{_pb['max_spins']}")
+        c2.metric("Check-in", f"${_pb.get('checkin', 250)}")
+        c3.metric("Max spins 1st", f"{_pb.get('max_spins', 60)}")
+        c4.metric("Day", f"{_day or '—'}")
+        bs = _pb.get("band_small", 20)
+        bl = _pb.get("band_large", 50)
         st.write(
-            f"Tier {_tier}: {TIER_LABEL.get(_tier, 'Standard')}. "
-            f"After small feature (under 20x): max {_pb['after_small']} spins more then leave"
-            + (" (leave now)" if _pb['after_small'] == 0 else "")
-            + f". After medium (20–50x): max {_pb['after_med']} spins. "
-            f"After large (50x+): max {_pb['after_large']} spins. "
-            f"Denom: up to 3 denoms, about $75 each, then leave if dead. Prefer historically strong denoms for this slot."
+            f"**After feature (this slot):** "
+            f"small (<{bs}×) → max {_pb.get('after_small')} spins · "
+            f"med ({bs}–{bl}×) → max {_pb.get('after_med')} · "
+            f"large (≥{bl}×) → max {_pb.get('after_large')}."
         )
+        if _pb.get("max2") or _pb.get("attempt_rule"):
+            st.write(
+                f"**Attempts:** 2nd max {_pb.get('max2', '—')} spins · "
+                f"3rd max {_pb.get('max3', '—')} spins. "
+                f"{_pb.get('attempt_rule', '')}"
+            )
+        if _pb.get("denom_path") or _pb.get("position"):
+            st.write(
+                f"**Denom:** {_pb.get('denom_path', '$1 → 10c → 5c')} · "
+                f"**Position:** {_pb.get('position', '—')}"
+            )
         if _tier >= 5:
             st.warning("Deprioritised slot — skip unless nothing else is available.")
         elif _tier == 4:
             st.info("Only play if session is flat or up. Strict caps.")
+        if _pb.get("day_label"):
+            st.caption(f"Day profile: {_pb.get('day_label')} (spin scale ×{_pb.get('day_max_mult', 1):.2f})")
     else:
         st.info("No firm playbook for this slot yet. Use check-in $200 and max spins 60.")
     _extra = get_slot_notes(sel_slot)
