@@ -114,7 +114,7 @@ def reset_all_state(wipe_persisted=True):
     st.session_state.stop_loss = 1000.0        # hard stop when -this
     st.session_state.fade_gamble = False       # legacy; adaptive mode owns this
     st.session_state.gamble_fade_mode = "adaptive"  # adaptive | follow | fade
-    st.session_state.active_tab = "🎯 Live Decision"
+    st.session_state.active_tab = "🃏 Gamble Analyzer"
     st.session_state.strict_day_penalty = True
     st.session_state.chat_messages = []
     st.session_state.selected_day = datetime.now().strftime("%A")
@@ -337,22 +337,58 @@ TIER_RANK_MULT = {1: 1.60, 2: 1.15, 3: 1.00, 4: 0.50, 5: 0.20}
 # Saturday order — not a copy of Friday. After-mega seats OK but not forced first.
 # Fri 9 Oct was late night (23:00–01:00). Blanks Fri (El Matador, Outback) eligible flip.
 SATURDAY_PLAY_ORDER = [
-    "Minotaur’s Treasure",   # strong weekend / not on Fri list top
-    "El Matador",            # Fri blank — flip candidate
-    "Enchanted Palace",      # Fri paid large — short rules only
+    # Canonical Saturday list (matches Saturday_Playbook_10_Oct_2026.pdf tactical card).
+    "Minotaur’s Treasure",
+    "El Matador",
+    "Enchanted Palace",
     "Grand Toro",
     "Autumn Moon",
     "Ragnar the Great",
     "Go West",
-    "Outback Gold",          # Fri blank
+    "Outback Gold",
     "King Samurai",
     "Peace & Long Life",
-    "Fire Mountain",         # Fri mega — still playable per log; lower priority today
+    "Fire Mountain",
     "Cleopatra’s Kingdom",
     "Shadow Clan",
     "Golden Gong",
     "Khan of Khans",
 ]
+
+
+# Day-of-week behaviour from full Session Log (first-attempt seats):
+# Fri: med 21 / p75 37 / early 49% / fewer long digs — tightest budgets
+# Sat: med 24 / p75 47 / early 45% — medium stretch
+# Sun: med 32 / p75 66 / early 39% / 73% attempt 2+ / 44% attempt 3+ — longest cycles
+DAY_SPIN_PROFILE = {
+    "Monday":    {"max_mult": 1.20, "after_mult": 1.10, "target": 400, "stop_loss": 400, "label": "Long / selective"},
+    "Tuesday":   {"max_mult": 1.10, "after_mult": 1.05, "target": 500, "stop_loss": 400, "label": "Active"},
+    "Wednesday": {"max_mult": 1.10, "after_mult": 1.05, "target": 400, "stop_loss": 400, "label": "Mixed"},
+    "Thursday":  {"max_mult": 1.05, "after_mult": 1.00, "target": 400, "stop_loss": 400, "label": "Pre-weekend"},
+    "Friday":    {"max_mult": 1.00, "after_mult": 1.00, "target": 500, "stop_loss": 400, "label": "Earliest pays"},
+    "Saturday":  {"max_mult": 1.15, "after_mult": 1.05, "target": 400, "stop_loss": 400, "label": "Stretched cycles"},
+    "Sunday":    {"max_mult": 1.30, "after_mult": 1.15, "target": 400, "stop_loss": 350, "label": "Longest / most repeats"},
+}
+
+SUNDAY_PLAY_ORDER = [
+    # Sunday-specific rank (Sunday seats only, min n=3). Longer max via DAY_SPIN_PROFILE.
+    "Minotaur’s Treasure",   # 100% hit · 75% early · best Sun pos
+    "Enchanted Palace",      # 100% hit · med +
+    "El Matador",            # 100% hit · strong avg
+    "Ragnar the Great",      # 100% early on Sun sample
+    "Emperor's Choice",
+    "Inca Diamonds",
+    "Great King",
+    "Treasure Oasis",
+    "Shaolin Style",         # good Sun sample — strict after rules
+    "Maximus Money",         # Sun mid — max stretched but NO dig past cap
+    "King Samurai",          # volume day — needs runway
+    "Amazon Hearts",         # only if up
+    "Outback Gold",
+    "Peace & Long Life",
+    "Khan of Khans",
+]
+
 
 FRIDAY_PLAY_ORDER = [
     # Refined from multi-Friday dry-runs (Aug–Oct 2026). Stop at +$500.
@@ -377,17 +413,7 @@ FRIDAY_PLAY_ORDER = [
 # Manual + data-backed play notes per slot.
 # Each note: (text, confidence) confidence = High | Medium | Low
 SLOT_NOTES = {
-    "Maximus Money": {
-        "family": "Bull Rush Blitz 2 Multi",
-        "notes": [
-            ("Max spins with no feature: 60. By then ~78% of historical features have already landed. Past 60, net+ rate collapses (~20%).", "High"),
-            ("Check-in: $250 at $5 (assumes ~15% back in line wins → effective ~$4.25/spin).", "High"),
-            ("After feature ≥30×: max spins on second hunt: 35. Then leave.", "High"),
-            ("After feature <20×: max spins on second hunt: 20. Prefer leave.", "Medium"),
-            ("89+ and 110+ blanks exceeded max spins — incorrect.", "High"),
-            ("Denom: prefer 10c or $1 for the full hunt.", "Medium"),
-        ],
-    },
+    "Maximus Money": {"max_spins": 55, "checkin": 250, "after_small": 15, "after_med": 25, "after_large": 20, "tier": 2},
     "El Matador": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 1},
     "Lunar Dragon": {
         "family": "Fortune Hearts",
@@ -542,13 +568,7 @@ SLOT_NOTES = {
             ("Multi only ~40% — limited repeat.", "Medium"),
         ],
     },
-    "Fire Legend": {
-        "family": "Thunder Empire",
-        "notes": [
-            ("Max spins with no feature: 75.", "Medium"),
-            ("Check-in: $325 at $5 (~15% line wins assumed).", "Medium"),
-        ],
-    },
+    "Fire Legend": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 25, "tier": 3},
     "Go West": {"max_spins": 50, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 2},
     "Glitter & Glitz": {
         "family": "Fabulous Hold & Spin Jackpot",
@@ -725,6 +745,12 @@ def get_slot_notes(slot_name: str) -> dict:
 # checkin = dollars at $5 with ~15% line wins
 # after_small / after_med / after_large = max second-hunt spins after that size feature
 SLOT_PLAYBOOK = {
+    "Great King": {"max_spins": 50, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 2},
+    "Huff n More Puff": {"max_spins": 55, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 3},
+    "Fight for Troy": {"max_spins": 40, "checkin": 200, "after_small": 15, "after_med": 20, "after_large": 15, "tier": 3},
+    "Aztec Thunder": {"max_spins": 50, "checkin": 250, "after_small": 15, "after_med": 25, "after_large": 20, "tier": 2},
+    "Sun Queen": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 2},
+    "Sumo Power": {"max_spins": 55, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 2},
     # Bull Rush
     "El Matador": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 25, "after_large": 20, "tier": 1},
     "Minotaur’s Treasure": {"max_spins": 75, "checkin": 300, "after_small": 25, "after_med": 30, "after_large": 25, "tier": 1},
@@ -768,16 +794,54 @@ SLOT_PLAYBOOK = {
 }
 
 
-def get_playbook(slot_name: str) -> dict:
+
+def get_day_play_order(day: str | None = None) -> list:
+    day = day or st.session_state.get("selected_day") or "Friday"
+    d = str(day).strip().title()
+    if d == "Sunday" and "SUNDAY_PLAY_ORDER" in globals():
+        return list(SUNDAY_PLAY_ORDER)
+    if d == "Saturday" and "SATURDAY_PLAY_ORDER" in globals():
+        return list(SATURDAY_PLAY_ORDER)
+    if d == "Friday" and "FRIDAY_PLAY_ORDER" in globals():
+        return list(FRIDAY_PLAY_ORDER)
+    # Default: Friday order as baseline for midweek
+    return list(FRIDAY_PLAY_ORDER) if "FRIDAY_PLAY_ORDER" in globals() else []
+
+def get_playbook(slot_name: str, day: str | None = None) -> dict:
     if not slot_name:
         return {}
-    key = str(slot_name).strip()
-    if key in SLOT_PLAYBOOK:
-        return SLOT_PLAYBOOK[key]
-    for k, v in SLOT_PLAYBOOK.items():
-        if k.lower() == key.lower():
-            return v
-    return {}
+    pb = dict(SLOT_PLAYBOOK.get(slot_name) or {})
+    if not pb:
+        # fuzzy
+        for k, v in SLOT_PLAYBOOK.items():
+            if k.lower() == slot_name.lower() or slot_name.lower() in k.lower():
+                pb = dict(v)
+                break
+    if not pb:
+        return {}
+    day = day or (st.session_state.get("selected_day") if hasattr(st, "session_state") else None)
+    prof = DAY_SPIN_PROFILE.get(str(day), {}) if day else {}
+    mm = float(prof.get("max_mult") or 1.0)
+    am = float(prof.get("after_mult") or 1.0)
+    out = dict(pb)
+    if "max_spins" in out and out["max_spins"]:
+        out["max_spins"] = int(round(int(out["max_spins"]) * mm / 5.0) * 5)
+        out["max_spins"] = min(95, max(35, out["max_spins"]))
+    for k in ("after_small", "after_med", "after_large"):
+        if k in out and out[k]:
+            out[k] = int(round(int(out[k]) * am / 5.0) * 5)
+            out[k] = max(10, min(50, out[k]))
+    # check-in: scale mildly with max spins (~$4–5 per spin budget)
+    if "checkin" in out and out.get("max_spins"):
+        base_ci = int(pb.get("checkin") or 250)
+        # keep multiples of 50
+        sug = int(round((out["max_spins"] * 4.25) / 50.0) * 50)
+        out["checkin"] = max(150, min(400, max(base_ci, sug) if mm > 1 else base_ci))
+        out["checkin"] = int(round(out["checkin"] / 50.0) * 50)
+    out["day_label"] = prof.get("label") or ""
+    out["day_max_mult"] = mm
+    return out
+
 
 # ==========================================
 # 2. SHEET DATA INSPECTION & METRICS ENGINE
@@ -1198,21 +1262,16 @@ def build_priority_dataset(live_df, target_day=None, strict_mode=True):
             composite *= TIER_RANK_MULT.get(tier, 1.0)
             # Day-of-week factor (was computed but not applied — fixed)
             composite *= float(day_factor) if day_factor else 1.0
-            # Tactical day lists (hand-tuned) — boost ordered seats so board matches floor plan
-            day_l = (target_day or "").strip().lower()
-            if day_l == "saturday" and "SATURDAY_PLAY_ORDER" in globals():
+            # Tactical day lists — boost ordered seats so board matches floor plan for that day
+            day_order = get_day_play_order(target_day) if "get_day_play_order" in dir() else []
+            if day_order:
                 try:
-                    idx = SATURDAY_PLAY_ORDER.index(slot)
-                    composite *= 1.35 - 0.02 * idx  # #1 highest boost
-                except ValueError:
-                    if slot in ("Maximus Money", "Master Warrior", "Panda Magic", "Shaolin Style", "Lunar Dragon"):
-                        composite *= 0.55
-            elif day_l == "friday" and "FRIDAY_PLAY_ORDER" in globals():
-                try:
-                    idx = FRIDAY_PLAY_ORDER.index(slot)
+                    idx = day_order.index(slot)
                     composite *= 1.35 - 0.02 * idx
                 except ValueError:
-                    if slot in ("Maximus Money", "Master Warrior", "Panda Magic", "Shaolin Style", "Lunar Dragon"):
+                    if slot in ("Master Warrior", "Panda Magic", "Lunar Dragon", "Fire Mountain") and str(target_day).lower()=="sunday":
+                        composite *= 0.50
+                    elif slot in ("Maximus Money", "Master Warrior", "Panda Magic", "Shaolin Style", "Lunar Dragon"):
                         composite *= 0.55
             play_style = TIER_LABEL.get(tier, play_style)
 
@@ -2709,7 +2768,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 22  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 28  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3404,11 +3463,21 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     df_priority = pd.DataFrame(table_data)
 
     st.markdown(f"### Priority ranking for **{st.session_state.selected_day}**")
-    if st.session_state.selected_day == "Friday":
-        st.success("Friday target: +$500 then STOP. Fixed sequence from multi-Friday dry-runs. Maximus/Panda/Master Warrior/Shaolin out. No dig. Max 3 denoms ~$75 each.")
+    _day = st.session_state.selected_day
+    _prof = DAY_SPIN_PROFILE.get(_day, {})
+    _order = get_day_play_order(_day)
+    _tgt = _prof.get("target", 500)
+    _lbl = _prof.get("label", "")
+    _mm = _prof.get("max_mult", 1.0)
+    if _order:
+        st.success(
+            f"{_day}: {_lbl}. Target +${_tgt} then STOP. "
+            f"Spin budgets ×{_mm:.2f} vs base (day-specific). "
+            f"Max 3 denoms. No dig past max. Sequence below is for **{_day} only**."
+        )
         rows = []
-        for i, name in enumerate(FRIDAY_PLAY_ORDER, 1):
-            pb = get_playbook(name)
+        for i, name in enumerate(_order, 1):
+            pb = get_playbook(name, _day)
             rows.append({
                 "Seq": i,
                 "Slot": name,
@@ -3419,21 +3488,8 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "After large": pb.get("after_large", "—"),
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-    elif st.session_state.selected_day == "Saturday":
-        st.success("Saturday target: +$500 then STOP. Tactical sequence (not a copy of Friday). Post-mega FM demoted. Fri blanks eligible. Max 3 denoms. No dig.")
-        rows = []
-        for i, name in enumerate(SATURDAY_PLAY_ORDER, 1):
-            pb = get_playbook(name)
-            rows.append({
-                "Seq": i,
-                "Slot": name,
-                "Check-in": pb.get("checkin", "—"),
-                "Max spins": pb.get("max_spins", "—"),
-                "After small": pb.get("after_small", "—"),
-                "After med": pb.get("after_med", "—"),
-                "After large": pb.get("after_large", "—"),
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No fixed sequence for this day yet — using statistical board only.")
 
     st.caption(
         "Changes when you change Filter Target Day in the sidebar. "
