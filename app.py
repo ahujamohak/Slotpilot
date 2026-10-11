@@ -360,6 +360,16 @@ SATURDAY_PLAY_ORDER = [
 # Fri: med 21 / p75 37 / early 49% / fewer long digs — tightest budgets
 # Sat: med 24 / p75 47 / early 45% — medium stretch
 # Sun: med 32 / p75 66 / early 39% / 73% attempt 2+ / 44% attempt 3+ — longest cycles
+
+# JJ = raise bet on the NEXT hunt when rehit probability is high (not "chase a quick win").
+# Full-log rehit after att1 hit: <=20x 54% | 21-35x 68% | 36-50x 60% | 51-75x 46% | 75+ 38%.
+# So medium first features rehit most; megas rehit least. Sunday rehit ~63%; Saturday ~49%.
+JJ_REHIT_BANDS = {
+    "sweet": (21, 50),   # highest rehit — primary JJ window
+    "ok": (15, 20),      # optional short JJ if day rehit high (Sun)
+    "avoid_mega": 75,    # after this, prefer leave / same bet short only
+}
+
 DAY_SPIN_PROFILE = {
     "Monday":    {"max_mult": 1.20, "after_mult": 1.10, "target": 400, "stop_loss": 400, "label": "Long / selective"},
     "Tuesday":   {"max_mult": 1.10, "after_mult": 1.05, "target": 500, "stop_loss": 400, "label": "Active"},
@@ -388,6 +398,47 @@ SUNDAY_PLAY_ORDER = [
     "Peace & Long Life",
     "Khan of Khans",
 ]
+
+MONDAY_PLAY_ORDER = [
+    # Low-risk hitters first. No Go West / Cash Horns / Power Panther for now.
+    "Enchanted Palace",
+    "Outback Gold",
+    "El Matador",
+    "Khan of Khans",
+    "Maximus Money",
+    "Minotaur’s Treasure",
+    "Peace & Long Life",
+    "Inca Diamonds",
+    "Great King",
+    "Come one, Come all",   # Fabulous — secondary
+    "Magic Touch",          # Fabulous — secondary
+    "Cash Champ",           # Fabulous — secondary
+    "King Samurai",         # only if up
+    "Shaolin Style",
+    "Treasure Oasis",
+]
+
+
+TUESDAY_PLAY_ORDER = [
+    # Tuesday stronger than Monday: hit 82% · early 52% · pos 48% · medSp ~19 · avgMult ~57
+    "El Matador",
+    "Enchanted Palace",
+    "Outback Gold",
+    "Minotaur’s Treasure",
+    "Khan of Khans",
+    "Maximus Money",
+    "Peace & Long Life",
+    "Fire Mountain",
+    "Sun Shots",
+    "Come one, Come all",
+    "Magic Touch",
+    "Emperor's Choice",
+    "Inca Diamonds",
+    "Great King",
+    "Shaolin Style",
+]
+
+
 
 # Per-slot Sunday detail: mult bands (slot-specific), denoms from log, attempt caps
 # S/M/L = after-feature max spins (band). Attempts: 2nd/3rd rules for Live Decision.
@@ -930,6 +981,10 @@ def get_day_play_order(day: str | None = None) -> list:
         return list(SATURDAY_PLAY_ORDER)
     if d == "Friday" and "FRIDAY_PLAY_ORDER" in globals():
         return list(FRIDAY_PLAY_ORDER)
+    if d == "Monday" and "MONDAY_PLAY_ORDER" in globals():
+        return list(MONDAY_PLAY_ORDER)
+    if d == "Tuesday" and "TUESDAY_PLAY_ORDER" in globals():
+        return list(TUESDAY_PLAY_ORDER)
     # Default: Friday order as baseline for midweek
     return list(FRIDAY_PLAY_ORDER) if "FRIDAY_PLAY_ORDER" in globals() else []
 
@@ -2059,15 +2114,25 @@ def build_gamble_log_record(
     rolling_color_acc="",
     note="",
     provider="",
+    family="",
+    slot="",
 ):
-    """Full gamble row for later threshold / mode analysis."""
+    """Full gamble row for later threshold / mode / per-slot analysis."""
     now = datetime.now()
     act = str(actual_suit).strip().title()
     ts = now.strftime("%Y-%m-%d %H:%M:%S.") + f"{now.microsecond:06d}"
+    # Prefer explicit args; fall back to session (set in Gamble Analyzer)
+    try:
+        family = family or st.session_state.get("gamble_family") or ""
+        slot = slot or st.session_state.get("gamble_slot") or ""
+    except Exception:
+        pass
     return {
         "Timestamp": ts,
         "Date": now.strftime("%m/%d/%Y"),
         "Day": now.strftime("%A"),
+        "Family": family or "",
+        "Slot": slot or "",
         "Card1": seq[0],
         "Card2": seq[1],
         "Card3": seq[2],
@@ -2911,7 +2976,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 29  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 31  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3201,7 +3266,21 @@ if st.session_state.active_tab == "🎯 Live Decision":
 
 elif st.session_state.active_tab == "🃏 Gamble Analyzer":
     st.subheader("🃏 Gamble Analyzer")
-    st.caption("Statistical (Markov) + AI suggestions side by side. Log either with one tap. Track both accuracies.")
+    st.caption("Statistical (Markov) + AI suggestions side by side. Log either with one tap. Track both accuracies. Set Family/Slot so accuracy can be measured per machine.")
+
+    if "gamble_family" not in st.session_state:
+        st.session_state.gamble_family = ""
+    if "gamble_slot" not in st.session_state:
+        st.session_state.gamble_slot = ""
+    _gf, _gs = st.columns(2)
+    with _gf:
+        _fam_opts = [""] + sorted(SLOT_MASTER_LIST.keys())
+        _fi = _fam_opts.index(st.session_state.gamble_family) if st.session_state.gamble_family in _fam_opts else 0
+        st.session_state.gamble_family = st.selectbox("Family (for this machine)", options=_fam_opts, index=_fi, key="gamble_family_sb")
+    with _gs:
+        _slot_opts = [""] + list(SLOT_MASTER_LIST.get(st.session_state.gamble_family, []))
+        _si = _slot_opts.index(st.session_state.gamble_slot) if st.session_state.gamble_slot in _slot_opts else 0
+        st.session_state.gamble_slot = st.selectbox("Slot (for this machine)", options=_slot_opts, index=_si, key="gamble_slot_sb")
 
     def _fmt_pct(v):
         return "n/a" if v is None else f"{v}%"
@@ -3210,6 +3289,25 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
     with st.expander("📉 Accuracy — Statistical vs AI", expanded=False):
         bt = backtest_gamble_accuracy(window=50)
         perf = compute_ai_vs_stat_performance(window=50)
+        # Per-slot colour accuracy when Family/Slot logged
+        try:
+            _gdf = load_gamble_data()
+            if _gdf is not None and not _gdf.empty and "Slot" in _gdf.columns:
+                _gdf = _gdf.copy()
+                _gdf["_ok"] = (
+                    _gdf.get("Suggested_Color", pd.Series(dtype=str)).astype(str).str.strip().str.lower()
+                    == _gdf.get("Actual_Color", pd.Series(dtype=str)).astype(str).str.strip().str.lower()
+                )
+                _slot = st.session_state.get("gamble_slot") or ""
+                if _slot:
+                    _sg = _gdf[_gdf["Slot"].astype(str).str.strip() == _slot]
+                    if len(_sg) >= 5:
+                        st.caption(
+                            f"This slot **{_slot}**: colour {(_sg['_ok'].mean()*100):.1f}% on {len(_sg)} rows "
+                            f"(global below)."
+                        )
+        except Exception:
+            pass
 
         st.markdown("**Statistical engine** (honest walk-forward)")
         _adapt = resolve_adaptive_fade(window=80)
@@ -3627,11 +3725,13 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     _tgt = _prof.get("target", 500)
     _lbl = _prof.get("label", "")
     _mm = _prof.get("max_mult", 1.0)
+
+    # --- Suggestion A: Consultant fixed sequence (hand-tuned per day) ---
+    st.markdown("#### A) Consultant sequence (hand-tuned for this day)")
     if _order:
         st.success(
             f"{_day}: {_lbl}. Target +${_tgt} then STOP. "
-            f"Spin budgets ×{_mm:.2f} vs base (day-specific). "
-            f"Max 3 denoms. No dig past max. Sequence below is for **{_day} only**."
+            f"Spin budgets ×{_mm:.2f}. Max 3 denoms. No dig past max."
         )
         rows = []
         for i, name in enumerate(_order, 1):
@@ -3647,7 +3747,10 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             })
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     else:
-        st.info("No fixed sequence for this day yet — using statistical board only.")
+        st.info("No consultant sequence for this day yet.")
+
+    # --- Suggestion B: Dynamic statistical board (app-computed) ---
+    st.markdown("#### B) Dynamic board (app score from log + day weight)")
 
     st.caption(
         "Changes when you change Filter Target Day in the sidebar. "
