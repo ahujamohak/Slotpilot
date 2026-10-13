@@ -443,127 +443,176 @@ TUESDAY_PLAY_ORDER = [
 # Per-slot Sunday detail: mult bands (slot-specific), denoms from log, attempt caps
 # S/M/L = after-feature max spins (band). Attempts: 2nd/3rd rules for Live Decision.
 SUNDAY_SLOT_DETAIL = {
-    "Minotaur’s Treasure": {
-        "bands": (25, 55),  # small <25, med 25-55, large >=55
+    'Minotaur’s Treasure': {
+        "bands": (25, 55),
         "after": (25, 30, 20),
         "max1": 70, "max2": 40, "max3": 25,
-        "attempt_rule": "2nd OK if first >=25x. 3rd only if seat down and first >=40x. No 4th.",
-        "denom": "$1 → 10c → 5c",
-        "pos": "Only 1 on VIP floor",
+        "attempt_rule": '2nd OK if first >=25x. 3rd only if seat down and first >=40x. No 4th.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Only 1 on VIP floor',
     },
-    "Enchanted Palace": {
+    'Enchanted Palace': {
         "bands": (25, 50),
         "after": (20, 25, 15),
         "max1": 65, "max2": 30, "max3": 15,
-        "attempt_rule": "2nd short. No 3rd if up. Never 4th.",
-        "denom": "$1 → 10c → 5c",
-        "pos": "2: far left / middle (Oasis = far right)",
+        "attempt_rule": '2nd short. No 3rd if up. Never 4th.',
+        "denom": '$1 → 10c → 5c',
+        "pos": '2: far left / middle (Oasis = far right)',
     },
-    "El Matador": {
+    'El Matador': {
         "bands": (30, 60),
         "after": (20, 25, 20),
         "max1": 70, "max2": 30, "max3": 20,
-        "attempt_rule": "2nd OK. 3rd only if seat down. Prefer roulette-side machine.",
-        "denom": "$1 → 10c → 5c",
-        "pos": "2: near roulette (prefer) · near Fortune Hearts",
+        "attempt_rule": '2nd OK. 3rd only if seat down. Prefer roulette-side machine.',
+        "denom": '$1 → 10c → 5c',
+        "pos": '2: near roulette (prefer) · near Fortune Hearts',
     },
-    "Ragnar the Great": {
+    'Ragnar the Great': {
         "bands": (20, 45),
         "after": (25, 35, 30),
         "max1": 80, "max2": 40, "max3": 20,
-        "attempt_rule": "2nd OK. Leave after 2 mediums if up. 3rd rare.",
-        "denom": "$1 → 10c → 20c",
-        "pos": "Only 1",
+        "attempt_rule": '2nd OK. Leave after 2 mediums if up. 3rd rare.',
+        "denom": '$1 → 10c → 20c',
+        "pos": 'Only 1',
     },
     "Emperor's Choice": {
         "bands": (20, 45),
         "after": (20, 25, 20),
         "max1": 65, "max2": 25, "max3": 15,
-        "attempt_rule": "2nd short after small. No 3rd if up.",
-        "denom": "10c → $1 → 5c",
-        "pos": "3: near Matador · entrance · escalator to non-VIP",
+        "attempt_rule": '2nd short after small. No 3rd if up.',
+        "denom": '10c → $1 → 5c',
+        "pos": '3: near Matador · entrance · escalator to non-VIP',
     },
-    "Inca Diamonds": {
+    'Inca Diamonds': {
         "bands": (20, 50),
         "after": (20, 30, 25),
         "max1": 60, "max2": 30, "max3": 15,
-        "attempt_rule": "2nd OK. 3rd only if down.",
-        "denom": "$1 → 10c → 5c",
-        "pos": "Main Thunder block",
+        "attempt_rule": '2nd OK. 3rd only if down.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Main Thunder block',
     },
-    "Great King": {
+    'Great King': {
         "bands": (18, 30),
         "after": (20, 25, 20),
         "max1": 55, "max2": 25, "max3": 15,
-        "attempt_rule": "2nd short. Med pays are modest — bank early.",
-        "denom": "10c → $1 → 5c",
-        "pos": "2 opposite: roulette · Bandit Link",
+        "attempt_rule": '2nd short. Med pays are modest — bank early.',
+        "denom": '10c → $1 → 5c',
+        "pos": '2 opposite: roulette · Bandit Link',
     },
-    "Treasure Oasis": {
+    'Treasure Oasis': {
         "bands": (30, 60),
         "after": (20, 25, 20),
         "max1": 65, "max2": 35, "max3": 20,
-        "attempt_rule": "2nd OK. 3rd if down only.",
-        "denom": "$1 → 10c → 2c",
-        "pos": "Only 1 (Mystery bank far right)",
+        "attempt_rule": '2nd OK. 3rd if down only.',
+        "denom": '$1 → 10c → 2c',
+        "pos": 'Only 1 (Mystery bank far right)',
     },
-    "Shaolin Style": {
+    'Shaolin Style': {
         "bands": (22, 50),
         "after": (20, 25, 20),
         "max1": 60, "max2": 25, "max3": 15,
-        "attempt_rule": "Strict: 2nd short. No dig. No 4th.",
-        "denom": "10c → $1 → 5c",
-        "pos": "Only 1",
+        "attempt_rule": 'Strict: 2nd short. No dig. No 4th.',
+        "denom": '10c → $1 → 5c',
+        "pos": 'Only 1',
     },
-    "Maximus Money": {
+    'Maximus Money': {
         "bands": (25, 70),
         "after": (20, 30, 25),
         "max1": 70, "max2": 35, "max3": 20,
-        "attempt_rule": "2nd OK. No 4th. Stop at max — no reload dig.",
-        "denom": "10c → 5c → $1",
-        "pos": "2: between FM & Minotaur · near Fortune Hearts",
+        "attempt_rule": '2nd OK. No 4th. Stop at max — no reload dig.',
+        "denom": '10c → 5c → $1',
+        "pos": '2: between FM & Minotaur · near Fortune Hearts',
     },
-    "King Samurai": {
+    'King Samurai': {
         "bands": (25, 65),
         "after": (25, 35, 30),
         "max1": 85, "max2": 35, "max3": 20,
-        "attempt_rule": "Volume OK Sun. 2 features + profit → leave. No 4th.",
-        "denom": "$1 → 10c → 20c",
-        "pos": "Main Thunder block",
+        "attempt_rule": 'Volume OK Sun. 2 features + profit → leave. No 4th.',
+        "denom": '$1 → 10c → 20c',
+        "pos": 'Main Thunder block',
     },
-    "Amazon Hearts": {
+    'Amazon Hearts': {
         "bands": (25, 70),
         "after": (15, 20, 15),
         "max1": 45, "max2": 20, "max3": 10,
-        "attempt_rule": "Only if session up. Short everything.",
-        "denom": "$1 → 10c",
-        "pos": "Main Thunder block",
+        "attempt_rule": 'Only if session up. Short everything.',
+        "denom": '$1 → 10c',
+        "pos": 'Main Thunder block',
     },
-    "Outback Gold": {
+    'Outback Gold': {
         "bands": (20, 40),
         "after": (20, 25, 20),
         "max1": 60, "max2": 25, "max3": 15,
-        "attempt_rule": "2nd short. Sticky when live.",
-        "denom": "$1 → 10c → 2c",
-        "pos": "Go for Grand bank",
+        "attempt_rule": '2nd short. Sticky when live.',
+        "denom": '$1 → 10c → 2c',
+        "pos": 'Go for Grand bank',
     },
-    "Peace & Long Life": {
+    'Peace & Long Life': {
         "bands": (20, 45),
         "after": (35, 40, 25),
         "max1": 70, "max2": 40, "max3": 25,
-        "attempt_rule": "2nd allowed longer. JJ only after >=50x. 3rd if down.",
-        "denom": "$1 → 10c → 2c",
-        "pos": "Near roulette high-limit",
+        "attempt_rule": '2nd allowed longer. JJ only after >=50x. 3rd if down.',
+        "denom": '$1 → 10c → 2c',
+        "pos": 'Near roulette high-limit',
     },
-    "Khan of Khans": {
+    'Khan of Khans': {
         "bands": (25, 55),
         "after": (25, 35, 25),
         "max1": 70, "max2": 40, "max3": 20,
-        "attempt_rule": "2 denoms only. 2nd OK. 3rd if down.",
-        "denom": "$1 → 10c only",
-        "pos": "Only 1",
+        "attempt_rule": '2 denoms only. 2nd OK. 3rd if down.',
+        "denom": '$1 → 10c only',
+        "pos": 'Only 1',
+    },
+    'Fire Mountain': {
+        "bands": (25, 55),
+        "after": (20, 30, 25),
+        "max1": 70, "max2": 35, "max3": 20,
+        "attempt_rule": '2nd OK. After mega leave or short only.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Only 1 on VIP floor',
+    },
+    'Sun Shots': {
+        "bands": (20, 45),
+        "after": (20, 25, 20),
+        "max1": 65, "max2": 30, "max3": 15,
+        "attempt_rule": '2nd short. Walk after big if rehit weak.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Dragon Train bank',
+    },
+    'Come one, Come all': {
+        "bands": (20, 50),
+        "after": (20, 25, 20),
+        "max1": 60, "max2": 25, "max3": 15,
+        "attempt_rule": 'Secondary. 2nd short. No dig.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Fabulous bank',
+    },
+    'Magic Touch': {
+        "bands": (25, 55),
+        "after": (20, 25, 20),
+        "max1": 65, "max2": 30, "max3": 15,
+        "attempt_rule": 'Secondary. 2nd OK if med+.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Fabulous bank',
+    },
+    'Cash Champ': {
+        "bands": (20, 45),
+        "after": (20, 25, 20),
+        "max1": 60, "max2": 25, "max3": 15,
+        "attempt_rule": 'Secondary only.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Fabulous bank',
+    },
+    'Go West': {
+        "bands": (25, 55),
+        "after": (20, 25, 20),
+        "max1": 55, "max2": 25, "max3": 15,
+        "attempt_rule": 'Off primary list for now.',
+        "denom": '$1 → 10c → 5c',
+        "pos": 'Lucky Link bank',
     },
 }
+
 
 
 
@@ -1021,23 +1070,42 @@ def get_playbook(slot_name: str, day: str | None = None) -> dict:
         out["checkin"] = int(round(out["checkin"] / 50.0) * 50)
     out["day_label"] = prof.get("label") or ""
     out["day_max_mult"] = mm
-    # Sunday per-slot detail overrides
-    if str(day).strip().title() == "Sunday" and "SUNDAY_SLOT_DETAIL" in globals():
+    # Floor detail (denom / position / mult bands) for every day when known.
+    # Sunday also overrides max/after from the same detail block.
+    det = {}
+    if "SUNDAY_SLOT_DETAIL" in globals():
         det = SUNDAY_SLOT_DETAIL.get(slot_name) or {}
-        if det:
+    if det:
+        if det.get("bands"):
+            out["band_small"], out["band_large"] = det["bands"]
+        else:
+            out.setdefault("band_small", 20)
+            out.setdefault("band_large", 50)
+        out["denom_path"] = det.get("denom", out.get("denom_path", "$1 → 10c → 5c"))
+        out["position"] = det.get("pos", out.get("position", ""))
+        out["max2"] = det.get("max2", out.get("max2"))
+        out["max3"] = det.get("max3", out.get("max3"))
+        out["attempt_rule"] = det.get("attempt_rule", out.get("attempt_rule", ""))
+        day_t = str(day).strip().title() if day else ""
+        if day_t == "Sunday":
             if det.get("max1"):
                 out["max_spins"] = int(det["max1"])
             if det.get("after"):
                 out["after_small"], out["after_med"], out["after_large"] = det["after"]
-            if det.get("bands"):
-                out["band_small"], out["band_large"] = det["bands"]
-            out["max2"] = det.get("max2")
-            out["max3"] = det.get("max3")
-            out["attempt_rule"] = det.get("attempt_rule", "")
-            out["denom_path"] = det.get("denom", out.get("denom_path", "$1 → 10c → 5c"))
-            out["position"] = det.get("pos", "")
-            # check-in from max1
             out["checkin"] = int(round(max(150, min(400, out["max_spins"] * 4.25)) / 50) * 50)
+        elif det.get("after") and not out.get("after_small"):
+            out["after_small"], out["after_med"], out["after_large"] = det["after"]
+    out.setdefault("band_small", 20)
+    out.setdefault("band_large", 50)
+    out.setdefault("denom_path", "$1 → 10c → 5c")
+    out.setdefault("position", "")
+    # PDF-style S/M/L label for this slot
+    bs, bl = out["band_small"], out["band_large"]
+    out["sml_label"] = (
+        f"{out.get('after_small', 20)} (<{bs}×) / "
+        f"{out.get('after_med', 25)} ({bs}–{bl}×) / "
+        f"{out.get('after_large', 20)} (≥{bl}×)"
+    )
     return out
 
 
@@ -2988,7 +3056,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 32  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 33  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3752,21 +3820,40 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     if _order:
         st.success(
             f"{_day}: {_lbl}. Target +${_tgt} then STOP. "
-            f"Spin budgets ×{_mm:.2f}. Max 3 denoms. No dig past max."
+            f"Spin budgets ×{_mm:.2f}. Max 3 denoms. No dig past max. "
+            f"S/M/L = next-hunt spins by **this slot’s** mult bands."
         )
         rows = []
         for i, name in enumerate(_order, 1):
-            pb = get_playbook(name, _day)
+            pb = get_playbook(name, _day) or {}
             rows.append({
-                "Seq": i,
+                "#": i,
                 "Slot": name,
-                "Check-in": pb.get("checkin", "—"),
-                "Max spins": pb.get("max_spins", "—"),
-                "After small": pb.get("after_small", "—"),
-                "After med": pb.get("after_med", "—"),
-                "After large": pb.get("after_large", "—"),
+                "CI": pb.get("checkin", "—"),
+                "Max": pb.get("max_spins", "—"),
+                "S / M / L": pb.get("sml_label") or (
+                    f"{pb.get('after_small', '—')} / {pb.get('after_med', '—')} / {pb.get('after_large', '—')}"
+                ),
+                "Denom": pb.get("denom_path", "$1 → 10c → 5c"),
+                "Position": pb.get("position") or "—",
             })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "#": st.column_config.NumberColumn("#", width="small"),
+                "Slot": st.column_config.TextColumn("Slot", width="medium"),
+                "CI": st.column_config.NumberColumn("CI", width="small"),
+                "Max": st.column_config.NumberColumn("Max", width="small"),
+                "S / M / L": st.column_config.TextColumn("S / M / L (spins by mult)", width="large"),
+                "Denom": st.column_config.TextColumn("Denom", width="medium"),
+                "Position": st.column_config.TextColumn("Position", width="medium"),
+            },
+        )
+        st.caption(
+            "Same layout as the PDF playbook. Attempt 2nd/3rd rules → Live Decision when you select the slot."
+        )
     else:
         st.info("No consultant sequence for this day yet.")
 
@@ -4049,5 +4136,3 @@ elif st.session_state.active_tab == "📚 Learnings":
     for slot, payload in SLOT_NOTES.items():
         with st.expander(f"{payload.get('family', '')} — {slot}"):
             for text, conf in payload.get("notes", []):
-                st.markdown(f"- {text}")
-                st.caption(f"Confidence: {conf}")
