@@ -439,6 +439,27 @@ TUESDAY_PLAY_ORDER = [
 ]
 
 
+WEDNESDAY_PLAY_ORDER = [
+    # Midweek: prefer low-risk hitters. No Go West / Cash Horns openers / Power Panther.
+    "El Matador",
+    "Enchanted Palace",
+    "Outback Gold",
+    "Minotaur’s Treasure",
+    "Khan of Khans",
+    "Maximus Money",
+    "Fire Mountain",
+    "Peace & Long Life",
+    "Autumn Moon",
+    "Come one, Come all",
+    "Magic Touch",
+    "Inca Diamonds",
+    "Great King",
+    "Shadow Clan",
+    "King Samurai",
+]
+
+
+
 
 # Per-slot Sunday detail: mult bands (slot-specific), denoms from log, attempt caps
 # S/M/L = after-feature max spins (band). Attempts: 2nd/3rd rules for Live Decision.
@@ -749,6 +770,21 @@ SLOT_NOTES = {
             ("High hit rate ~76% but can run longer (p85 ~91). Multi ~67%.", "High"),
             ("Max spins with no feature: 90.", "Medium"),
             ("Check-in: $375 at $5 (~15% line wins assumed).", "Medium"),
+        ],
+    },
+    "Wild Kingdom": {
+        "family": "Power Panther",
+        "max_spins": 50,
+        "checkin": 200,
+        "after_small": 15,
+        "after_med": 25,
+        "after_large": 20,
+        "tier": 5,
+        "notes": [
+            ("Power Panther family — high variance; not a midweek opener.", "High"),
+            ("Watched 2026-10-13 $1/$5: early cluster 18×@13 then 118×@4; later dig 103+ to zero after small 19×.", "Medium"),
+            ("After mega/large: bank or very short 2nd. After small: do not dig 80–100 spins.", "High"),
+            ("Online watches have no floor position — leave Position blank/na in notes.", "High"),
         ],
     },
     "Shadow Clan": {
@@ -1066,7 +1102,11 @@ def get_day_play_order(day: str | None = None) -> list:
         return list(MONDAY_PLAY_ORDER)
     if d == "Tuesday" and "TUESDAY_PLAY_ORDER" in globals():
         return list(TUESDAY_PLAY_ORDER)
-    # Default: Friday order as baseline for midweek
+    if d == "Wednesday" and "WEDNESDAY_PLAY_ORDER" in globals():
+        return list(WEDNESDAY_PLAY_ORDER)
+    # Default: Monday-style cautious list for other midweek if present
+    if "MONDAY_PLAY_ORDER" in globals():
+        return list(MONDAY_PLAY_ORDER)
     return list(FRIDAY_PLAY_ORDER) if "FRIDAY_PLAY_ORDER" in globals() else []
 
 def get_playbook(slot_name: str, day: str | None = None) -> dict:
@@ -3121,7 +3161,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 35  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 36  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
