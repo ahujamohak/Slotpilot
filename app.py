@@ -751,7 +751,23 @@ SLOT_NOTES = {
             ("Check-in: $375 at $5 (~15% line wins assumed).", "Medium"),
         ],
     },
-    "Shadow Clan": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
+    "Shadow Clan": {
+        "family": "Dragon Rush",
+        "max_spins": 70,
+        "checkin": 250,
+        "after_small": 20,
+        "after_med": 30,
+        "after_large": 25,
+        "tier": 3,
+        "notes": [
+            ("Scatter feature: choose 4 / 7 / 10 free games. 4 FG needs 4 orbs in FG to open orb; 7 FG needs 5 orbs; 10 FG needs 10 orbs.", "High"),
+            ("Watched 2026-10-13 $1/$5: player always picked 4 FG. Two pays combined scatter+orb (121× with 6 orbs on last FG; 6× weak). One pure scatter 66× from line wins in FG only.", "Medium"),
+            ("Not enough samples to rank 4 vs 7 vs 10 yet — log which option was chosen and total mult every time.", "High"),
+            ("First feature can take long volume (125 spins to 82× on this tape). Cap dig; do not chase to 500+ check-in.", "Medium"),
+            ("After medium/large, short 2nd is OK; after small (≤20×) prefer leave or very short.", "Medium"),
+            ("Lock profit pattern on tape: cash partial after cluster, re-buy small — optional, not required for our plan.", "Low"),
+        ],
+    },
     "Treasure Oasis": {
         "family": "Mystery of the Lamp",
         "notes": [
@@ -992,7 +1008,23 @@ SLOT_PLAYBOOK = {
     "Autumn Moon": {"max_spins": 65, "checkin": 250, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 1},
     "Peace & Long Life": {"max_spins": 65, "checkin": 250, "after_small": 40, "after_med": 40, "after_large": 30, "tier": 2},
     "Golden Gong": {"max_spins": 60, "checkin": 250, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 2},
-    "Shadow Clan": {"max_spins": 45, "checkin": 200, "after_small": 20, "after_med": 30, "after_large": 30, "tier": 3},
+    "Shadow Clan": {
+        "family": "Dragon Rush",
+        "max_spins": 70,
+        "checkin": 250,
+        "after_small": 20,
+        "after_med": 30,
+        "after_large": 25,
+        "tier": 3,
+        "notes": [
+            ("Scatter feature: choose 4 / 7 / 10 free games. 4 FG needs 4 orbs in FG to open orb; 7 FG needs 5 orbs; 10 FG needs 10 orbs.", "High"),
+            ("Watched 2026-10-13 $1/$5: player always picked 4 FG. Two pays combined scatter+orb (121× with 6 orbs on last FG; 6× weak). One pure scatter 66× from line wins in FG only.", "Medium"),
+            ("Not enough samples to rank 4 vs 7 vs 10 yet — log which option was chosen and total mult every time.", "High"),
+            ("First feature can take long volume (125 spins to 82× on this tape). Cap dig; do not chase to 500+ check-in.", "Medium"),
+            ("After medium/large, short 2nd is OK; after small (≤20×) prefer leave or very short.", "Medium"),
+            ("Lock profit pattern on tape: cash partial after cluster, re-buy small — optional, not required for our plan.", "Low"),
+        ],
+    },
     "Sun Shots": {"max_spins": 70, "checkin": 300, "after_small": 20, "after_med": 30, "after_large": 25, "tier": 1},
     "Panda Magic": {"max_spins": 70, "checkin": 300, "after_small": 25, "after_med": 35, "after_large": 35, "tier": 3},
     "Golden Century": {"max_spins": 55, "checkin": 200, "after_small": 20, "after_med": 25, "after_large": 25, "tier": 3},
@@ -2458,16 +2490,49 @@ def _gamble_action(sug: dict) -> dict:
     }
 
 
-def get_gamble_suggestion(sequence: list, fade_color: bool = False):
+
+def _filter_gamble_df_hierarchy(df: pd.DataFrame, family: str = "", slot: str = ""):
+    """Prefer slot rows, else family, else full DB. Returns (df_used, scope_label, n)."""
+    if df is None or df.empty:
+        return df, "empty", 0
+    fam = (family or "").strip()
+    sl = (slot or "").strip()
+    work = df
+    # Slot first
+    if sl and "Slot" in work.columns:
+        sub = work[work["Slot"].astype(str).str.strip().str.lower() == sl.lower()]
+        if len(sub) >= 8:
+            return sub, f"slot:{sl}", len(sub)
+    # Family next
+    if fam and "Family" in work.columns:
+        sub = work[work["Family"].astype(str).str.strip().str.lower() == fam.lower()]
+        if len(sub) >= 12:
+            return sub, f"family:{fam}", len(sub)
+    # Partial slot with low n — still prefer if any, blended note
+    if sl and "Slot" in work.columns:
+        sub = work[work["Slot"].astype(str).str.strip().str.lower() == sl.lower()]
+        if len(sub) >= 3:
+            return sub, f"slot-light:{sl}", len(sub)
+    if fam and "Family" in work.columns:
+        sub = work[work["Family"].astype(str).str.strip().str.lower() == fam.lower()]
+        if len(sub) >= 5:
+            return sub, f"family-light:{fam}", len(sub)
+    return work, "global", len(work)
+
+
+def get_gamble_suggestion(sequence: list, fade_color: bool = False, family: str = "", slot: str = ""):
     """
     Public API – Variable-Order Markov.
-    If fade_color=True, invert the recommended colour — UNLESS the local pattern
-    is Strong with ≥70% one colour (do not fade a clear signal).
+    Hierarchy: this slot → this family → full gamble log.
+    If fade_color=True, invert colour unless local pattern is strong.
     Pattern_Pct always refers to the RAW model colour share (before fade).
     """
-    df = load_gamble_data()
-    sug = _suggest_core(sequence, df)
+    df_all = load_gamble_data()
+    df, scope, n_scope = _filter_gamble_df_hierarchy(df_all, family=family, slot=slot)
+    sug = _suggest_core(sequence, df if df is not None else df_all)
     sug = dict(sug)
+    sug["data_scope"] = scope
+    sug["data_n"] = n_scope
     sug["faded"] = False
     sug["fade_blocked"] = False
     # Freeze raw model colour rate BEFORE any fade (UI/log must not invert this)
@@ -3056,7 +3121,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 33  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 35  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3443,7 +3508,14 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
     else:
         st.info("Tap the four suits above to build the sequence.")
 
-    if len(seq) == 5:
+    _fam_sel = (st.session_state.get("gamble_family") or "").strip()
+    _slot_sel = (st.session_state.get("gamble_slot") or "").strip()
+    _ready = bool(_fam_sel and _slot_sel and len(seq) == 5)
+
+    if len(seq) == 5 and not (_fam_sel and _slot_sel):
+        st.warning("Select **Family** and **Slot** above — suggestion waits until both are set (then slot → family → global data).")
+
+    if _ready:
         _mode = st.session_state.get("gamble_fade_mode", "adaptive")
         _adapt = resolve_adaptive_fade(window=80)
         if _mode == "fade":
@@ -3457,7 +3529,7 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
             _why = _adapt.get("reason", "Adaptive")
         st.session_state.fade_gamble = fade_on
 
-        sug = get_gamble_suggestion(seq, fade_color=fade_on)
+        sug = get_gamble_suggestion(seq, fade_color=fade_on, family=_fam_sel, slot=_slot_sel)
         # If strong pattern blocked fade, show FOLLOW even when adaptive wanted fade
         if sug.get("fade_blocked"):
             fade_on = False
@@ -3473,8 +3545,11 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         _roll_s = f"{_roll}%" if _roll is not None else "n/a"
         mode_label = "Statistical (FADED – bet opposite colour)" if sug.get("faded") else "Statistical (FOLLOW model colour)"
         st.markdown(f"### {mode_label}")
+        _scope = sug.get("data_scope", "global")
+        _dn = sug.get("data_n", "")
         st.caption(
-            f"Mode: **{_mode}** · Rolling model colour (last ~{_adapt.get('window', 40)}): **{_roll_s}** · {_why}"
+            f"Mode: **{_mode}** · Data: **{_scope}** (n={_dn}) · "
+            f"Rolling model colour (last ~{_adapt.get('window', 40)}): **{_roll_s}** · {_why}"
         )
         st.markdown('<div class="sug-card stat">', unsafe_allow_html=True)
         _act = _gamble_action(sug)
@@ -4156,3 +4231,4 @@ elif st.session_state.active_tab == "📚 Learnings":
                         st.markdown(f"- {text}")
                         if conf:
                             st.caption(f"Confidence: {conf}")
+
