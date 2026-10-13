@@ -4133,6 +4133,26 @@ elif st.session_state.active_tab == "📚 Learnings":
             st.markdown("---")
 
     st.markdown("### Slot notes library")
-    for slot, payload in SLOT_NOTES.items():
-        with st.expander(f"{payload.get('family', '')} — {slot}"):
-            for text, conf in payload.get("notes", []):
+    if not SLOT_NOTES:
+        st.caption("No slot notes yet.")
+    else:
+        for slot, payload in SLOT_NOTES.items():
+            fam = ""
+            notes = []
+            if isinstance(payload, dict):
+                fam = payload.get("family", "") or ""
+                notes = payload.get("notes", []) or []
+            with st.expander(f"{fam} — {slot}"):
+                if not notes:
+                    st.caption("No notes for this slot.")
+                else:
+                    for item in notes:
+                        if isinstance(item, (list, tuple)) and len(item) >= 2:
+                            text, conf = item[0], item[1]
+                        elif isinstance(item, (list, tuple)) and len(item) == 1:
+                            text, conf = item[0], ""
+                        else:
+                            text, conf = str(item), ""
+                        st.markdown(f"- {text}")
+                        if conf:
+                            st.caption(f"Confidence: {conf}")
