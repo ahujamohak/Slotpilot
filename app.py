@@ -4271,4 +4271,3 @@ elif st.session_state.active_tab == "📚 Learnings":
                         st.markdown(f"- {text}")
                         if conf:
                             st.caption(f"Confidence: {conf}")
-
