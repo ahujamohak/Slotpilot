@@ -270,7 +270,7 @@ SLOT_MASTER_LIST = {
     "Piggy 'N' More": ["Bankin'"],
     "Portal Link": ["Wild Whale"],
     "Power Panther": ["Aztec Thunder", "Power Panther", "Tiki Tiki", "Wild Kingdom"],
-    "Shenlong Unleashed": ["Fortune Town"],
+    "Shenlong Unleashed": ["Khan of Khans", "Fortune Town"],
     "Thunder Empire": ["Amazon Hearts", "Inca Diamonds", "King Samurai", "Magic Emperor"],
     "Ultra Shot Link": ["Sapphire Eyes"],
     "Where's the Gold": ["Where's the Gold"],
@@ -336,24 +336,6 @@ TIER_RANK_MULT = {1: 1.60, 2: 1.15, 3: 1.00, 4: 0.50, 5: 0.20}
 
 # Saturday order — not a copy of Friday. After-mega seats OK but not forced first.
 # Fri 9 Oct was late night (23:00–01:00). Blanks Fri (El Matador, Outback) eligible flip.
-SATURDAY_PLAY_ORDER = [
-    # Canonical Saturday list (matches Saturday_Playbook_10_Oct_2026.pdf tactical card).
-    "Minotaur’s Treasure",
-    "El Matador",
-    "Enchanted Palace",
-    "Grand Toro",
-    "Autumn Moon",
-    "Ragnar the Great",
-    "Go West",
-    "Outback Gold",
-    "King Samurai",
-    "Peace & Long Life",
-    "Fire Mountain",
-    "Cleopatra’s Kingdom",
-    "Shadow Clan",
-    "Golden Gong",
-    "Khan of Khans",
-]
 
 
 # Day-of-week behaviour from full Session Log (first-attempt seats):
@@ -370,93 +352,28 @@ JJ_REHIT_BANDS = {
     "avoid_mega": 75,    # after this, prefer leave / same bet short only
 }
 
+PRIMARY_PLAY_DAYS = ["Tuesday", "Friday", "Saturday"]  # best pos seat % in full log
+OPTIONAL_PLAY_DAYS = ["Sunday"]  # weekend OK with strict stops
+SKIP_PLAY_DAYS = ["Monday", "Thursday"]  # worst pos %
+LIGHT_PLAY_DAYS = ["Wednesday"]  # mid pos; only if short session / already up discipline
+
 DAY_SPIN_PROFILE = {
-    "Monday":    {"max_mult": 1.20, "after_mult": 1.10, "target": 400, "stop_loss": 400, "label": "Long / selective"},
-    "Tuesday":   {"max_mult": 1.10, "after_mult": 1.05, "target": 500, "stop_loss": 400, "label": "Active"},
-    "Wednesday": {"max_mult": 1.10, "after_mult": 1.05, "target": 400, "stop_loss": 400, "label": "Mixed"},
-    "Thursday":  {"max_mult": 1.05, "after_mult": 1.00, "target": 400, "stop_loss": 400, "label": "Pre-weekend"},
-    "Friday":    {"max_mult": 1.00, "after_mult": 1.00, "target": 500, "stop_loss": 400, "label": "Earliest pays"},
-    "Saturday":  {"max_mult": 1.15, "after_mult": 1.05, "target": 400, "stop_loss": 400, "label": "Stretched cycles"},
-    "Sunday":    {"max_mult": 1.30, "after_mult": 1.15, "target": 400, "stop_loss": 350, "label": "Longest / most repeats"},
+    # target = session profit lock ($) · stop_loss = max session red ($)
+    # Better pos days → higher target, slightly more room. Weak days → small target, tight stop.
+    "Monday":    {"max_mult": 1.15, "after_mult": 1.05, "target": 250, "stop_loss": 250, "label": "Skip / light only — worst pos"},
+    "Tuesday":   {"max_mult": 1.05, "after_mult": 1.00, "target": 500, "stop_loss": 350, "label": "Best pos day — primary"},
+    "Wednesday": {"max_mult": 1.05, "after_mult": 1.00, "target": 300, "stop_loss": 250, "label": "Soft pos — short session only"},
+    "Thursday":  {"max_mult": 1.05, "after_mult": 1.00, "target": 250, "stop_loss": 250, "label": "Skip / light only — worst pos"},
+    "Friday":    {"max_mult": 1.00, "after_mult": 1.00, "target": 500, "stop_loss": 350, "label": "Primary — early pays"},
+    "Saturday":  {"max_mult": 1.10, "after_mult": 1.05, "target": 350, "stop_loss": 300, "label": "Provisional — recent pos soft"},
+    "Sunday":    {"max_mult": 1.20, "after_mult": 1.10, "target": 350, "stop_loss": 300, "label": "Optional — long cycles, bank clusters"},
 }
 
-SUNDAY_PLAY_ORDER = [
-    # Sunday-specific rank (Sunday seats only, min n=3). Longer max via DAY_SPIN_PROFILE.
-    "Minotaur’s Treasure",   # 100% hit · 75% early · best Sun pos
-    "Enchanted Palace",      # 100% hit · med +
-    "El Matador",            # 100% hit · strong avg
-    "Ragnar the Great",      # 100% early on Sun sample
-    "Emperor's Choice",
-    "Inca Diamonds",
-    "Great King",
-    "Treasure Oasis",
-    "Shaolin Style",         # good Sun sample — strict after rules
-    "Maximus Money",         # Sun mid — max stretched but NO dig past cap
-    "King Samurai",          # volume day — needs runway
-    "Amazon Hearts",         # only if up
-    "Outback Gold",
-    "Peace & Long Life",
-    "Khan of Khans",
-]
-
-MONDAY_PLAY_ORDER = [
-    # Low-risk hitters first. No Go West / Cash Horns / Power Panther for now.
-    "Enchanted Palace",
-    "Outback Gold",
-    "El Matador",
-    "Khan of Khans",
-    "Maximus Money",
-    "Minotaur’s Treasure",
-    "Peace & Long Life",
-    "Inca Diamonds",
-    "Great King",
-    "Come one, Come all",   # Fabulous — secondary
-    "Magic Touch",          # Fabulous — secondary
-    "Cash Champ",           # Fabulous — secondary
-    "King Samurai",         # only if up
-    "Shaolin Style",
-    "Treasure Oasis",
-]
 
 
-TUESDAY_PLAY_ORDER = [
-    # Tuesday stronger than Monday: hit 82% · early 52% · pos 48% · medSp ~19 · avgMult ~57
-    "El Matador",
-    "Enchanted Palace",
-    "Outback Gold",
-    "Minotaur’s Treasure",
-    "Khan of Khans",
-    "Maximus Money",
-    "Peace & Long Life",
-    "Fire Mountain",
-    "Sun Shots",
-    "Come one, Come all",
-    "Magic Touch",
-    "Emperor's Choice",
-    "Inca Diamonds",
-    "Great King",
-    "Shaolin Style",
-]
 
 
-WEDNESDAY_PLAY_ORDER = [
-    # Midweek: prefer low-risk hitters. No Go West / Cash Horns openers / Power Panther.
-    "El Matador",
-    "Enchanted Palace",
-    "Outback Gold",
-    "Minotaur’s Treasure",
-    "Khan of Khans",
-    "Maximus Money",
-    "Fire Mountain",
-    "Peace & Long Life",
-    "Autumn Moon",
-    "Come one, Come all",
-    "Magic Touch",
-    "Inca Diamonds",
-    "Great King",
-    "Shadow Clan",
-    "King Samurai",
-]
+
 
 
 
@@ -637,24 +554,6 @@ SUNDAY_SLOT_DETAIL = {
 
 
 
-FRIDAY_PLAY_ORDER = [
-    # Refined from multi-Friday dry-runs (Aug–Oct 2026). Stop at +$500.
-    "Fire Mountain",
-    "El Matador",
-    "Minotaur’s Treasure",
-    "Enchanted Palace",
-    "Grand Toro",
-    "Autumn Moon",
-    "Ragnar the Great",
-    "Go West",
-    "Cleopatra’s Kingdom",
-    "King Samurai",
-    "Shadow Clan",
-    "Peace & Long Life",
-    "Golden Gong",
-    "Outback Gold",
-    "Khan of Khans",
-]
 
 
 # Manual + data-backed play notes per slot.
@@ -1089,25 +988,160 @@ SLOT_PLAYBOOK = {
 
 
 
+
+# Day × slot POS tiers from Session Log (attempt-1 seats).
+# POSITIVE = play first | AVERAGE = only if up / short | NEGATIVE = skip that day
+# n often 2–6 — lists will tighten as data grows. FH openers still observe-only.
+
+DAY_SLOT_POS = {
+    "Monday": {
+        "positive": ["Maximus Money", "Shadow Clan", "Grand Toro"],
+        "average": ["Minotaur’s Treasure", "Come one, Come all"],
+        "negative": ["Emperor's Choice", "Ragnar the Great", "Amazon Hearts", "Aztec Thunder"],
+    },
+    "Tuesday": {
+        "positive": [
+            "Sun Shots", "Enchanted Palace", "Minotaur’s Treasure", "El Matador",
+            "Autumn Moon", "Maximus Money", "Silk Road",
+        ],
+        "average": ["Shaolin Style", "Peace & Long Life"],
+        "negative": ["Inca Diamonds"],
+    },
+    "Wednesday": {
+        "positive": ["Fire Mountain", "El Matador", "Maximus Money", "Shadow Clan"],
+        "average": ["Dragon's Riches", "Happy & Prosperous"],
+        "negative": [
+            "Emperor's Choice", "Peace & Long Life", "Magic Touch",
+            "Magic Emperor", "Panda Magic", "Shinobi",
+        ],
+    },
+    "Thursday": {
+        "positive": ["Maximus Money", "Ragnar the Great", "New York Nights", "Cleopatra’s Kingdom", "Shadow Clan"],
+        "average": ["Fire Mountain", "Treasure Oasis", "Battle Drum"],
+        "negative": ["El Matador", "Peace & Long Life", "Sun Shots", "Golden Century", "Happy & Prosperous"],
+    },
+    "Friday": {
+        "positive": [
+            "Enchanted Palace", "El Matador", "Fire Mountain", "Maximus Money",
+            "Come one, Come all", "Magic Touch", "Shaolin Style", "Forever Emperor",
+        ],
+        "average": ["Grand Toro", "Cleopatra’s Kingdom", "Lunar Dragon"],
+        "negative": [
+            "Autumn Moon", "Panda Magic", "Royal Emperor", "Peace & Long Life",
+            "Ragnar the Great", "Caribbean Gold",
+        ],
+    },
+    "Saturday": {
+        "positive": [
+            "El Matador", "Minotaur’s Treasure", "Magic Touch", "Inca Diamonds",
+            "Khan of Khans", "Cash Champ", "Grand Toro", "Shaolin Style",
+        ],
+        "average": ["Maximus Money", "Amazon Hearts", "Cleopatra’s Kingdom"],
+        "negative": [
+            "Fire Mountain", "Enchanted Palace", "Lunar Dragon", "Autumn Moon",
+            "Peace & Long Life", "Come one, Come all", "Golden Century",
+        ],
+    },
+    "Sunday": {
+        "positive": [
+            "El Matador", "Minotaur’s Treasure", "Enchanted Palace", "Battle Drum",
+            "Ragnar the Great", "Shaolin Style", "Royal Emperor", "Maximus Money",
+        ],
+        "average": ["Treasure Oasis", "Inca Diamonds", "Amazon Hearts"],
+        "negative": [
+            "Fire Mountain", "Cleopatra’s Kingdom", "Golden Century", "Shinobi", "Genghis Khan",
+        ],
+    },
+}
+
+def get_day_positive_slots(day: str) -> list:
+    d = (day or "").strip().title()
+    block = DAY_SLOT_POS.get(d) or {}
+    return list(block.get("positive") or [])
+
+def get_day_negative_slots(day: str) -> list:
+    d = (day or "").strip().title()
+    block = DAY_SLOT_POS.get(d) or {}
+    return list(block.get("negative") or [])
+
+# Consultant sequences = POSITIVE first, then light average. Skip day-negative.
+FRIDAY_PLAY_ORDER = [
+    "Enchanted Palace", "El Matador", "Fire Mountain", "Maximus Money",
+    "Come one, Come all", "Magic Touch", "Shaolin Style", "Forever Emperor",
+    "Grand Toro", "Outback Gold", "Khan of Khans", "Peace & Long Life",
+]
+SATURDAY_PLAY_ORDER = [
+    "El Matador", "Minotaur’s Treasure", "Magic Touch", "Inca Diamonds",
+    "Khan of Khans", "Cash Champ", "Grand Toro", "Shaolin Style",
+    "Maximus Money", "Outback Gold", "Shadow Clan", "Great King",
+]
+SUNDAY_PLAY_ORDER = [
+    "El Matador", "Minotaur’s Treasure", "Enchanted Palace", "Battle Drum",
+    "Ragnar the Great", "Shaolin Style", "Royal Emperor", "Maximus Money",
+    "Treasure Oasis", "Inca Diamonds", "Outback Gold", "Khan of Khans",
+]
+MONDAY_PLAY_ORDER = [
+    "Maximus Money", "Shadow Clan", "Grand Toro", "Minotaur’s Treasure",
+    "El Matador", "Fire Mountain",
+]
+TUESDAY_PLAY_ORDER = [
+    "Sun Shots", "Enchanted Palace", "Minotaur’s Treasure", "El Matador",
+    "Autumn Moon", "Maximus Money", "Outback Gold", "Khan of Khans",
+    "Fire Mountain", "Peace & Long Life",
+]
+WEDNESDAY_PLAY_ORDER = [
+    "Fire Mountain", "El Matador", "Maximus Money", "Shadow Clan",
+    "Minotaur’s Treasure", "Outback Gold", "Enchanted Palace", "Khan of Khans",
+]
+THURSDAY_PLAY_ORDER = [
+    "Maximus Money", "Ragnar the Great", "New York Nights", "Cleopatra’s Kingdom",
+    "Shadow Clan", "Fire Mountain", "Treasure Oasis",
+]
+
+
+def apply_day_bankroll_targets(day: str | None = None):
+    """Set stop_win / stop_loss / session_target from DAY_SPIN_PROFILE for the day."""
+    d = str(day or st.session_state.get("selected_day") or "Friday").strip().title()
+    # selected_day might be a date
+    if hasattr(st.session_state.get("selected_day"), "strftime"):
+        d = st.session_state.selected_day.strftime("%A")
+    prof = (DAY_SPIN_PROFILE.get(d) if "DAY_SPIN_PROFILE" in globals() else None) or {}
+    tgt = int(prof.get("target") or 400)
+    sl = int(prof.get("stop_loss") or 350)
+    st.session_state.stop_win = float(tgt)
+    st.session_state.stop_loss = float(sl)
+    start = float(st.session_state.get("starting_bankroll") or 1250)
+    st.session_state.session_target = start + tgt
+    return {"day": d, "target": tgt, "stop_loss": sl, "session_target": start + tgt, "label": prof.get("label", "")}
+
 def get_day_play_order(day: str | None = None) -> list:
+    """Day-POSITIVE consultant sequence (data-backed). Strips day-NEGATIVE names."""
     day = day or st.session_state.get("selected_day") or "Friday"
     d = str(day).strip().title()
-    if d == "Sunday" and "SUNDAY_PLAY_ORDER" in globals():
-        return list(SUNDAY_PLAY_ORDER)
-    if d == "Saturday" and "SATURDAY_PLAY_ORDER" in globals():
-        return list(SATURDAY_PLAY_ORDER)
-    if d == "Friday" and "FRIDAY_PLAY_ORDER" in globals():
-        return list(FRIDAY_PLAY_ORDER)
-    if d == "Monday" and "MONDAY_PLAY_ORDER" in globals():
-        return list(MONDAY_PLAY_ORDER)
-    if d == "Tuesday" and "TUESDAY_PLAY_ORDER" in globals():
-        return list(TUESDAY_PLAY_ORDER)
-    if d == "Wednesday" and "WEDNESDAY_PLAY_ORDER" in globals():
-        return list(WEDNESDAY_PLAY_ORDER)
-    # Default: Monday-style cautious list for other midweek if present
-    if "MONDAY_PLAY_ORDER" in globals():
-        return list(MONDAY_PLAY_ORDER)
-    return list(FRIDAY_PLAY_ORDER) if "FRIDAY_PLAY_ORDER" in globals() else []
+    mapping = {
+        "Sunday": "SUNDAY_PLAY_ORDER",
+        "Saturday": "SATURDAY_PLAY_ORDER",
+        "Friday": "FRIDAY_PLAY_ORDER",
+        "Monday": "MONDAY_PLAY_ORDER",
+        "Tuesday": "TUESDAY_PLAY_ORDER",
+        "Wednesday": "WEDNESDAY_PLAY_ORDER",
+        "Thursday": "THURSDAY_PLAY_ORDER",
+    }
+    order = []
+    key = mapping.get(d)
+    if key and key in globals() and globals()[key]:
+        order = list(globals()[key])
+    elif "DAY_SLOT_POS" in globals() and d in DAY_SLOT_POS:
+        order = list(DAY_SLOT_POS[d].get("positive") or []) + list(DAY_SLOT_POS[d].get("average") or [])
+    else:
+        order = list(FRIDAY_PLAY_ORDER) if FRIDAY_PLAY_ORDER else []
+    # Never recommend day-negative
+    neg = set()
+    if "DAY_SLOT_POS" in globals() and d in DAY_SLOT_POS:
+        neg = set(DAY_SLOT_POS[d].get("negative") or [])
+    if neg:
+        order = [s for s in order if s not in neg]
+    return order
 
 def get_playbook(slot_name: str, day: str | None = None) -> dict:
     if not slot_name:
@@ -3161,7 +3195,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 36  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 39  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3201,8 +3235,13 @@ if selected_day_input != st.session_state.selected_day or strict_penalty_toggle 
     st.session_state.selected_day = selected_day_input
     st.session_state.strict_day_penalty = strict_penalty_toggle
     st.session_state.slots_db = build_priority_dataset(live_sheet_df, st.session_state.selected_day, st.session_state.strict_day_penalty)
+    apply_day_bankroll_targets(st.session_state.selected_day)
     persist_session_state()
     st.rerun()
+# Keep targets aligned even when day unchanged (e.g. after reload)
+if "day_targets_applied_for" not in st.session_state or st.session_state.day_targets_applied_for != st.session_state.selected_day:
+    apply_day_bankroll_targets(st.session_state.selected_day)
+    st.session_state.day_targets_applied_for = st.session_state.selected_day
 
 st.sidebar.subheader("📌 Navigation")
 for tab_name in TAB_OPTIONS:
@@ -3457,13 +3496,22 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
         st.session_state.gamble_family = ""
     if "gamble_slot" not in st.session_state:
         st.session_state.gamble_slot = ""
+    if "gamble_family_prev" not in st.session_state:
+        st.session_state.gamble_family_prev = ""
     _gf, _gs = st.columns(2)
     with _gf:
         _fam_opts = [""] + sorted(SLOT_MASTER_LIST.keys())
         _fi = _fam_opts.index(st.session_state.gamble_family) if st.session_state.gamble_family in _fam_opts else 0
-        st.session_state.gamble_family = st.selectbox("Family (for this machine)", options=_fam_opts, index=_fi, key="gamble_family_sb")
+        _new_fam = st.selectbox("Family (for this machine)", options=_fam_opts, index=_fi, key="gamble_family_sb")
+        if _new_fam != st.session_state.gamble_family_prev:
+            # Family changed → clear slot so we never show another family's machine
+            st.session_state.gamble_slot = ""
+            st.session_state.gamble_family_prev = _new_fam
+        st.session_state.gamble_family = _new_fam
     with _gs:
         _slot_opts = [""] + list(SLOT_MASTER_LIST.get(st.session_state.gamble_family, []))
+        if st.session_state.gamble_slot not in _slot_opts:
+            st.session_state.gamble_slot = ""
         _si = _slot_opts.index(st.session_state.gamble_slot) if st.session_state.gamble_slot in _slot_opts else 0
         st.session_state.gamble_slot = st.selectbox("Slot (for this machine)", options=_slot_opts, index=_si, key="gamble_slot_sb")
 
@@ -3933,8 +3981,9 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
     # --- Suggestion A: Consultant fixed sequence (hand-tuned per day) ---
     st.markdown("#### A) Consultant sequence (hand-tuned for this day)")
     if _order:
+        _sl = int(_prof.get("stop_loss") or 350)
         st.success(
-            f"{_day}: {_lbl}. Target +${_tgt} then STOP. "
+            f"{_day}: {_lbl}. Profit lock +${_tgt} · Stop-loss −${_sl}. "
             f"Spin budgets ×{_mm:.2f}. Max 3 denoms. No dig past max. "
             f"S/M/L = next-hunt spins by **this slot’s** mult bands."
         )
@@ -3967,7 +4016,7 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             },
         )
         st.caption(
-            "Same layout as the PDF playbook. Attempt 2nd/3rd rules → Live Decision when you select the slot."
+            "Day-POSITIVE first (from log pos%). Day-NEGATIVE slots are deprioritised. Attempt 2nd/3rd rules → Live Decision when you select the slot."
         )
     else:
         st.info("No consultant sequence for this day yet.")
@@ -4271,3 +4320,4 @@ elif st.session_state.active_tab == "📚 Learnings":
                         st.markdown(f"- {text}")
                         if conf:
                             st.caption(f"Confidence: {conf}")
+
