@@ -201,6 +201,8 @@ if "fade_gamble" not in st.session_state:
     st.session_state.fade_gamble = False
 if "gamble_fade_mode" not in st.session_state:
     st.session_state.gamble_fade_mode = "adaptive"
+if "session_seat_log" not in st.session_state:
+    st.session_state.session_seat_log = []
 # Ensure bankroll defaults if somehow missing
 if "session_start_bankroll" not in st.session_state:
     st.session_state.session_start_bankroll = 1250.0
@@ -1114,6 +1116,330 @@ def apply_day_bankroll_targets(day: str | None = None):
     st.session_state.session_target = start + tgt
     return {"day": d, "target": tgt, "stop_loss": sl, "session_target": start + tgt, "label": prof.get("label", "")}
 
+
+def slot_day_profit_stats(slot_name: str, day: str, live_df) -> dict:
+    """Attempt-1 seat stats for slot on weekday: attempts, hits, hit%, pos%, avg/med pnl, proj $/seat."""
+    empty = {
+        "attempts": 0, "hits": 0, "hit_pct": None, "pos_pct": None,
+        "avg_pnl": None, "med_pnl": None, "proj_seat": None, "label": "—",
+    }
+    if live_df is None or getattr(live_df, "empty", True) or not slot_name:
+        return empty
+    df = live_df.copy()
+    # normalize columns
+    colmap = {str(c).strip().lower(): c for c in df.columns}
+    def col(*names):
+        for n in names:
+            if n.lower() in colmap:
+                return colmap[n.lower()]
+        return None
+    c_slot = col("Slot", "slot")
+    c_day = col("Day", "day")
+    c_date = col("Date", "date")
+    c_hit = col("Hit Number", "HitNumber", "hit number")
+    c_att = col("Attempt Number", "AttemptNumber", "attempt number")
+    c_mult = col("Win multiplier", "Win Multiplier", "win multiplier")
+    c_win = col("Win amount", "Win Amount", "win amount")
+    c_spin = col("Spin of feature hit", "Spin of feature hits", "spin of feature hit")
+    if not c_slot or not c_att:
+        return empty
+    df["_slot"] = df[c_slot].astype(str).str.strip()
+    df = df[df["_slot"].str.lower() == str(slot_name).strip().lower()]
+    if df.empty:
+        return empty
+    if c_day:
+        df["_day"] = df[c_day].astype(str).str.strip()
+        day_t = str(day).strip().title()
+        df = df[df["_day"].str.title() == day_t]
+    elif c_date:
+        dd = pd.to_datetime(df[c_date], errors="coerce")
+        df = df[dd.dt.day_name().str.title() == str(day).strip().title()]
+    if df.empty:
+        return empty
+    df["_att"] = pd.to_numeric(df[c_att], errors="coerce").fillna(0)
+    a1 = df[df["_att"] == 1].copy()
+    if a1.empty:
+        return empty
+    if c_hit:
+        a1["_hitn"] = pd.to_numeric(a1[c_hit], errors="coerce").fillna(0)
+    else:
+        a1["_hitn"] = 0
+    if c_mult:
+        a1["_mult"] = pd.to_numeric(a1[c_mult], errors="coerce").fillna(0)
+    else:
+        a1["_mult"] = 0
+    if c_win:
+        a1["_win"] = pd.to_numeric(a1[c_win], errors="coerce").fillna(0)
+    else:
+        a1["_win"] = 0
+    if c_spin:
+        def _ps(x):
+            s = str(x).strip().replace("+", "")
+            try:
+                return float(s)
+            except Exception:
+                return float("nan")
+        a1["_spins"] = a1[c_spin].map(_ps)
+    else:
+        a1["_spins"] = float("nan")
+    # group by date = one seat
+    if c_date:
+        a1["_date"] = pd.to_datetime(a1[c_date], errors="coerce").dt.date
+        keys = ["_date"]
+    else:
+        a1["_date"] = range(len(a1))
+        keys = ["_date"]
+    seats = []
+    for _, g in a1.groupby(keys):
+        hit_rows = g[(g["_hitn"] >= 1) & (g["_mult"] > 0)]
+        if len(hit_rows):
+            r = hit_rows.iloc[0]
+            w = float(r["_win"]) if r["_win"] > 0 else float(r["_mult"]) * 5.0
+            spins = float(r["_spins"]) if pd.notna(r["_spins"]) else 40.0
+            cost = spins * 5.0 * 0.85
+            seats.append({"hit": True, "pnl": w - cost})
+        else:
+            r = g.iloc[0]
+            spins = float(r["_spins"]) if pd.notna(r["_spins"]) else 40.0
+            cost = spins * 5.0 * 0.85
+            seats.append({"hit": False, "pnl": -cost})
+    if not seats:
+        return empty
+    n = len(seats)
+    hits = sum(1 for s in seats if s["hit"])
+    pnls = [s["pnl"] for s in seats]
+    avg = sum(pnls) / n
+    med = float(pd.Series(pnls).median())
+    pos = sum(1 for p in pnls if p > 0) / n * 100
+    # projected $/seat = average historical seat P&L for this day×slot
+    proj = round(avg)
+    return {
+        "attempts": n,
+        "hits": hits,
+        "hit_pct": round(hits / n * 100),
+        "pos_pct": round(pos),
+        "avg_pnl": round(avg),
+        "med_pnl": round(med),
+        "proj_seat": proj,
+        "label": f"${proj:+d}/seat" if n else "—",
+    }
+
+
+def format_proj_cell(stats: dict) -> str:
+    if not stats or not stats.get("attempts"):
+        return "n/a"
+    return (
+        f"{stats['proj_seat']:+d} "
+        f"({stats['hits']}/{stats['attempts']} hit, "
+        f"{stats['pos_pct']}% pos)"
+    )
+
+
+
+# Physical floor instances (not vague labels). Key = slot name.
+# Each entry: list of cabinets with id, where, and result notes (update after every real sit).
+# Prefer cabinets with green notes; avoid last-dead on same day type when alternatives exist.
+MACHINE_POSITIONS = {
+    "Outback Gold": [
+        {"id": "OG-ROULETTE", "where": "Near Roulette", "notes": [
+            ("2026-10-14 Wed: 68+ blank, check-in 250 → 0. Prefer try other OG if available next time.", "High"),
+        ]},
+        {"id": "OG-OPPOSITE", "where": "Opposite the Roulette unit (same family bank)", "notes": [
+            ("Not yet logged in a real sit by us — test when Roulette unit is cold/dead.", "Low"),
+        ]},
+    ],
+    "El Matador": [
+        {"id": "EM-FH", "where": "Near Fortune Hearts", "notes": [
+            ("PREFERRED. 2026-10-14 Wed: 139× @7 — THIS unit paid.", "High"),
+            ("2026-10-11 Sun: strong on Near FH (7× then 49×).", "High"),
+        ]},
+        {"id": "EM-ROULETTE", "where": "Near Roulette", "notes": [
+            ("Fallback only if FH unit busy.", "Medium"),
+        ]},
+    ],
+    "Maximus Money": [
+        {"id": "MX-ROULETTE", "where": "Roulette Room — Bull Rush Stampede bank", "notes": [
+            ("PREFERRED — switch away from Entrance after 14 Oct blank/small.", "High"),
+            ("Leave after ≤20× — do not dig.", "High"),
+        ]},
+        {"id": "MX-ENTRANCE", "where": "Entrance Room — between Fire Mountain & Minotaur (Stampede bank)", "notes": [
+            ("2026-10-14 Wed YOU played this unit: 4× @53 then dig. Avoid next sit.", "High"),
+        ]},
+        {"id": "MX-DOLLAR", "where": "Dollar Storm room — near El Matador & Fortune Hearts", "notes": [
+            ("Fallback if Roulette busy.", "Medium"),
+        ]},
+    ],
+    "Enchanted Palace": [
+        {"id": "EP-LEFT", "where": "Far left (Lamp bank)", "notes": [
+            ("PREFERRED Enchanted unit.", "High"),
+        ]},
+        {"id": "EP-MID", "where": "Middle Lamp bank", "notes": [
+            ("Fallback only. Far right = Treasure Oasis — not EP.", "Medium"),
+        ]},
+    ],
+    "Fire Mountain": [
+        {"id": "FM-ONLY", "where": "Only 1 on entire VIP floor", "notes": [
+            ("Single unit — position N/A beyond VIP Fire Mountain.", "High"),
+        ]},
+    ],
+    "Come one, Come all": [
+        {"id": "COCA-ONLY", "where": "Only 1 on entire floor (Fabulous Hold & Spin)", "notes": [
+            ("Single unit floor-wide. 2026-10-14 Wed: 66+ blank.", "High"),
+        ]},
+    ],
+    "Magic Touch": [
+        {"id": "MT-RIGHT", "where": "Fabulous bank — 1st from the right (confirm)", "notes": [
+            ("2026-10-14 Wed: small then 42× then leave ~200 — mixed; gamble felt off.", "Medium"),
+        ]},
+    ],
+    "Great King": [
+        {"id": "GK-ROULETTE", "where": "Near Roulette", "notes": []},
+        {"id": "GK-BANDIT", "where": "Near Bandit Link (opposite)", "notes": []},
+    ],
+    "Emperor's Choice": [
+        {"id": "EC-EM", "where": "Near El Matador", "notes": [
+            ("2026-10-14 Wed Near EM: 79+ blank — FH observe-only.", "High"),
+        ]},
+        {"id": "EC-ENTRANCE", "where": "At entrance", "notes": []},
+        {"id": "EC-ESCALATOR", "where": "Near escalator to non-VIP", "notes": []},
+    ],
+    "Khan of Khans": [
+        {"id": "KK-ONLY", "where": "Only 1 (Shenlong Unleashed)", "notes": [
+            ("2026-10-14 Wed: 93+ blank — past max.", "High"),
+        ]},
+    ],
+    "Minotaur’s Treasure": [
+        {"id": "MTREAS-ONLY", "where": "Only 1 on VIP floor", "notes": []},
+    ],
+}
+
+
+def get_machine_positions(slot_name: str) -> list:
+    if not slot_name:
+        return []
+    if slot_name in MACHINE_POSITIONS:
+        return list(MACHINE_POSITIONS[slot_name])
+    for k, v in MACHINE_POSITIONS.items():
+        if k.lower() == slot_name.lower():
+            return list(v)
+    return []
+
+
+def preferred_position_label(slot_name: str) -> str:
+    """One firm preferred cabinet only (no alt list in table cells)."""
+    units = get_machine_positions(slot_name)
+    if not units:
+        return "—"
+    if len(units) == 1:
+        return units[0].get("where", "—")
+    scored = []
+    for u in units:
+        notes = u.get("notes") or []
+        score = 0
+        for text, conf in notes:
+            t = text.lower()
+            if "blank" in t or "dead" in t or "→ 0" in t:
+                score -= 2 if conf == "High" else 1
+            if "paid" in t or "strong" in t or "prefer" in t:
+                score += 2 if conf == "High" else 1
+        scored.append((score, u))
+    scored.sort(key=lambda x: -x[0])
+    return scored[0][1].get("where", "—")
+
+
+
+# ----- Live Session Guard (seat-by-seat log) -----
+SESSION_SEATS_KEY = "session_seat_log"  # list of dicts in memory; also mirrored to worksheet if possible
+
+def _session_day_targets():
+    d = st.session_state.get("selected_day")
+    if hasattr(d, "strftime"):
+        d = d.strftime("%A")
+    d = str(d or datetime.now().strftime("%A")).strip().title()
+    prof = (DAY_SPIN_PROFILE.get(d) if "DAY_SPIN_PROFILE" in globals() else None) or {}
+    return {
+        "day": d,
+        "lock": float(prof.get("target") or st.session_state.get("stop_win") or 350),
+        "stop": float(prof.get("stop_loss") or st.session_state.get("stop_loss") or 300),
+    }
+
+
+def compute_session_guard(seats: list) -> dict:
+    """OPEN / PROTECT / STOP from full-session P&L + hero flag."""
+    t = _session_day_targets()
+    lock, stop = t["lock"], t["stop"]
+    pnl = 0.0
+    hero = False
+    for s in seats or []:
+        try:
+            ci = float(s.get("checkin") or 0)
+            co = float(s.get("checkout") or 0)
+        except Exception:
+            ci, co = 0.0, 0.0
+        pnl += (co - ci)
+        try:
+            mult = float(s.get("mult") or 0)
+        except Exception:
+            mult = 0.0
+        if mult >= 80:
+            hero = True
+    status = "OPEN"
+    action = "Continue — next day-POSITIVE seat OK (full check-in within remaining room)."
+    if pnl <= -stop:
+        status = "STOP"
+        action = "STOP — session at/under stop-loss. Go home (override only if you consciously choose)."
+    elif pnl >= lock:
+        status = "STOP"
+        action = f"STOP — profit lock +${lock:.0f} reached. Leave (stretch only if already decided)."
+    elif hero:
+        status = "PROTECT"
+        action = "PROTECT — had ≥80× this session. At most ONE short sit, or leave. No full dig."
+    return {
+        "status": status,
+        "action": action,
+        "pnl": round(pnl, 2),
+        "lock": lock,
+        "stop": stop,
+        "hero": hero,
+        "seats": len(seats or []),
+        "day": t["day"],
+    }
+
+
+def append_session_seat(entry: dict):
+    if SESSION_SEATS_KEY not in st.session_state or not isinstance(st.session_state[SESSION_SEATS_KEY], list):
+        st.session_state[SESSION_SEATS_KEY] = []
+    st.session_state[SESSION_SEATS_KEY].append(entry)
+    # best-effort sheet mirror
+    try:
+        _persist_session_seats_sheet(st.session_state[SESSION_SEATS_KEY])
+    except Exception:
+        pass
+
+
+def _persist_session_seats_sheet(seats: list):
+    """Write seat log to worksheet 'Session Seats' if gspread conn exists."""
+    try:
+        conn = get_gsheet_connection() if "get_gsheet_connection" in dir() else None
+    except Exception:
+        conn = None
+    if conn is None:
+        return
+    import pandas as pd
+    rows = seats or []
+    if not rows:
+        return
+    df = pd.DataFrame(rows)
+    try:
+        conn.update(worksheet="Session Seats", data=df)
+    except Exception:
+        try:
+            # create by writing
+            conn.create(worksheet="Session Seats", data=df)
+        except Exception:
+            pass
+
+
 def get_day_play_order(day: str | None = None) -> list:
     """Day-POSITIVE consultant sequence (data-backed). Strips day-NEGATIVE names."""
     day = day or st.session_state.get("selected_day") or "Friday"
@@ -1142,6 +1468,116 @@ def get_day_play_order(day: str | None = None) -> list:
     if neg:
         order = [s for s in order if s not in neg]
     return order
+
+
+# ----- Attempt-1 adaptive percentile + post-mega walk -----
+DEFAULT_MEGA_MULT = 100
+DEFAULT_AFTER_MEGA_SPINS = 0
+MEGA_WALK_MULT = {
+    "Minotaur’s Treasure": 80,
+    "Amazon Hearts": 60,
+    "Autumn Moon": 60,
+    "Come one, Come all": 60,
+    "Sun Shots": 60,
+    "Treasure Oasis": 70,
+    "Magic Emperor": 70,
+    "Sumo Power": 60,
+}
+GAP_P85_P90_MAX = 8
+GAP_P90_P95_MAX = 6
+GAP_P85_P95_MAX = 12
+
+
+def _feature_spins_for_slot(slot_name: str, live_df):
+    if live_df is None or getattr(live_df, "empty", True) or not slot_name:
+        return None
+    df = live_df.copy()
+    colmap = {str(c).strip().lower(): c for c in df.columns}
+    def col(*names):
+        for n in names:
+            if n.lower() in colmap:
+                return colmap[n.lower()]
+        return None
+    c_slot, c_hit, c_mult, c_spin = col("Slot"), col("Hit Number"), col("Win multiplier", "Win Multiplier"), col("Spin of feature hit", "Spin of feature hits")
+    if not c_slot or not c_spin:
+        return None
+    sub = df[df[c_slot].astype(str).str.strip().str.lower() == str(slot_name).strip().lower()]
+    if c_hit is not None:
+        sub = sub[pd.to_numeric(sub[c_hit], errors="coerce").fillna(0) >= 1]
+    if c_mult is not None:
+        sub = sub[pd.to_numeric(sub[c_mult], errors="coerce").fillna(0) > 0]
+    def _ps(x):
+        s = str(x).strip().replace("+", "")
+        try:
+            return float(s)
+        except Exception:
+            return float("nan")
+    spins = sub[c_spin].map(_ps).dropna()
+    if len(spins) < 5:
+        return None
+    return spins.astype(float)
+
+
+def adaptive_attempt1_max(slot_name: str, live_df) -> dict:
+    """p85 default; p90 if gap≤8; p95 if gaps still small."""
+    import numpy as np
+    spins = _feature_spins_for_slot(slot_name, live_df)
+    if spins is None:
+        return {}
+    p85 = float(np.nanpercentile(spins, 85))
+    p90 = float(np.nanpercentile(spins, 90))
+    p95 = float(np.nanpercentile(spins, 95))
+    g1, g2, g3 = p90 - p85, p95 - p90, p95 - p85
+    chosen, source = p85, "pooled_p85"
+    if g1 <= GAP_P85_P90_MAX:
+        chosen, source = p90, "pooled_p90_small_gap"
+        if g2 <= GAP_P90_P95_MAX and g3 <= GAP_P85_P95_MAX:
+            chosen, source = p95, "pooled_p95_small_gap"
+    return {
+        "max_spins": int(round(chosen / 5.0) * 5),
+        "source": source,
+        "p85": int(round(p85)),
+        "p90": int(round(p90)),
+        "p95": int(round(p95)),
+        "gap_85_90": round(g1, 1),
+        "gap_90_95": round(g2, 1),
+    }
+
+
+def mega_threshold_for_slot(slot_name: str) -> float:
+    if not slot_name:
+        return float(DEFAULT_MEGA_MULT)
+    if slot_name in MEGA_WALK_MULT:
+        return float(MEGA_WALK_MULT[slot_name])
+    for k, v in MEGA_WALK_MULT.items():
+        if k.lower() == str(slot_name).lower():
+            return float(v)
+    return float(DEFAULT_MEGA_MULT)
+
+
+def after_feature_spin_cap(slot_name: str, mult: float, pb: dict | None = None) -> dict:
+    pb = pb or {}
+    thr = mega_threshold_for_slot(slot_name)
+    try:
+        m = float(mult)
+    except Exception:
+        m = 0.0
+    if m >= thr:
+        return {
+            "max_spins": int(DEFAULT_AFTER_MEGA_SPINS),
+            "reason": f"≥{thr:.0f}× on this slot — leave (no full 2nd hunt; token {DEFAULT_AFTER_MEGA_SPINS} max).",
+            "mode": "mega_walk",
+        }
+    bs = float(pb.get("band_small") or 20)
+    bl = float(pb.get("band_large") or 50)
+    if m < bs:
+        cap, mode = int(pb.get("after_small") or 20), "small"
+    elif m < bl:
+        cap, mode = int(pb.get("after_med") or 25), "med"
+    else:
+        cap, mode = int(pb.get("after_large") or 20), "large"
+    return {"max_spins": cap, "reason": f"{mode} band → max {cap} spins 2nd hunt.", "mode": mode}
+
 
 def get_playbook(slot_name: str, day: str | None = None) -> dict:
     if not slot_name:
@@ -1211,6 +1647,36 @@ def get_playbook(slot_name: str, day: str | None = None) -> dict:
         f"{out.get('after_small', 20)} (<{bs}×) / "
         f"{out.get('after_med', 25)} ({bs}–{bl}×) / "
         f"{out.get('after_large', 20)} (≥{bl}×)"
+    )
+    # Attempt-1 max = adaptive p85→p90→p95 by gap size (cycle unknown, all features)
+    try:
+        _live = None
+        if hasattr(st, "session_state"):
+            _live = st.session_state.get("live_sheet_df")
+        ad = adaptive_attempt1_max(slot_name, _live)
+        if ad.get("max_spins"):
+            adj = int(round(ad["max_spins"] * mm / 5.0) * 5)
+            out["max_spins"] = int(min(95, max(35, adj)))
+            out["max_spins_source"] = ad.get("source", "adaptive")
+            out["p85"] = ad.get("p85")
+            out["p90"] = ad.get("p90")
+            out["p95"] = ad.get("p95")
+            out["gap_85_90"] = ad.get("gap_85_90")
+            if "checkin" in out:
+                sug = int(round((out["max_spins"] * 4.25) / 50.0) * 50)
+                out["checkin"] = int(max(150, min(450, sug)))
+        else:
+            out.setdefault("max_spins_source", "playbook_default")
+    except Exception:
+        out.setdefault("max_spins_source", "playbook_default")
+    # Mega walk line for this slot
+    out["mega_mult"] = mega_threshold_for_slot(slot_name)
+    out["after_mega"] = int(DEFAULT_AFTER_MEGA_SPINS)
+    out["sml_label"] = (
+        f"{out.get('after_small', 20)} (<{bs}×) / "
+        f"{out.get('after_med', 25)} ({bs}–{bl}×) / "
+        f"{out.get('after_large', 20)} (≥{bl}×) · "
+        f"≥{out['mega_mult']:.0f}× → leave (≤{out['after_mega']} token)"
     )
     return out
 
@@ -3195,7 +3661,7 @@ def parse_ai_priority_list(ai_text: str, slots_db: list):
 # ==========================================
 # LOAD DATA & INITIALIZE STATE
 # ==========================================
-SLOTS_DB_VERSION = 39  # Fri 9 Oct execution learnings + denom paths
+SLOTS_DB_VERSION = 45  # Fri 9 Oct execution learnings + denom paths
 live_sheet_df, detected_sheet_cols = load_and_inspect_sheet()
 if (
     "slots_db" not in st.session_state
@@ -3349,6 +3815,38 @@ if st.session_state.active_tab == "🎯 Live Decision":
         c2.metric("Check-in", f"${_pb.get('checkin', 250)}")
         c3.metric("Max spins 1st", f"{_pb.get('max_spins', 60)}")
         c4.metric("Day", f"{_day or '—'}")
+        # Day×slot profit projection from log
+        _live_ld = st.session_state.get("live_sheet_df")
+        if _live_ld is None:
+            try:
+                _live_ld = live_sheet_df
+            except Exception:
+                _live_ld = None
+        _pst = slot_day_profit_stats(sel_slot, _day or datetime.now().strftime("%A"), _live_ld)
+        if _pst.get("attempts"):
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("Proj $/seat", f"{_pst['proj_seat']:+d}")
+            p2.metric("Hit", f"{_pst['hits']}/{_pst['attempts']} ({_pst['hit_pct']}%)")
+            p3.metric("Pos%", f"{_pst['pos_pct']}%")
+            p4.metric("Med $/seat", f"{_pst['med_pnl']:+d}")
+            st.caption(
+                "Proj $/seat = average historical seat P&L for this slot on this weekday "
+                "($5 bet, ~15% line-win cost). Not a guarantee."
+            )
+        else:
+            st.caption("No day×slot history yet — profit projection n/a.")
+        st.caption(
+            f"Attempt-1 max from **pooled p85 all features** ({_pb.get('max_spins_source', 'default')}). "
+            f"Mega walk ≥{_pb.get('mega_mult', 100):.0f}× → leave (≤{_pb.get('after_mega', 0)} token spins)."
+        )
+        st.markdown("##### Just hit a feature? Next-hunt spins")
+        _jm = st.number_input("Multiplier just hit", min_value=0.0, value=0.0, step=1.0, key="ld_just_mult")
+        if _jm and _jm > 0:
+            _cap = after_feature_spin_cap(sel_slot, _jm, _pb)
+            if _cap["mode"] == "mega_walk":
+                st.error(f"**Leave.** {_cap['reason']}")
+            else:
+                st.warning(f"**Max {_cap['max_spins']} spins** on next hunt. {_cap['reason']}")
         bs = _pb.get("band_small", 20)
         bl = _pb.get("band_large", 50)
         st.write(
@@ -3363,11 +3861,21 @@ if st.session_state.active_tab == "🎯 Live Decision":
                 f"3rd max {_pb.get('max3', '—')} spins. "
                 f"{_pb.get('attempt_rule', '')}"
             )
-        if _pb.get("denom_path") or _pb.get("position"):
-            st.write(
-                f"**Denom:** {_pb.get('denom_path', '$1 → 10c → 5c')} · "
-                f"**Position:** {_pb.get('position', '—')}"
-            )
+        _pos_units = get_machine_positions(sel_slot)
+        if _pb.get("denom_path") or _pos_units or _pb.get("position"):
+            st.write(f"**Denom:** {_pb.get('denom_path', '$1 → 10c → 5c')}")
+            if _pos_units:
+                st.markdown("**Floor positions (which cabinet):**")
+                for u in _pos_units:
+                    st.markdown(f"- **{u.get('where', '—')}** (`{u.get('id', '')}`)")
+                    for text, conf in (u.get("notes") or [])[-3:]:
+                        st.caption(f"  · {text} [{conf}]")
+                st.info(
+                    "Log the **exact position** every sit (e.g. Outback Gold – Near Roulette). "
+                    "Same slot name ≠ same machine."
+                )
+            elif _pb.get("position"):
+                st.write(f"**Position:** {_pb.get('position')}")
         if _tier >= 5:
             st.warning("Deprioritised slot — skip unless nothing else is available.")
         elif _tier == 4:
@@ -3598,10 +4106,13 @@ elif st.session_state.active_tab == "🃏 Gamble Analyzer":
 
     _fam_sel = (st.session_state.get("gamble_family") or "").strip()
     _slot_sel = (st.session_state.get("gamble_slot") or "").strip()
-    _ready = bool(_fam_sel and _slot_sel and len(seq) == 5)
+    # Hard rule: 5 cards only. Family/Slot optional (improves hierarchy when present).
+    _ready = len(seq) == 5
 
-    if len(seq) == 5 and not (_fam_sel and _slot_sel):
-        st.warning("Select **Family** and **Slot** above — suggestion waits until both are set (then slot → family → global data).")
+    if _ready and not (_fam_sel and _slot_sel):
+        st.caption("Family/Slot optional — using global log. Add them when known for slot-weighted suggestions.")
+    elif _ready and _fam_sel and not _slot_sel:
+        st.caption("Slot optional — weighting by family when possible, else global.")
 
     if _ready:
         _mode = st.session_state.get("gamble_fade_mode", "adaptive")
@@ -3988,8 +4499,15 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
             f"S/M/L = next-hunt spins by **this slot’s** mult bands."
         )
         rows = []
+        _live = st.session_state.get("live_sheet_df")
+        if _live is None:
+            try:
+                _live = live_sheet_df
+            except Exception:
+                _live = None
         for i, name in enumerate(_order, 1):
             pb = get_playbook(name, _day) or {}
+            stt = slot_day_profit_stats(name, _day, _live)
             rows.append({
                 "#": i,
                 "Slot": name,
@@ -3999,7 +4517,11 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                     f"{pb.get('after_small', '—')} / {pb.get('after_med', '—')} / {pb.get('after_large', '—')}"
                 ),
                 "Denom": pb.get("denom_path", "$1 → 10c → 5c"),
-                "Position": pb.get("position") or "—",
+                "Position": preferred_position_label(name),
+                "Att": stt.get("attempts") or 0,
+                "Hit%": stt.get("hit_pct") if stt.get("hit_pct") is not None else "—",
+                "Pos%": stt.get("pos_pct") if stt.get("pos_pct") is not None else "—",
+                "Proj $/seat": stt.get("proj_seat") if stt.get("proj_seat") is not None else "—",
             })
         st.dataframe(
             pd.DataFrame(rows),
@@ -4013,6 +4535,13 @@ elif st.session_state.active_tab == "📊 Today's Priority Board":
                 "S / M / L": st.column_config.TextColumn("S / M / L (spins by mult)", width="large"),
                 "Denom": st.column_config.TextColumn("Denom", width="medium"),
                 "Position": st.column_config.TextColumn("Position", width="medium"),
+                "Att": st.column_config.NumberColumn("Att", width="small", help="Friday/day first-attempt seats in log"),
+                "Hit%": st.column_config.TextColumn("Hit%", width="small"),
+                "Pos%": st.column_config.TextColumn("Pos%", width="small"),
+                "Proj $/seat": st.column_config.TextColumn(
+                    "Proj $/seat", width="small",
+                    help="Historical average seat P&L for this slot on this weekday ($5, 15% line-win cost model)",
+                ),
             },
         )
         st.caption(
@@ -4249,6 +4778,101 @@ elif st.session_state.active_tab == "🤖 Interactive AI Agent":
             st.rerun()
 
 elif st.session_state.active_tab in ("🧺 Session & Basket", "🧺 Played Basket & Overrides"):
+    st.subheader("🛡️ Live Session Guard")
+    st.caption(
+        "Log each seat: check-in / check-out → auto P&L → action (OPEN / PROTECT / STOP). "
+        "STOP still lets you add another seat if you override. Position is required for multi-unit slots."
+    )
+
+    if SESSION_SEATS_KEY not in st.session_state or not isinstance(st.session_state.get(SESSION_SEATS_KEY), list):
+        st.session_state[SESSION_SEATS_KEY] = []
+
+    seats = st.session_state[SESSION_SEATS_KEY]
+    guard = compute_session_guard(seats)
+
+    # Status banner
+    if guard["status"] == "STOP":
+        st.error(f"**{guard['status']}** · Session P&L **{guard['pnl']:+.0f}** · {guard['action']}")
+    elif guard["status"] == "PROTECT":
+        st.warning(f"**{guard['status']}** · Session P&L **{guard['pnl']:+.0f}** · {guard['action']}")
+    else:
+        st.success(f"**{guard['status']}** · Session P&L **{guard['pnl']:+.0f}** · Lock +{guard['lock']:.0f} · Stop −{guard['stop']:.0f}")
+
+    g1, g2, g3, g4 = st.columns(4)
+    g1.metric("Seats", guard["seats"])
+    g2.metric("Session P&L", f"{guard['pnl']:+.0f}")
+    g3.metric("Profit lock", f"+{guard['lock']:.0f}")
+    g4.metric("Stop-loss", f"−{guard['stop']:.0f}")
+
+    st.markdown("#### Log a completed seat")
+    _fams = sorted(SLOT_MASTER_LIST.keys())
+    with st.form("session_seat_form", clear_on_submit=True):
+        f1, f2 = st.columns(2)
+        with f1:
+            fam = st.selectbox("Family", options=_fams, key="ss_fam")
+        with f2:
+            slot_opts = SLOT_MASTER_LIST.get(fam, [])
+            slot = st.selectbox("Slot", options=slot_opts or [""], key="ss_slot")
+        pos_units = get_machine_positions(slot) if slot else []
+        pos_labels = [u.get("where", "") for u in pos_units] if pos_units else []
+        if pos_labels:
+            position = st.selectbox("Position (cabinet)", options=pos_labels, key="ss_pos")
+        else:
+            position = st.text_input("Position (cabinet)", value="", key="ss_pos_txt",
+                                     placeholder="e.g. Roulette room / only 1 on floor")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            checkin = st.number_input("Check-in $", min_value=0.0, value=250.0, step=50.0, key="ss_ci")
+        with c2:
+            checkout = st.number_input("Check-out $", min_value=0.0, value=0.0, step=10.0, key="ss_co")
+        with c3:
+            mult = st.number_input("Best feature × (0 if blank)", min_value=0.0, value=0.0, step=1.0, key="ss_mult")
+        with c4:
+            spins = st.number_input("Spins (approx)", min_value=0, value=0, step=1, key="ss_spins")
+        notes = st.text_input("Notes (optional)", key="ss_notes")
+        override = st.checkbox("Override STOP/PROTECT — I still want to log another seat later", value=False)
+        submitted = st.form_submit_button("Save seat & refresh action")
+
+    if submitted:
+        seat_pnl = float(checkout) - float(checkin)
+        entry = {
+            "seat_n": len(seats) + 1,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "day": guard["day"],
+            "family": fam,
+            "slot": slot,
+            "position": position or "",
+            "checkin": float(checkin),
+            "checkout": float(checkout),
+            "seat_pnl": round(seat_pnl, 2),
+            "mult": float(mult),
+            "spins": int(spins),
+            "notes": notes or "",
+            "override": bool(override),
+        }
+        append_session_seat(entry)
+        # refresh guard after append
+        seats = st.session_state[SESSION_SEATS_KEY]
+        guard = compute_session_guard(seats)
+        st.session_state["_last_guard_action"] = guard["action"]
+        st.rerun()
+
+    if seats:
+        st.markdown("#### Today's seat log")
+        import pandas as pd
+        df_seats = pd.DataFrame(seats)
+        show_cols = [c for c in ["seat_n", "slot", "position", "checkin", "checkout", "seat_pnl", "mult", "spins", "notes"] if c in df_seats.columns]
+        st.dataframe(df_seats[show_cols], use_container_width=True, hide_index=True)
+        st.markdown(f"**Next action:** {guard['action']}")
+        if guard["status"] == "STOP" and not any(s.get("override") for s in seats[-1:]):
+            st.caption("Form still accepts another seat if you tick override — your choice.")
+        if st.button("Clear today's session seat log"):
+            st.session_state[SESSION_SEATS_KEY] = []
+            st.rerun()
+    else:
+        st.info("No seats logged yet — enter the first completed seat above.")
+
+    st.markdown("---")
     st.subheader("🧺 Played Basket")
     if not st.session_state.played_basket:
         st.info("No machines marked as played yet today.")
@@ -4261,7 +4885,6 @@ elif st.session_state.active_tab in ("🧺 Session & Basket", "🧺 Played Baske
                 if st.button("Restore to Active", key=f"restore_{slot}"):
                     restore_slot(slot)
                     st.rerun()
-        st.markdown("---")
         if st.button("🗑️ Clear Entire Played Basket"):
             st.session_state.played_basket = []
             persist_session_state()
@@ -4320,4 +4943,3 @@ elif st.session_state.active_tab == "📚 Learnings":
                         st.markdown(f"- {text}")
                         if conf:
                             st.caption(f"Confidence: {conf}")
-
